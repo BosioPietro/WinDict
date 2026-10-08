@@ -29,9 +29,16 @@ jobs:
       - name: Name the executable after the version
         shell: pwsh
         run: Copy-Item target/release/windict.exe "WinDict-$env:TAG.exe"
+      # The variant that can appear above Start; see scripts/install-uiaccess.ps1.
+      - run: cargo build --release --features uiaccess
+      - shell: pwsh
+        run: Copy-Item target/release/windict.exe "WinDict-$env:TAG-uiaccess.exe"
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}
-          files: WinDict-${{ env.TAG }}.exe
+          files: |
+            WinDict-${{ env.TAG }}.exe
+            WinDict-${{ env.TAG }}-uiaccess.exe
+            scripts/install-uiaccess.ps1
           generate_release_notes: true

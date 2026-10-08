@@ -503,6 +503,9 @@ impl App {
 
     /// Safety net: if Start/Search still covers the card, close it.
     fn uncover(&mut self) {
+        if selection::has_ui_access() {
+            return;
+        }
         let Some(popup) = self.popup.as_ref().filter(|p| p.visible) else {
             return;
         };

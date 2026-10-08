@@ -1,9 +1,14 @@
 [package]
 name = "windict"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 description = "Tiny always-on Windows dictionary: press a hotkey, see the definition of the selected text."
 license = "MIT"
+
+[features]
+# Builds the variant that can show the card above Start/Search. It must be
+# signed and installed with scripts/install-uiaccess.ps1 to run.
+uiaccess = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

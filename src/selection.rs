@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use windows::core::{w, Interface, PWSTR};
 use windows::Win32::Foundation::*;
+use windows::Win32::Security::{GetTokenInformation, TokenUIAccess, TOKEN_QUERY};
 use windows::Win32::System::Com::*;
 use windows::Win32::System::DataExchange::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -83,8 +84,9 @@ impl Capturer {
                 .map(|text| Selection { text, anchor: None });
         }
         // Start and Search sit in a z-order band above every normal window,
-        // so the card would open hidden behind them: close them first.
-        if is_shell_flyout(foreground) {
+        // so the card would open hidden behind them: close them first. With
+        // UI access (the signed install) the card can go above them instead.
+        if !has_ui_access() && is_shell_flyout(foreground) {
             close_flyout();
             // Let the closing animation finish before the card appears.
             sleep(Duration::from_millis(200));
@@ -247,6 +249,30 @@ pub fn is_shell_flyout(hwnd: HWND) -> bool {
             | "searchui.exe"
             | "shellexperiencehost.exe"
     )
+}
+
+/// Whether we run with UI access (the signed install), which puts our
+/// top-most windows above Start and Search.
+pub fn has_ui_access() -> bool {
+    static UI_ACCESS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *UI_ACCESS.get_or_init(|| unsafe {
+        let mut token = HANDLE::default();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
+            return false;
+        }
+        let mut value = 0u32;
+        let mut len = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenUIAccess,
+            Some(&mut value as *mut u32 as *mut _),
+            std::mem::size_of::<u32>() as u32,
+            &mut len,
+        )
+        .is_ok();
+        let _ = CloseHandle(token);
+        ok && value != 0
+    })
 }
 
 /// Closes Start/Search with Esc.
