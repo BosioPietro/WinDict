@@ -741,16 +741,8 @@ unsafe extern "system" fn main_proc(
         WM_APP_TRAY => {
             let event = (lparam.0 & 0xFFFF) as u32;
             match event {
-                WM_LBUTTONUP => {
-                    with_app(|app| {
-                        let detail = format!(
-                            "Select a word in any app, then press {}.",
-                            app.config.hotkey
-                        );
-                        app.show_message(None, "Ready when you are", &detail, true);
-                    });
-                }
-                WM_RBUTTONUP | WM_CONTEXTMENU => {
+                // Either button opens the menu.
+                WM_LBUTTONUP | WM_RBUTTONUP | WM_CONTEXTMENU => {
                     // The menu runs a modal loop; don't hold the app borrow across it.
                     let info = with_app(|app| {
                         app.dismiss();
