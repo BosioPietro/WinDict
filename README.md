@@ -1,28 +1,22 @@
 # WinDict
 
-**Select a word. Press Ctrl+Alt+D. Read the definition.**
+A small Windows tray app for looking up words. Select a word in any app, press
+**Ctrl+Alt+D**, and its definition shows up in a card next to the selection.
+Press Esc or click elsewhere to close it.
 
-WinDict is a dictionary that lives in your Windows tray and appears exactly
-where you are reading: next to the word you selected, in any app. No browser
-tab, no copy and paste, no waiting.
+## Footprint
 
-## Light enough to forget about
+- About 2 MB of memory while idle and 4 MB while a card is open.
+- An English dictionary (Open English WordNet, about 150,000 words and
+  phrases) is built into the executable, so most lookups never touch the
+  network and take under a millisecond.
+- The online dictionary is only used for pronunciations and for words the
+  built-in one doesn't have. It can be turned off.
+- A single executable written in Rust against the native Windows APIs. No
+  installer and no runtime to install.
 
-- **2 MB in the background, 4 MB while showing a definition.** Most apps use
-  more than that to draw their title bar.
-- **Instant answers.** A dictionary of 150,000 English words and phrases is
-  built in and looked up in well under a millisecond. The card appears before
-  your finger leaves the keys.
-- **Works offline.** The internet is only used to add pronunciations and the
-  rare word the built-in dictionary doesn't know.
-- **One small file.** Native Rust, no browser engine, no runtime, no installer.
-
-## Feels like part of Windows
-
-A frosted-glass card that follows your light or dark theme and accent color,
-with smooth, GPU-driven animations. It never takes focus away from what you are
-doing, understands inflections ("ran" shows "run"), and closes with Esc or a
-click anywhere else.
+Inflected forms are resolved to their base word ("ran" shows "run"), and the
+card follows the system light/dark theme and accent color.
 
 ## Get started
 
