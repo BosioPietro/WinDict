@@ -7,6 +7,7 @@ use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::{MonitorFromRect, ScreenToClient, MONITOR_DEFAULTTONULL};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentThreadId, SetProcessWorkingSetSize,
 };
@@ -52,6 +53,8 @@ thread_local! {
     // Read by the low-level mouse hook, which must not touch APP.
     static CARD_RECT: Cell<RECT> = const { Cell::new(RECT { left: 0, top: 0, right: 0, bottom: 0 }) };
     static MSG_HWND: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) };
+    // When the card last appeared (GetTickCount64), read by the focus hook.
+    static SHOWN_AT: Cell<u64> = const { Cell::new(0) };
 }
 
 struct Captured {
@@ -490,6 +493,7 @@ impl App {
                 SetTimer(Some(hwnd), TIMER_AUTOHIDE, 3500, None);
             }
         }
+        SHOWN_AT.set(unsafe { GetTickCount64() });
         self.install_dismiss_hooks();
     }
 
@@ -859,6 +863,10 @@ unsafe extern "system" fn focus_hook(
     _: u32,
     _: u32,
 ) {
+    // Ignore the foreground change from closing Start/Search just before showing.
+    if unsafe { GetTickCount64() }.saturating_sub(SHOWN_AT.get()) < 500 {
+        return;
+    }
     unsafe {
         let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_DISMISS, WPARAM(0), LPARAM(0));
     }

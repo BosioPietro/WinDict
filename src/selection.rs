@@ -7,13 +7,14 @@
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use windows::core::{w, Interface};
+use windows::core::{w, Interface, PWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::System::Com::*;
 use windows::Win32::System::DataExchange::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::*;
 use windows::Win32::System::Ole::*;
+use windows::Win32::System::Threading::*;
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -74,15 +75,22 @@ impl Capturer {
 
     pub fn capture(&self) -> Option<Selection> {
         let foreground = unsafe { GetForegroundWindow() };
-        if let Some(selection) = self.via_ui_automation() {
-            return Some(selection);
-        }
+        let mut selection = self.via_ui_automation();
         // In terminals Ctrl+C without a selection interrupts the running program.
-        if is_terminal(foreground) {
-            return None;
+        if selection.is_none() && !is_terminal(foreground) {
+            selection = self
+                .via_clipboard()
+                .map(|text| Selection { text, anchor: None });
         }
-        self.via_clipboard()
-            .map(|text| Selection { text, anchor: None })
+        // Start and Search sit in a z-order band above every normal window,
+        // so the card would open hidden behind them: close them first.
+        if is_shell_flyout(foreground) {
+            close_flyout();
+            if let Some(s) = selection.as_mut() {
+                s.anchor = None;
+            }
+        }
+        selection
     }
 
     fn via_ui_automation(&self) -> Option<Selection> {
@@ -188,6 +196,50 @@ fn bounding_rect(range: &IUIAutomationTextRange) -> Option<RECT> {
         let _ = SafeArrayDestroy(array);
         result
     }
+}
+
+/// Start, Search and other shell flyouts.
+fn is_shell_flyout(hwnd: HWND) -> bool {
+    let mut pid = 0;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    let Ok(process) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) })
+    else {
+        return false;
+    };
+    let mut buf = [0u16; 260];
+    let mut len = buf.len() as u32;
+    let ok = unsafe {
+        QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut len,
+        )
+    }
+    .is_ok();
+    unsafe {
+        let _ = CloseHandle(process);
+    }
+    if !ok {
+        return false;
+    }
+    let path = String::from_utf16_lossy(&buf[..len as usize]).to_ascii_lowercase();
+    let exe = path.rsplit('\\').next().unwrap_or_default();
+    matches!(
+        exe,
+        "startmenuexperiencehost.exe"
+            | "searchhost.exe"
+            | "searchapp.exe"
+            | "searchui.exe"
+            | "shellexperiencehost.exe"
+    )
+}
+
+fn close_flyout() {
+    let inputs = [key(VK_ESCAPE, false), key(VK_ESCAPE, true)];
+    unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    // Let the closing animation finish before the card appears.
+    sleep(Duration::from_millis(200));
 }
 
 fn is_terminal(hwnd: HWND) -> bool {
