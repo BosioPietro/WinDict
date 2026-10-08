@@ -1,6 +1,6 @@
 [package]
 name = "windict"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Tiny always-on Windows dictionary: press a hotkey, see the definition of the selected text."
 license = "MIT"

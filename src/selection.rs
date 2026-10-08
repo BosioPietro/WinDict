@@ -86,6 +86,8 @@ impl Capturer {
         // so the card would open hidden behind them: close them first.
         if is_shell_flyout(foreground) {
             close_flyout();
+            // Let the closing animation finish before the card appears.
+            sleep(Duration::from_millis(200));
             if let Some(s) = selection.as_mut() {
                 s.anchor = None;
             }
@@ -198,8 +200,20 @@ fn bounding_rect(range: &IUIAutomationTextRange) -> Option<RECT> {
     }
 }
 
-/// Start, Search and other shell flyouts.
-fn is_shell_flyout(hwnd: HWND) -> bool {
+/// Start, Search and other shell flyouts: they live in a z-order band above
+/// every normal window, so the card can't be shown over them.
+pub fn is_shell_flyout(hwnd: HWND) -> bool {
+    let hwnd = unsafe { GetAncestor(hwnd, GA_ROOT) };
+    let mut buf = [0u16; 64];
+    let len = unsafe { GetClassNameW(hwnd, &mut buf) } as usize;
+    // Packaged apps show up as ApplicationFrameWindow; a bare CoreWindow in
+    // front is a shell surface (Start, Search, Action Center, Win+V...).
+    if matches!(
+        String::from_utf16_lossy(&buf[..len]).as_str(),
+        "Windows.UI.Core.CoreWindow" | "XamlExplorerHostIslandWindow"
+    ) {
+        return true;
+    }
     let mut pid = 0;
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
     let Ok(process) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) })
@@ -235,11 +249,13 @@ fn is_shell_flyout(hwnd: HWND) -> bool {
     )
 }
 
-fn close_flyout() {
+/// Closes Start/Search with Esc.
+pub fn close_flyout() {
+    // A still-held Ctrl/Alt from the hotkey would turn this into Ctrl+Alt+Esc,
+    // which Start ignores.
+    release_modifiers();
     let inputs = [key(VK_ESCAPE, false), key(VK_ESCAPE, true)];
     unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
-    // Let the closing animation finish before the card appears.
-    sleep(Duration::from_millis(200));
 }
 
 fn is_terminal(hwnd: HWND) -> bool {

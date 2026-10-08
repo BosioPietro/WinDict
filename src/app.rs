@@ -24,7 +24,7 @@ use crate::hotkey;
 use crate::offline;
 use crate::popup::{self, Popup, Transition};
 use crate::render::Body;
-use crate::selection::{Capturer, Selection};
+use crate::selection::{self, Capturer, Selection};
 use crate::theme::Theme;
 use crate::tray::{self, Tray};
 
@@ -43,6 +43,7 @@ const TIMER_HIDE: usize = 1;
 const TIMER_SETTLE: usize = 2;
 const TIMER_AUTOHIDE: usize = 3;
 const TIMER_TEARDOWN: usize = 4;
+const TIMER_COVERED: usize = 5;
 
 /// Free the GPU resources after this long without a lookup.
 const IDLE_TEARDOWN_MS: u32 = 3 * 60 * 1000;
@@ -495,6 +496,26 @@ impl App {
         }
         SHOWN_AT.set(unsafe { GetTickCount64() });
         self.install_dismiss_hooks();
+        unsafe {
+            SetTimer(Some(hwnd), TIMER_COVERED, 150, None);
+        }
+    }
+
+    /// Safety net: if Start/Search still covers the card, close it.
+    fn uncover(&mut self) {
+        let Some(popup) = self.popup.as_ref().filter(|p| p.visible) else {
+            return;
+        };
+        let r = popup.card_rect();
+        let center = POINT {
+            x: (r.left + r.right) / 2,
+            y: (r.top + r.bottom) / 2,
+        };
+        let top = unsafe { GetAncestor(WindowFromPoint(center), GA_ROOT) };
+        if top != popup.hwnd && selection::is_shell_flyout(top) {
+            SHOWN_AT.set(unsafe { GetTickCount64() });
+            selection::close_flyout();
+        }
     }
 
     fn dismiss(&mut self) {
@@ -523,6 +544,7 @@ impl App {
         }
         match id {
             TIMER_AUTOHIDE => self.dismiss(),
+            TIMER_COVERED => self.uncover(),
             TIMER_SETTLE => {
                 if let Some(p) = self.popup.as_mut() {
                     p.settle();
