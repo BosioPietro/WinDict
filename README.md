@@ -54,6 +54,15 @@ Click the tray icon for **Start with Windows**, **Edit settings…**,
 
 Use **Reload settings** in the tray menu after editing.
 
+## Download
+
+Grab `WinDict-<version>.exe` from the
+[latest release](https://github.com/BosioPietro/WinDict/releases/latest) and
+run it. No installer; it's a single file.
+
+Windows SmartScreen may warn about an unrecognised app the first time, because
+the executable isn't code-signed: choose **More info → Run anyway**.
+
 ## Building
 
 Requires Windows 10 1903+ and the Rust MSVC toolchain
@@ -66,6 +75,19 @@ cargo build --release
 
 Every push is also built by GitHub Actions; the `windict` artifact on each run
 is the ready-to-use `.exe`.
+
+### Publishing a release
+
+Bump `version` in `Cargo.toml`, commit, then tag and push:
+
+```sh
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The `release` workflow builds the exe and publishes it as a GitHub Release.
+Alternatively, open **Actions → release → Run workflow** and enter the version;
+the tag is created for you.
 
 ## How it works
 
