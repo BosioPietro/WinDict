@@ -25,8 +25,8 @@ A tiny always-on dictionary for Windows. Select a word in any app, press
 2. Select a word (or a short phrase) anywhere and press **Ctrl+Alt+D**.
 3. Scroll with the mouse wheel if the entry is long.
 
-Right-click the tray icon for **Start with Windows**, **Edit settings…**,
-**Reload settings** and **Quit**. Left-click it to check it's alive.
+Click the tray icon for **Start with Windows**, **Edit settings…**,
+**Reload settings** and **Quit**.
 
 ### Settings
 
