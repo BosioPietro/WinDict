@@ -3,6 +3,10 @@
 A tiny always-on dictionary for Windows. Select a word in any app, press
 **Ctrl+Alt+D**, and a frosted-glass card with the definition slides in next to it.
 
+- **Works offline.** A full English dictionary (Open English WordNet, ~150k
+  words and phrases) is built in; inflections like "ran" or "geese" resolve to
+  their base form. The online dictionary only fills gaps: pronunciations, and
+  words or parts of speech WordNet doesn't have.
 - **Native and light.** Rust + Win32 + Windows.UI.Composition. No WebView, no
   runtime, no async framework. While idle it's a tray icon and a hotkey; the
   GPU resources are released a few minutes after the last lookup.
@@ -34,7 +38,8 @@ Right-click the tray icon for **Start with Windows**, **Edit settings…**,
   "theme": "system",
   "max_definitions": 4,
   "max_synonyms": 6,
-  "use_ui_automation": true
+  "use_ui_automation": true,
+  "online_lookup": true
 }
 ```
 
@@ -45,6 +50,7 @@ Right-click the tray icon for **Start with Windows**, **Edit settings…**,
 | `max_definitions` | Definitions shown per part of speech. |
 | `max_synonyms` | Synonyms shown per part of speech (`0` hides them). |
 | `use_ui_automation` | Read the selection via UI Automation first (see below). |
+| `online_lookup` | Use dictionaryapi.dev for pronunciations and words missing offline. `false` = fully offline. |
 
 Use **Reload settings** in the tray menu after editing.
 
@@ -68,12 +74,39 @@ is the ready-to-use `.exe`.
 | `src/main.rs` | Single-instance guard, DPI awareness, WinRT + dispatcher queue setup. |
 | `src/app.rs` | The controller: hotkey → capture → lookup → card; tray; light-dismiss hooks; idle teardown. |
 | `src/selection.rs` | Gets the selected text: UI Automation `TextPattern` first, then a simulated Ctrl+C that saves and restores your clipboard. |
-| `src/dictionary.rs` | Calls [Free Dictionary API](https://dictionaryapi.dev) (Wiktionary data) and merges the entries. |
+| `src/offline.rs` | Reads the built-in dictionary straight from the executable (binary search + one small compressed block per lookup, ~0.3 ms) and resolves inflections. |
+| `src/dictionary.rs` | Entry types; the [Free Dictionary API](https://dictionaryapi.dev) (Wiktionary data) client; merging online data into offline entries. |
+| `tools/build_dict.py` | Converts WordNet into `data/english.wdict` (see below). |
 | `src/http.rs` | A ~100-line HTTPS GET on WinHTTP (system TLS and proxy settings, no extra crates). |
 | `src/popup.rs` | The card: composition visual tree, placement next to the selection, all animations. |
 | `src/render.rs` | DirectWrite layout + Direct2D drawing of the text into composition surfaces; the shadow. |
 | `src/theme.rs` | Light/dark, transparency setting and accent color. |
 | `src/tray.rs`, `src/autostart.rs`, `src/hotkey.rs`, `src/config.rs` | Tray icon/menu, Run-key autostart, hotkey parsing, settings. |
+
+### Lookup flow
+
+1. The built-in dictionary is checked first. If it knows the word, the card
+   appears immediately, with no loading state.
+2. In the background the online dictionary is asked for what's missing. If it
+   adds something (usually the pronunciation), it fades into the card in place;
+   if it fails or you're offline, nothing changes.
+3. If the word isn't in the built-in dictionary at all, the card shows a
+   loading animation until the online answer (or "not found") arrives.
+
+Online answers are cached for the session.
+
+### The built-in dictionary
+
+`data/english.wdict` (~6.5 MB) is generated from
+[Open English WordNet](https://en-word.net/) and embedded in the exe. It is
+never loaded as a whole: Windows pages in only the few KB a lookup touches,
+and drops them again when idle. To rebuild it (e.g. for a newer WordNet):
+
+```sh
+curl -LO https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/english_wordnet.zip
+unzip english_wordnet.zip
+python tools/build_dict.py english_wordnet data/english.wdict
+```
 
 ### Selection capture notes
 
@@ -89,7 +122,11 @@ is the ready-to-use `.exe`.
 
 ## Limitations / ideas
 
-- English only, and needs an internet connection (definitions are cached for
-  the session). An offline dictionary (e.g. WordNet) or other languages could
-  be added behind the same `Lookup` type.
+- English only. Other languages could be added as more `.wdict` files.
 - No pronunciation audio yet (the API provides it).
+
+## Credits
+
+Dictionary data: [Open English WordNet](https://en-word.net/) (CC BY 4.0),
+derived from Princeton WordNet 3.1 (see `data/LICENSE-WordNet.txt`), and
+[Wiktionary](https://www.wiktionary.org/) via [dictionaryapi.dev](https://dictionaryapi.dev).

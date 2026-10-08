@@ -38,6 +38,16 @@ pub const SHOW_MS: u64 = 340;
 pub const HIDE_MS: u64 = 120;
 const RESIZE_MS: u64 = 300;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Transition {
+    /// No animation (the card is appearing).
+    Instant,
+    /// Different content: the body fades in, the card resizes.
+    Replace,
+    /// The same entry, refined: no fade, scroll position kept.
+    Refine,
+}
+
 pub struct Popup {
     pub hwnd: HWND,
     compositor: Compositor,
@@ -56,6 +66,9 @@ pub struct Popup {
     tint: CompositionColorBrush,
     header: SpriteVisual,
     header_brush: CompositionSurfaceBrush,
+    header_back: SpriteVisual,
+    header_back_brush: CompositionSurfaceBrush,
+    header_surface: Option<CompositionDrawingSurface>,
     divider: SpriteVisual,
     divider_brush: CompositionColorBrush,
     body_host: ContainerVisual,
@@ -157,6 +170,15 @@ impl Popup {
         tint_visual.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
         card.Children()?.InsertAtTop(&tint_visual)?;
 
+        let header_back = c.CreateSpriteVisual()?;
+        let header_back_brush = c.CreateSurfaceBrush()?;
+        header_back_brush.SetStretch(CompositionStretch::None)?;
+        header_back_brush.SetHorizontalAlignmentRatio(0.0)?;
+        header_back_brush.SetVerticalAlignmentRatio(0.0)?;
+        header_back.SetBrush(&header_back_brush)?;
+        header_back.SetOpacity(0.0)?;
+        card.Children()?.InsertAtTop(&header_back)?;
+
         let header = c.CreateSpriteVisual()?;
         let header_brush = c.CreateSurfaceBrush()?;
         header_brush.SetStretch(CompositionStretch::None)?;
@@ -230,6 +252,9 @@ impl Popup {
             tint,
             header,
             header_brush,
+            header_back,
+            header_back_brush,
+            header_surface: None,
             divider,
             divider_brush,
             body_host,
@@ -343,7 +368,7 @@ impl Popup {
             Self::stop(v, &["Opacity", "Offset", "Scale"]);
         }
         self.card_h = 0.0;
-        self.set_content(word, phonetic, body, false)?;
+        self.set_content(word, phonetic, body, Transition::Instant)?;
 
         let s = self.scale;
         let card_w = CARD_W * s;
@@ -443,17 +468,21 @@ impl Popup {
         // Release the text surfaces while idle.
         let _ = self.header_brush.SetSurface(None::<&ICompositionSurface>);
         let _ = self.body_brush.SetSurface(None::<&ICompositionSurface>);
+        let _ = self
+            .header_back_brush
+            .SetSurface(None::<&ICompositionSurface>);
+        self.header_surface = None;
         self.stop_loader();
         self.renderer.trim();
     }
 
-    /// Replaces the card's content, animating the height change.
+    /// Replaces the card's content.
     pub fn set_content(
         &mut self,
         word: &str,
         phonetic: Option<&str>,
         body: Body,
-        animate: bool,
+        transition: Transition,
     ) -> Result<()> {
         let s = self.scale;
         let content_w = CARD_W - 2.0 * PAD_X;
@@ -466,12 +495,32 @@ impl Popup {
         let body_h = body_layout.height * s;
         let max_h = MAX_CARD_H * s;
         let card_h = (header_h + body_h.min(max_h - header_h)).round();
-        let previous_h = self.card_h;
+        let transition = if self.card_h > 0.0 {
+            transition
+        } else {
+            Transition::Instant
+        };
         let previous_header_h = self.header_h;
         self.header_h = header_h;
         self.body_h = body_h;
-        self.scroll = 0.0;
 
+        // Header: on a refinement, cross-fade from the old rendering so only
+        // what changed (typically the pronunciation) appears to fade in.
+        let old_header = self.header_surface.replace(header_surface.clone());
+        Self::stop(&self.header, &["Opacity"]);
+        Self::stop(&self.header_back, &["Opacity"]);
+        self.header_back.SetOpacity(0.0)?;
+        if let (Transition::Refine, Some(old)) = (transition, old_header) {
+            self.header_back_brush.SetSurface(&old)?;
+            self.header_back.SetSize(self.header.Size()?)?;
+            self.header_back.SetOffset(v3(PAD_X * s, PAD_TOP * s))?;
+            self.header_back.SetOpacity(1.0)?;
+            self.header.SetOpacity(0.0)?;
+            self.scalar(&self.header_back, "Opacity", 0.0, 240, 0, &self.decelerate)?;
+            self.scalar(&self.header, "Opacity", 1.0, 240, 0, &self.decelerate)?;
+        } else {
+            self.header.SetOpacity(1.0)?;
+        }
         self.header_brush.SetSurface(&header_surface)?;
         self.header.SetSize(v2(content_w * s, header.height * s))?;
         self.header.SetOffset(v3(PAD_X * s, PAD_TOP * s))?;
@@ -488,40 +537,52 @@ impl Popup {
             self.scalar(&self.loader, "Opacity", 0.0, 120, 0, &self.accelerate)?;
         }
 
-        if animate && previous_h > 0.0 {
-            // Body slides up a touch and fades in while the card resizes.
-            self.body.SetOpacity(0.0)?;
-            self.body.SetOffset(v3(PAD_X * s, 8.0 * s))?;
-            self.scalar(&self.body, "Opacity", 1.0, 220, 80, &self.decelerate)?;
-            self.vector3(
-                &self.body,
-                "Offset",
-                v3(PAD_X * s, 0.0),
-                RESIZE_MS,
-                80,
-                &self.decelerate,
-            )?;
-            if (previous_header_h - header_h).abs() > 0.5 {
-                self.vector3(
-                    &self.body_host,
-                    "Offset",
-                    v3(0.0, header_h),
-                    RESIZE_MS,
-                    0,
-                    &self.decelerate,
-                )?;
-            } else {
+        match transition {
+            Transition::Instant => {
+                self.scroll = 0.0;
+                self.body.SetOpacity(1.0)?;
+                self.body.SetOffset(v3(PAD_X * s, 0.0))?;
                 self.body_host.SetOffset(v3(0.0, header_h))?;
+                self.resize(card_h, false)?;
             }
-            self.resize(card_h, true)?;
-        } else {
-            self.body.SetOpacity(1.0)?;
-            self.body.SetOffset(v3(PAD_X * s, 0.0))?;
-            self.body_host.SetOffset(v3(0.0, header_h))?;
-            self.resize(card_h, false)?;
+            Transition::Replace => {
+                // New body slides up a touch and fades in while the card resizes.
+                self.scroll = 0.0;
+                self.body.SetOpacity(0.0)?;
+                self.body.SetOffset(v3(PAD_X * s, 8.0 * s))?;
+                self.scalar(&self.body, "Opacity", 1.0, 220, 80, &self.decelerate)?;
+                let rest = v3(PAD_X * s, 0.0);
+                self.vector3(&self.body, "Offset", rest, RESIZE_MS, 80, &self.decelerate)?;
+                self.move_body_host(previous_header_h)?;
+                self.resize(card_h, true)?;
+            }
+            Transition::Refine => {
+                // Same entry with more detail: keep the reader's place.
+                self.body.SetOpacity(1.0)?;
+                self.resize(card_h, true)?;
+                self.scroll = self.scroll.min(self.max_scroll());
+                self.body.SetOffset(v3(PAD_X * s, -self.scroll.round()))?;
+                self.move_body_host(previous_header_h)?;
+            }
         }
         self.update_scroll_chrome(false)?;
         Ok(())
+    }
+
+    fn move_body_host(&self, previous_header_h: f32) -> Result<()> {
+        let to = v3(0.0, self.header_h);
+        if (previous_header_h - self.header_h).abs() > 0.5 {
+            self.vector3(
+                &self.body_host,
+                "Offset",
+                to,
+                RESIZE_MS,
+                0,
+                &self.decelerate,
+            )
+        } else {
+            self.body_host.SetOffset(to)
+        }
     }
 
     /// Scrolls the body by a mouse wheel delta.

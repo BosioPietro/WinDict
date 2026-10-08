@@ -188,6 +188,17 @@ impl Renderer {
             }
             Body::Definition(def) => {
                 let indent = 22.0;
+                if let Some(note) = &def.note {
+                    let n = self.text(note, &self.formats.example, width)?;
+                    let h = metrics(&n).1;
+                    items.push(Item::Text {
+                        layout: n,
+                        x: 0.0,
+                        y,
+                        ink: Ink::Tertiary,
+                    });
+                    y += h + 10.0;
+                }
                 for (i, meaning) in def.meanings.iter().enumerate() {
                     if i > 0 {
                         y += 6.0;
@@ -275,11 +286,8 @@ impl Renderer {
                     }
                 }
                 y += 8.0;
-                let footer = self.text(
-                    "Wiktionary \u{00B7} dictionaryapi.dev",
-                    &self.formats.footer,
-                    width,
-                )?;
+                let footer =
+                    self.text(&def.sources.join(" \u{00B7} "), &self.formats.footer, width)?;
                 let h = metrics(&footer).1;
                 items.push(Item::Text {
                     layout: footer,

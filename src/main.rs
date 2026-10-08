@@ -8,6 +8,7 @@ mod config;
 mod dictionary;
 mod hotkey;
 mod http;
+mod offline;
 mod popup;
 mod render;
 mod selection;

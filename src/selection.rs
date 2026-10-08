@@ -162,7 +162,7 @@ fn bounding_rect(range: &IUIAutomationTextRange) -> Option<RECT> {
         if count >= 4 && SafeArrayAccessData(array, &mut data).is_ok() {
             let values = std::slice::from_raw_parts(data as *const f64, count);
             let mut rect: Option<RECT> = None;
-            for r in values.chunks_exact(4) {
+            for r in values.as_chunks::<4>().0 {
                 let (l, t, w, h) = (r[0] as i32, r[1] as i32, r[2] as i32, r[3] as i32);
                 if w <= 0 && h <= 0 {
                     continue;
