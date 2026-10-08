@@ -130,7 +130,7 @@ impl Renderer {
     /// The word and its pronunciation.
     pub fn layout_header(&self, word: &str, phonetic: Option<&str>, width: f32) -> Result<Layout> {
         let mut items = Vec::new();
-        let title = self.text(word, &self.formats.word, width)?;
+        let title = self.text(&capitalize(word), &self.formats.word, width)?;
         let (title_w, title_h, baseline) = metrics(&title);
         let mut height = title_h;
         if let Some(p) = phonetic {
@@ -592,6 +592,15 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
         footer: make(&small, 12.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?,
         title: make(&text, 15.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?,
     })
+}
+
+/// "serendipity" → "Serendipity". Only the first letter changes.
+fn capitalize(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 /// (width, height, first baseline) of a laid-out text.
