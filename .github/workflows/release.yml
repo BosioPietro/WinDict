@@ -1,12 +1,21 @@
 name: release
 
-# Push a tag like `v0.2.0` to build WinDict and publish it as a GitHub Release.
+# Publishes WinDict as a GitHub Release, either by pushing a tag like `v0.2.0`
+# or from the Actions tab ("Run workflow", entering the version).
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. v0.2.0"
+        required: true
 
 permissions:
   contents: write
+
+env:
+  TAG: ${{ inputs.version || github.ref_name }}
 
 jobs:
   release:
@@ -19,8 +28,10 @@ jobs:
       - run: cargo build --release
       - name: Name the executable after the version
         shell: pwsh
-        run: Copy-Item target/release/windict.exe "WinDict-${{ github.ref_name }}.exe"
+        run: Copy-Item target/release/windict.exe "WinDict-$env:TAG.exe"
       - uses: softprops/action-gh-release@v2
         with:
-          files: WinDict-${{ github.ref_name }}.exe
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          files: WinDict-${{ env.TAG }}.exe
           generate_release_notes: true

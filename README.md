@@ -86,6 +86,8 @@ git push origin v0.2.0
 ```
 
 The `release` workflow builds the exe and publishes it as a GitHub Release.
+Alternatively, open **Actions → release → Run workflow** and enter the version;
+the tag is created for you.
 
 ## How it works
 
