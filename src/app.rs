@@ -5,7 +5,7 @@ use std::sync::mpsc::channel;
 
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Gdi::{MonitorFromRect, MONITOR_DEFAULTTONULL};
+use windows::Win32::Graphics::Gdi::{MonitorFromRect, ScreenToClient, MONITOR_DEFAULTTONULL};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentThreadId, SetProcessWorkingSetSize,
@@ -33,6 +33,7 @@ const WM_APP_RESULT: u32 = WM_APP + 3;
 const WM_APP_DISMISS: u32 = WM_APP + 4;
 const WM_APP_WHEEL: u32 = WM_APP + 5;
 const WM_APP_CAPTURE: u32 = WM_APP + 6;
+const WM_APP_CLICK: u32 = WM_APP + 7;
 
 const HOTKEY_LOOKUP: i32 = 1;
 const HOTKEY_ESCAPE: i32 = 2;
@@ -587,6 +588,28 @@ impl App {
         }
     }
 
+    fn on_click(&mut self, x: i32, y: i32) {
+        let Some(url) = self
+            .popup
+            .as_ref()
+            .and_then(|p| p.link_at(x, y))
+            .map(HSTRING::from)
+        else {
+            return;
+        };
+        unsafe {
+            ShellExecuteW(
+                None,
+                w!("open"),
+                &url,
+                PCWSTR::null(),
+                PCWSTR::null(),
+                SW_SHOWNORMAL,
+            );
+        }
+        self.dismiss();
+    }
+
     // -----------------------------------------------------------------------
     // Tray
 
@@ -706,6 +729,11 @@ unsafe extern "system" fn main_proc(
             });
             LRESULT(0)
         }
+        WM_APP_CLICK => {
+            let (x, y) = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
+            with_app(|app| app.on_click(x, y));
+            LRESULT(0)
+        }
         WM_TIMER => {
             with_app(|app| app.on_timer(wparam.0));
             LRESULT(0)
@@ -771,6 +799,34 @@ unsafe extern "system" fn popup_proc(
                 let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_WHEEL, WPARAM(delta), LPARAM(0));
             }
             LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            unsafe {
+                let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_CLICK, WPARAM(0), lparam);
+            }
+            LRESULT(0)
+        }
+        // A hand over the footer links.
+        WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
+            let mut pt = POINT::default();
+            let over_link =
+                unsafe { GetCursorPos(&mut pt).is_ok() && ScreenToClient(hwnd, &mut pt).as_bool() }
+                    && with_app(|app| {
+                        app.popup
+                            .as_ref()
+                            .is_some_and(|p| p.link_at(pt.x, pt.y).is_some())
+                    })
+                    .unwrap_or(false);
+            if over_link {
+                unsafe {
+                    if let Ok(hand) = LoadCursorW(None, IDC_HAND) {
+                        SetCursor(Some(hand));
+                    }
+                }
+                LRESULT(1)
+            } else {
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
         }
         // We size ourselves for the target monitor's DPI already.
         WM_DPICHANGED => LRESULT(0),
