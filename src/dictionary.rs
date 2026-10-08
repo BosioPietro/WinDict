@@ -94,7 +94,7 @@ pub fn lookup_online(word: &str, max_senses: usize, max_synonyms: usize) -> Look
             None => Lookup::NotFound,
         },
         Ok((404, _)) => Lookup::NotFound,
-        Ok((429, _)) => Lookup::Failed("Too many lookups — try again in a moment.".into()),
+        Ok((429, _)) => Lookup::Failed("Too many lookups, try again in a moment.".into()),
         Ok((code, _)) => Lookup::Failed(format!(
             "The dictionary service returned an error ({code})."
         )),

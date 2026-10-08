@@ -230,7 +230,7 @@ impl App {
                 .is_ok();
                 if self.hotkey_ok {
                     self.tray
-                        .set_tip(&format!("WinDict \u{2014} {}", self.config.hotkey));
+                        .set_tip(&format!("WinDict - {}", self.config.hotkey));
                 } else {
                     self.tray.notify(
                         "Shortcut unavailable",

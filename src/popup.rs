@@ -3,7 +3,7 @@
 //! backdrop brush; every animation runs on the system compositor, so motion
 //! stays smooth no matter what our UI thread is doing.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::core::{Interface, Result, BOOL, HSTRING};
 use windows::Foundation::TimeSpan;
@@ -37,6 +37,32 @@ const SCREEN_GAP: f32 = 8.0;
 pub const SHOW_MS: u64 = 340;
 pub const HIDE_MS: u64 = 120;
 const RESIZE_MS: u64 = 300;
+const SCROLL_MS: u64 = 140;
+/// Ease-out curve for scrolling: quick to respond, soft to settle.
+const SCROLL_EASE: (f32, f32, f32, f32) = (0.25, 0.8, 0.4, 1.0);
+
+struct ScrollAnim {
+    from: f32,
+    started: Instant,
+}
+
+/// Progress of a CSS-style cubic-bezier easing at time `t` (0..=1).
+fn cubic_bezier((x1, y1, x2, y2): (f32, f32, f32, f32), t: f32) -> f32 {
+    let bezier = |a: f32, b: f32, u: f32| {
+        3.0 * a * u * (1.0 - u).powi(2) + 3.0 * b * u * u * (1.0 - u) + u.powi(3)
+    };
+    // Solve x(u) = t by bisection, then evaluate y(u).
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for _ in 0..24 {
+        let mid = (lo + hi) / 2.0;
+        if bezier(x1, x2, mid) < t {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    bezier(y1, y2, (lo + hi) / 2.0)
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Transition {
@@ -55,6 +81,7 @@ pub struct Popup {
     renderer: Renderer,
     decelerate: CompositionEasingFunction,
     accelerate: CompositionEasingFunction,
+    scroll_ease: CompositionEasingFunction,
 
     root: ContainerVisual,
     frame: ContainerVisual,
@@ -96,6 +123,7 @@ pub struct Popup {
     header_h: f32,
     body_h: f32,
     scroll: f32,
+    scroll_anim: Option<ScrollAnim>,
     loading: bool,
     pub visible: bool,
 }
@@ -138,6 +166,10 @@ impl Popup {
 
         let decelerate = c
             .CreateCubicBezierEasingFunction(v2(0.1, 0.9), v2(0.2, 1.0))?
+            .cast()?;
+        let (x1, y1, x2, y2) = SCROLL_EASE;
+        let scroll_ease = c
+            .CreateCubicBezierEasingFunction(v2(x1, y1), v2(x2, y2))?
             .cast()?;
         let accelerate = c
             .CreateCubicBezierEasingFunction(v2(0.7, 0.0), v2(1.0, 0.5))?
@@ -243,6 +275,7 @@ impl Popup {
             renderer,
             decelerate,
             accelerate,
+            scroll_ease,
             root,
             frame,
             shadow,
@@ -280,6 +313,7 @@ impl Popup {
             header_h: 0.0,
             body_h: 0.0,
             scroll: 0.0,
+            scroll_anim: None,
             loading: false,
             visible: false,
         })
@@ -543,6 +577,7 @@ impl Popup {
         match transition {
             Transition::Instant => {
                 self.scroll = 0.0;
+                self.scroll_anim = None;
                 self.body.SetOpacity(1.0)?;
                 self.body.SetOffset(v3(PAD_X * s, 0.0))?;
                 self.body_host.SetOffset(v3(0.0, header_h))?;
@@ -551,6 +586,7 @@ impl Popup {
             Transition::Replace => {
                 // New body slides up a touch and fades in while the card resizes.
                 self.scroll = 0.0;
+                self.scroll_anim = None;
                 self.body.SetOpacity(0.0)?;
                 self.body.SetOffset(v3(PAD_X * s, 8.0 * s))?;
                 self.scalar(&self.body, "Opacity", 1.0, 220, 80, &self.decelerate)?;
@@ -564,6 +600,7 @@ impl Popup {
                 self.body.SetOpacity(1.0)?;
                 self.resize(card_h, true)?;
                 self.scroll = self.scroll.min(self.max_scroll());
+                self.scroll_anim = None;
                 self.body.SetOffset(v3(PAD_X * s, -self.scroll.round()))?;
                 self.move_body_host(previous_header_h)?;
             }
@@ -594,17 +631,36 @@ impl Popup {
         if max <= 0.0 {
             return Ok(());
         }
+        // Start from where the content is on screen right now, not from the
+        // previous target: restarting from a stale value is what made
+        // scrolling feel like it lagged behind the wheel.
+        let from = self.visible_scroll();
         let step = -(wheel_delta as f32 / 120.0) * 56.0 * self.scale;
         self.scroll = (self.scroll + step).clamp(0.0, max);
-        self.vector3(
-            &self.body,
-            "Offset",
-            v3(PAD_X * self.scale, -self.scroll.round()),
-            220,
-            0,
-            &self.decelerate,
-        )?;
+        self.scroll_anim = Some(ScrollAnim {
+            from,
+            started: Instant::now(),
+        });
+
+        let x = PAD_X * self.scale;
+        let anim = self.compositor.CreateVector3KeyFrameAnimation()?;
+        anim.InsertKeyFrame(0.0, v3(x, -from))?;
+        anim.InsertKeyFrameWithEasingFunction(1.0, v3(x, -self.scroll.round()), &self.scroll_ease)?;
+        anim.SetDuration(ts(SCROLL_MS))?;
+        self.body.StartAnimation(&HSTRING::from("Offset"), &anim)?;
         self.update_scroll_chrome(true)
+    }
+
+    /// The scroll position currently on screen, following the running animation.
+    fn visible_scroll(&self) -> f32 {
+        let Some(anim) = &self.scroll_anim else {
+            return self.scroll;
+        };
+        let t = anim.started.elapsed().as_secs_f32() * 1000.0 / SCROLL_MS as f32;
+        if t >= 1.0 {
+            return self.scroll;
+        }
+        anim.from + (self.scroll - anim.from) * cubic_bezier(SCROLL_EASE, t)
     }
 
     /// The link under a point in window coordinates, if any.
@@ -854,20 +910,22 @@ impl Popup {
         let viewport = self.card_h - self.header_h;
         let track = viewport - 8.0 * s;
         let thumb = (track * viewport / self.body_h).max(28.0 * s);
-        let y = self.header_h + 4.0 * s + (track - thumb) * (self.scroll / max);
+        let thumb_y = |scroll: f32| {
+            self.header_h + 4.0 * s + (track - thumb) * (scroll / max).clamp(0.0, 1.0)
+        };
+        let y = thumb_y(self.scroll);
         let x = CARD_W * s - 7.0 * s;
         self.scrollbar.SetSize(v2(3.0 * s, thumb))?;
         self.scrollbar_clip.SetSize(v2(3.0 * s, thumb))?;
         self.scrollbar_clip.SetCornerRadius(v2(1.5 * s, 1.5 * s))?;
         if animate {
-            self.vector3(
-                &self.scrollbar,
-                "Offset",
-                v3(x, y),
-                220,
-                0,
-                &self.decelerate,
-            )?;
+            // Track the content exactly, starting from where the thumb is now.
+            let anim = self.compositor.CreateVector3KeyFrameAnimation()?;
+            anim.InsertKeyFrame(0.0, v3(x, thumb_y(self.visible_scroll())))?;
+            anim.InsertKeyFrameWithEasingFunction(1.0, v3(x, y), &self.scroll_ease)?;
+            anim.SetDuration(ts(SCROLL_MS))?;
+            self.scrollbar
+                .StartAnimation(&HSTRING::from("Offset"), &anim)?;
         } else {
             Self::stop(&self.scrollbar, &["Offset"]);
             self.scrollbar.SetOffset(v3(x, y))?;
