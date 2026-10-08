@@ -18,9 +18,10 @@ use windows::UI::Composition::Compositor;
 
 use crate::autostart;
 use crate::config::{self, Config};
-use crate::dictionary::{self, Lookup};
+use crate::dictionary::{self, Definition, Lookup};
 use crate::hotkey;
-use crate::popup::{self, Popup};
+use crate::offline;
+use crate::popup::{self, Popup, Transition};
 use crate::render::Body;
 use crate::selection::{Capturer, Selection};
 use crate::theme::Theme;
@@ -72,8 +73,10 @@ pub struct App {
     taskbar_created: u32,
     capture_thread: u32,
     request: u64,
-    word: String,
+    /// Online answers, most recently used last.
     cache: Vec<(String, Lookup)>,
+    /// The offline entry for the current request, if any.
+    local: Option<Definition>,
     hotkey_ok: bool,
     mouse_hook: Option<HHOOK>,
     focus_hook: Option<HWINEVENTHOOK>,
@@ -160,8 +163,8 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             taskbar_created,
             capture_thread,
             request: 0,
-            word: String::new(),
             cache: Vec::new(),
+            local: None,
             hotkey_ok: false,
             mouse_hook: None,
             focus_hook: None,
@@ -313,27 +316,66 @@ impl App {
                 return self.show_message(None, "Nothing selected", &detail, true);
             }
         };
-        self.word = word.clone();
         let anchor = anchor_or_cursor(anchor);
+        let (max_defs, max_syn) = (self.config.max_definitions, self.config.max_synonyms);
 
-        if let Some(hit) = self.cache.iter().position(|(w, _)| *w == word) {
-            let entry = self.cache.remove(hit);
-            let result = entry.1.clone();
-            self.cache.push(entry);
-            return self.show(anchor, &word, &result, false);
+        // The bundled dictionary answers instantly; the online one fills gaps.
+        self.local = offline::lookup(&word, max_defs, max_syn);
+        let online_key = match &self.local {
+            Some(def) => def.word.to_lowercase(),
+            None => word.clone(),
+        };
+        let online = self.cached(&online_key);
+
+        match (&self.local, online) {
+            (Some(local), online) => {
+                let shown = dictionary::merge(local.clone(), online.as_ref());
+                let title = shown.word.clone();
+                self.show_body(
+                    anchor,
+                    &title,
+                    shown.phonetic.as_deref(),
+                    Body::Definition(&shown),
+                    false,
+                );
+                if online.is_some() || !self.config.online_lookup {
+                    return;
+                }
+            }
+            (None, Some(online)) => return self.show(anchor, &word, &online, false),
+            (None, None) if !self.config.online_lookup => {
+                return self.show(anchor, &word, &Lookup::NotFound, false);
+            }
+            (None, None) => self.show_body(anchor, &word, None, Body::Loading, false),
         }
 
-        self.show_body(anchor, &word, None, Body::Loading, false);
         let (id, notify) = (self.request, self.hwnd.0 as isize);
-        let (max_defs, max_syn) = (self.config.max_definitions, self.config.max_synonyms);
         std::thread::spawn(move || {
-            let result = dictionary::lookup(&word, max_defs, max_syn);
-            post(notify, WM_APP_RESULT, Box::new(Looked { id, word, result }));
+            let result = dictionary::lookup_online(&online_key, max_defs, max_syn);
+            post(
+                notify,
+                WM_APP_RESULT,
+                Box::new(Looked {
+                    id,
+                    word: online_key,
+                    result,
+                }),
+            );
         });
     }
 
+    /// A cached online answer (a definition, or a definite "not found").
+    fn cached(&mut self, key: &str) -> Option<Lookup> {
+        let hit = self.cache.iter().position(|(w, _)| w == key)?;
+        let entry = self.cache.remove(hit);
+        let result = entry.1.clone();
+        self.cache.push(entry);
+        Some(result)
+    }
+
     fn on_result(&mut self, looked: Looked) {
-        if let Lookup::Found(_) = looked.result {
+        // Remember definite answers; retry failures (e.g. offline) next time.
+        if !matches!(looked.result, Lookup::Failed(_)) {
             self.cache.retain(|(w, _)| *w != looked.word);
             self.cache
                 .push((looked.word.clone(), looked.result.clone()));
@@ -345,7 +387,18 @@ impl App {
         if looked.id != self.request || !visible {
             return;
         }
-        self.update(&looked.word, &looked.result);
+        match self.local.clone() {
+            // Already showing the offline entry: refine it in place, if the
+            // online one adds anything. Errors are irrelevant here.
+            Some(local) => {
+                let before = (local.phonetic.clone(), local.meanings.len());
+                let merged = dictionary::merge(local, Some(&looked.result));
+                if (merged.phonetic.clone(), merged.meanings.len()) != before {
+                    self.update(&looked.word, &Lookup::Found(merged), Transition::Refine);
+                }
+            }
+            None => self.update(&looked.word, &looked.result, Transition::Replace),
+        }
     }
 
     fn body_for<'a>(result: &'a Lookup) -> (Option<&'a str>, Body<'a>) {
@@ -355,10 +408,16 @@ impl App {
                 None,
                 Body::Message {
                     title: "No definition found",
-                    detail: "Check the spelling, or try the base form of the word (\u{201C}run\u{201D} rather than \u{201C}running\u{201D}).",
+                    detail: "This word isn\u{2019}t in the dictionary. Check the spelling?",
                 },
             ),
-            Lookup::Failed(error) => (None, Body::Message { title: "Couldn\u{2019}t look that up", detail: error }),
+            Lookup::Failed(error) => (
+                None,
+                Body::Message {
+                    title: "Couldn\u{2019}t look that up",
+                    detail: error,
+                },
+            ),
         }
     }
 
@@ -371,7 +430,7 @@ impl App {
         self.show_body(anchor, &title, phonetic, body, auto_hide);
     }
 
-    fn update(&mut self, word: &str, result: &Lookup) {
+    fn update(&mut self, word: &str, result: &Lookup, transition: Transition) {
         let title = match result {
             Lookup::Found(def) => def.word.clone(),
             _ => word.to_string(),
@@ -380,7 +439,10 @@ impl App {
         let Some(popup) = self.popup.as_mut() else {
             return;
         };
-        if popup.set_content(&title, phonetic, body, true).is_err() {
+        if popup
+            .set_content(&title, phonetic, body, transition)
+            .is_err()
+        {
             return;
         }
         CARD_RECT.set(popup.card_rect());

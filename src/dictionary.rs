@@ -1,4 +1,6 @@
-//! Word lookup against the Free Dictionary API (https://dictionaryapi.dev).
+//! Dictionary entries, and the online source: the Free Dictionary API
+//! (https://dictionaryapi.dev, Wiktionary data). The bundled offline
+//! dictionary lives in `offline.rs`.
 
 use serde::Deserialize;
 
@@ -9,7 +11,14 @@ pub struct Definition {
     pub word: String,
     pub phonetic: Option<String>,
     pub meanings: Vec<Meaning>,
+    /// Shown above the senses, e.g. when an inflection was resolved.
+    pub note: Option<String>,
+    /// Where the content came from, for the footer.
+    pub sources: Vec<&'static str>,
 }
+
+pub const WORDNET: &str = "Open English WordNet";
+pub const WIKTIONARY: &str = "Wiktionary";
 
 #[derive(Clone, Debug)]
 pub struct Meaning {
@@ -77,7 +86,7 @@ pub fn normalize(raw: &str) -> Result<String, &'static str> {
     Ok(words.join(" ").to_lowercase())
 }
 
-pub fn lookup(word: &str, max_senses: usize, max_synonyms: usize) -> Lookup {
+pub fn lookup_online(word: &str, max_senses: usize, max_synonyms: usize) -> Lookup {
     let path = format!("/api/v2/entries/en/{}", percent_encode(word));
     match http::get("api.dictionaryapi.dev", &path) {
         Ok((200, body)) => match parse(&body, max_senses, max_synonyms) {
@@ -168,7 +177,36 @@ fn parse(body: &[u8], max_senses: usize, max_synonyms: usize) -> Option<Definiti
         word,
         phonetic,
         meanings,
+        note: None,
+        sources: vec![WIKTIONARY],
     })
+}
+
+/// Fills what the offline entry lacks (pronunciation, parts of speech
+/// WordNet doesn't cover) from an online entry.
+pub fn merge(mut local: Definition, online: Option<&Lookup>) -> Definition {
+    let Some(Lookup::Found(online)) = online else {
+        return local;
+    };
+    let mut used = false;
+    if local.phonetic.is_none() && online.phonetic.is_some() {
+        local.phonetic = online.phonetic.clone();
+        used = true;
+    }
+    for meaning in &online.meanings {
+        if !local
+            .meanings
+            .iter()
+            .any(|m| m.part_of_speech == meaning.part_of_speech)
+        {
+            local.meanings.push(meaning.clone());
+            used = true;
+        }
+    }
+    if used && !local.sources.contains(&WIKTIONARY) {
+        local.sources.push(WIKTIONARY);
+    }
+    local
 }
 
 fn percent_encode(s: &str) -> String {

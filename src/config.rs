@@ -25,6 +25,8 @@ pub struct Config {
     pub max_synonyms: usize,
     /// Read the selection through UI Automation before falling back to the clipboard.
     pub use_ui_automation: bool,
+    /// Use the online dictionary for words (and pronunciations) the bundled one lacks.
+    pub online_lookup: bool,
 }
 
 impl Default for Config {
@@ -35,6 +37,7 @@ impl Default for Config {
             max_definitions: 4,
             max_synonyms: 6,
             use_ui_automation: true,
+            online_lookup: true,
         }
     }
 }
