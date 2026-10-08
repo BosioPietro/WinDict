@@ -15,7 +15,7 @@ use windows::Win32::System::WinRT::Composition::*;
 use windows::UI::Composition::{CompositionDrawingSurface, CompositionGraphicsDevice, Compositor};
 use windows_numerics::{Matrix3x2, Vector2};
 
-use crate::dictionary::Definition;
+use crate::dictionary::{self, Definition};
 use crate::theme::Theme;
 
 #[derive(Clone, Copy)]
@@ -45,6 +45,17 @@ pub struct Layout {
     items: Vec<Item>,
     pub width: f32,
     pub height: f32,
+    /// Clickable areas, in DIPs relative to the layout.
+    pub links: Vec<Link>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Link {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub url: String,
 }
 
 /// What the body of the card shows.
@@ -157,11 +168,13 @@ impl Renderer {
             items,
             width,
             height,
+            links: Vec::new(),
         })
     }
 
     pub fn layout_body(&self, body: &Body, width: f32, bottom_padding: f32) -> Result<Layout> {
         let mut items = Vec::new();
+        let mut links = Vec::new();
         let mut y = 0.0;
         match body {
             Body::Loading => y = 26.0,
@@ -285,23 +298,52 @@ impl Renderer {
                         y += h + 6.0;
                     }
                 }
+                // Sources, each linking to the word's page there.
                 y += 8.0;
-                let footer =
-                    self.text(&def.sources.join(" \u{00B7} "), &self.formats.footer, width)?;
-                let h = metrics(&footer).1;
-                items.push(Item::Text {
-                    layout: footer,
-                    x: 0.0,
-                    y,
-                    ink: Ink::Tertiary,
-                });
-                y += h;
+                let mut x = 0.0;
+                let mut line_h: f32 = 0.0;
+                for (i, source) in def.sources.iter().enumerate() {
+                    if i > 0 {
+                        let dot = self.text(" \u{00B7} ", &self.formats.footer, width)?;
+                        let (w, h, _) = metrics(&dot);
+                        items.push(Item::Text {
+                            layout: dot,
+                            x,
+                            y,
+                            ink: Ink::Tertiary,
+                        });
+                        x += w;
+                        line_h = line_h.max(h);
+                    }
+                    let label = self.text(source, &self.formats.footer, width)?;
+                    let (w, h, _) = metrics(&label);
+                    items.push(Item::Text {
+                        layout: label,
+                        x,
+                        y,
+                        ink: Ink::Accent,
+                    });
+                    if let Some(url) = dictionary::source_url(source, &def.word) {
+                        // A little slack around small text makes it easier to hit.
+                        links.push(Link {
+                            x: x - 4.0,
+                            y: y - 4.0,
+                            width: w + 8.0,
+                            height: h + 8.0,
+                            url,
+                        });
+                    }
+                    x += w;
+                    line_h = line_h.max(h);
+                }
+                y += line_h;
             }
         }
         Ok(Layout {
             items,
             width,
             height: y + bottom_padding,
+            links,
         })
     }
 
@@ -547,7 +589,7 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
             1.4,
         )?,
         meta: make(&text, 13.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 1.4)?,
-        footer: make(&small, 11.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?,
+        footer: make(&small, 12.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?,
         title: make(&text, 15.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?,
     })
 }

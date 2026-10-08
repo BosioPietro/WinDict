@@ -17,7 +17,7 @@ use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
-use crate::render::{Body, Renderer};
+use crate::render::{Body, Link, Renderer};
 use crate::theme::Theme;
 
 // Geometry, in DIPs.
@@ -69,6 +69,7 @@ pub struct Popup {
     header_back: SpriteVisual,
     header_back_brush: CompositionSurfaceBrush,
     header_surface: Option<CompositionDrawingSurface>,
+    links: Vec<Link>,
     divider: SpriteVisual,
     divider_brush: CompositionColorBrush,
     body_host: ContainerVisual,
@@ -255,6 +256,7 @@ impl Popup {
             header_back,
             header_back_brush,
             header_surface: None,
+            links: Vec::new(),
             divider,
             divider_brush,
             body_host,
@@ -494,7 +496,7 @@ impl Popup {
         let header_h = (PAD_TOP + header.height + HEADER_GAP) * s;
         let body_h = body_layout.height * s;
         let max_h = MAX_CARD_H * s;
-        let card_h = (header_h + body_h.min(max_h - header_h)).round();
+        let card_h = (header_h + body_h.min(max_h - header_h)).ceil();
         let transition = if self.card_h > 0.0 {
             transition
         } else {
@@ -503,6 +505,7 @@ impl Popup {
         let previous_header_h = self.header_h;
         self.header_h = header_h;
         self.body_h = body_h;
+        self.links = body_layout.links.clone();
 
         // Header: on a refinement, cross-fade from the old rendering so only
         // what changed (typically the pronunciation) appears to fade in.
@@ -604,6 +607,21 @@ impl Popup {
         self.update_scroll_chrome(true)
     }
 
+    /// The link under a point in window coordinates, if any.
+    pub fn link_at(&self, x: i32, y: i32) -> Option<&str> {
+        let s = self.scale;
+        let (x, y) = (x as f32 - MARGIN * s, y as f32 - self.frame_y());
+        // Only the visible part of the body is clickable.
+        if y < self.header_h || y >= self.card_h || x < 0.0 || x >= CARD_W * s {
+            return None;
+        }
+        let (bx, by) = ((x - PAD_X * s) / s, (y - self.header_h + self.scroll) / s);
+        self.links
+            .iter()
+            .find(|l| bx >= l.x && bx < l.x + l.width && by >= l.y && by < l.y + l.height)
+            .map(|l| l.url.as_str())
+    }
+
     /// The card's bounds in screen pixels.
     pub fn card_rect(&self) -> RECT {
         let left = self.window.left + (MARGIN * self.scale) as i32;
@@ -634,7 +652,13 @@ impl Popup {
     }
 
     fn max_scroll(&self) -> f32 {
-        (self.body_h - (self.card_h - self.header_h)).max(0.0)
+        let overflow = self.body_h - (self.card_h - self.header_h);
+        // Ignore rounding slack: no scrollbar for a pixel or two.
+        if overflow > 2.0 * self.scale {
+            overflow
+        } else {
+            0.0
+        }
     }
 
     fn place(&mut self, anchor: RECT) -> Result<()> {

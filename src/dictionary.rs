@@ -209,6 +209,21 @@ pub fn merge(mut local: Definition, online: Option<&Lookup>) -> Definition {
     local
 }
 
+/// A web page for `word` at `source`, for the card's footer links.
+pub fn source_url(source: &str, word: &str) -> Option<String> {
+    match source {
+        WORDNET => Some(format!(
+            "https://en-word.net/lemma/{}",
+            percent_encode(word)
+        )),
+        WIKTIONARY => Some(format!(
+            "https://en.wiktionary.org/wiki/{}",
+            percent_encode(&word.replace(' ', "_"))
+        )),
+        _ => None,
+    }
+}
+
 fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.bytes() {
