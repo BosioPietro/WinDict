@@ -118,7 +118,7 @@ impl Tray {
     pub fn menu(&self, hotkey: &str, autostart: bool) -> Option<u32> {
         unsafe {
             let menu = CreatePopupMenu().ok()?;
-            let title: Vec<u16> = format!("WinDict  \u{2014}  {hotkey}\0")
+            let title: Vec<u16> = format!("WinDict  -  {hotkey}\0")
                 .encode_utf16()
                 .collect();
             let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(title.as_ptr()));
