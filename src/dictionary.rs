@@ -86,7 +86,26 @@ pub fn normalize(raw: &str) -> Result<String, &'static str> {
     Ok(words.join(" ").to_lowercase())
 }
 
+/// Tries the Free Dictionary API, then falls back to Wiktionary directly
+/// when that has no entry or is unavailable.
 pub fn lookup_online(word: &str, max_senses: usize, max_synonyms: usize) -> Lookup {
+    let first = lookup_free_dictionary(word, max_senses, max_synonyms);
+    if matches!(first, Lookup::Found(_)) {
+        return first;
+    }
+    match lookup_wiktionary(word, max_senses) {
+        found @ Lookup::Found(_) => found,
+        // Keep the more informative failure: a definite "not found" only
+        // counts if neither service was unreachable.
+        Lookup::NotFound => first,
+        Lookup::Failed(e) => match first {
+            Lookup::NotFound => Lookup::NotFound,
+            _ => Lookup::Failed(e),
+        },
+    }
+}
+
+fn lookup_free_dictionary(word: &str, max_senses: usize, max_synonyms: usize) -> Lookup {
     let path = format!("/api/v2/entries/en/{}", percent_encode(word));
     match http::get("api.dictionaryapi.dev", &path) {
         Ok((200, body)) => match parse(&body, max_senses, max_synonyms) {
@@ -100,6 +119,123 @@ pub fn lookup_online(word: &str, max_senses: usize, max_synonyms: usize) -> Look
         )),
         Err(e) => Lookup::Failed(e),
     }
+}
+
+fn lookup_wiktionary(word: &str, max_senses: usize) -> Lookup {
+    let path = format!(
+        "/api/rest_v1/page/definition/{}",
+        percent_encode(&word.replace(' ', "_"))
+    );
+    match http::get("en.wiktionary.org", &path) {
+        Ok((200, body)) => match parse_wiktionary(&body, word, max_senses) {
+            Some(def) => Lookup::Found(def),
+            None => Lookup::NotFound,
+        },
+        Ok((404, _)) => Lookup::NotFound,
+        Ok((429, _)) => Lookup::Failed("Too many lookups, try again in a moment.".into()),
+        Ok((code, _)) => Lookup::Failed(format!(
+            "The dictionary service returned an error ({code})."
+        )),
+        Err(e) => Lookup::Failed(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct WiktEntry {
+    #[serde(rename = "partOfSpeech", default)]
+    part_of_speech: String,
+    #[serde(default)]
+    definitions: Vec<WiktDefinition>,
+}
+
+#[derive(Deserialize)]
+struct WiktDefinition {
+    #[serde(default)]
+    definition: String,
+    #[serde(rename = "parsedExamples", default)]
+    examples: Vec<WiktExample>,
+}
+
+#[derive(Deserialize)]
+struct WiktExample {
+    #[serde(default)]
+    example: String,
+}
+
+fn parse_wiktionary(body: &[u8], word: &str, max_senses: usize) -> Option<Definition> {
+    let mut languages: std::collections::HashMap<String, Vec<WiktEntry>> =
+        serde_json::from_slice(body).ok()?;
+    let entries = languages.remove("en")?;
+
+    let mut meanings: Vec<Meaning> = Vec::new();
+    for entry in entries {
+        let pos = entry.part_of_speech.to_lowercase();
+        let pos = if pos.is_empty() { "other".to_string() } else { pos };
+        let senses: Vec<Sense> = entry
+            .definitions
+            .iter()
+            .filter_map(|d| {
+                let text = strip_html(&d.definition);
+                if text.is_empty() {
+                    return None;
+                }
+                let example = d
+                    .examples
+                    .first()
+                    .map(|e| strip_html(&e.example))
+                    .filter(|e| !e.is_empty());
+                Some(Sense { text, example })
+            })
+            .take(max_senses)
+            .collect();
+        if senses.is_empty() {
+            continue;
+        }
+        match meanings.iter_mut().find(|m| m.part_of_speech == pos) {
+            Some(m) => {
+                let room = max_senses.saturating_sub(m.senses.len());
+                m.senses.extend(senses.into_iter().take(room));
+            }
+            None => meanings.push(Meaning {
+                part_of_speech: pos,
+                senses,
+                synonyms: Vec::new(),
+            }),
+        }
+    }
+    if meanings.is_empty() {
+        return None;
+    }
+    Some(Definition {
+        word: word.to_string(),
+        phonetic: None,
+        meanings,
+        note: None,
+        sources: vec![WIKTIONARY],
+    })
+}
+
+/// Removes tags from the HTML snippets Wiktionary returns and decodes the
+/// few entities that show up in them.
+fn strip_html(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    let out = out
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&");
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn parse(body: &[u8], max_senses: usize, max_synonyms: usize) -> Option<Definition> {
@@ -255,6 +391,27 @@ mod tests {
     fn encodes_paths() {
         assert_eq!(percent_encode("ice cream"), "ice%20cream");
         assert_eq!(percent_encode("café"), "caf%C3%A9");
+    }
+
+    #[test]
+    fn parses_wiktionary_response() {
+        let body = br#"{"en":[
+          {"partOfSpeech":"Adjective","language":"English","definitions":[
+            {"definition":"Failing to <a href=\"/wiki/interest\">interest</a>; not &amp; exciting.",
+             "parsedExamples":[{"example":"An <i>underwhelming</i> film."}]}]},
+          {"partOfSpeech":"Verb","language":"English","definitions":[
+            {"definition":"<span>present participle of <i>underwhelm</i></span>"}]}],
+          "fr":[{"partOfSpeech":"Nom","definitions":[{"definition":"x"}]}]}"#;
+        let def = parse_wiktionary(body, "underwhelming", 3).unwrap();
+        assert_eq!(def.meanings.len(), 2);
+        assert_eq!(def.meanings[0].part_of_speech, "adjective");
+        assert_eq!(def.meanings[0].senses[0].text, "Failing to interest; not & exciting.");
+        assert_eq!(
+            def.meanings[0].senses[0].example.as_deref(),
+            Some("An underwhelming film.")
+        );
+        assert_eq!(def.meanings[1].senses[0].text, "present participle of underwhelm");
+        assert!(parse_wiktionary(br#"{"fr":[]}"#, "x", 3).is_none());
     }
 
     #[test]
