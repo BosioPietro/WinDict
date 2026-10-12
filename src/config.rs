@@ -54,18 +54,53 @@ pub fn path() -> PathBuf {
 }
 
 /// Loads the config, writing the defaults on first run.
-/// Returns the config and whether this is the first run.
-pub fn load() -> (Config, bool) {
+/// Returns the config and whether this is the first run, or why the file
+/// couldn't be read as settings.
+pub fn load() -> Result<(Config, bool), String> {
     let path = path();
     match std::fs::read(&path) {
-        Ok(bytes) => (serde_json::from_slice(&bytes).unwrap_or_default(), false),
+        Ok(bytes) => parse(&bytes).map(|config| (config, false)),
         Err(_) => {
             let config = Config::default();
             let _ = std::fs::create_dir_all(dir());
             if let Ok(json) = serde_json::to_string_pretty(&config) {
                 let _ = std::fs::write(&path, json);
             }
-            (config, true)
+            Ok((config, true))
         }
+    }
+}
+
+fn parse(bytes: &[u8]) -> Result<Config, String> {
+    let mut config: Config =
+        serde_json::from_slice(bytes).map_err(|e| format!("config.json: {e}"))?;
+    // At least one definition per part of speech, or the card would be empty.
+    config.max_definitions = config.max_definitions.max(1);
+    Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_settings() {
+        let config = parse(br#"{"hotkey": "Win+F1", "theme": "dark"}"#).unwrap();
+        assert_eq!(config.hotkey, "Win+F1");
+        assert_eq!(config.theme, ThemeMode::Dark);
+        // Missing fields keep their defaults.
+        assert_eq!(config.max_synonyms, 6);
+        assert!(config.online_lookup);
+        assert_eq!(
+            parse(br#"{"max_definitions": 0}"#).unwrap().max_definitions,
+            1
+        );
+    }
+
+    #[test]
+    fn reports_invalid_settings() {
+        let error = parse(b"{\n  \"hotkey\": \"Ctrl+D\"\n  \"theme\": \"dark\"\n}").unwrap_err();
+        assert!(error.contains("line 3"), "{error}");
+        assert!(parse(br#"{"theme": "purple"}"#).is_err());
     }
 }

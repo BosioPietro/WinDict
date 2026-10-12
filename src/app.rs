@@ -88,7 +88,10 @@ pub struct App {
 }
 
 pub fn run(compositor: Compositor) -> windows::core::Result<()> {
-    let (config, first_run) = config::load();
+    let (config, first_run, config_error) = match config::load() {
+        Ok((config, first_run)) => (config, first_run, None),
+        Err(e) => (Config::default(), false, Some(e)),
+    };
     unsafe {
         let instance = HINSTANCE(GetModuleHandleW(None)?.0);
         let class = WNDCLASSW {
@@ -135,9 +138,8 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
         // messages (other apps send WM_DESTROYCLIPBOARD to the owner).
         let (ready, thread_id) = channel::<u32>();
         let notify = hwnd.0 as isize;
-        let use_uia = config.use_ui_automation;
         std::thread::spawn(move || {
-            let capturer = Capturer::new(use_uia);
+            let capturer = Capturer::new();
             let mut msg = MSG::default();
             // Create the message queue before announcing ourselves.
             let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
@@ -145,7 +147,8 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {
                 if msg.hwnd.is_invalid() && msg.message == WM_APP_CAPTURE {
                     let id = msg.wParam.0 as u64;
-                    let selection = capturer.capture();
+                    let use_ui_automation = msg.lParam.0 != 0;
+                    let selection = capturer.capture(use_ui_automation);
                     post(
                         notify,
                         WM_APP_SELECTION,
@@ -175,7 +178,10 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             focus_hook: None,
         };
         app.register_hotkey();
-        if first_run && app.hotkey_ok {
+        if let Some(e) = config_error {
+            app.tray
+                .notify("Settings not loaded, using the defaults", &e);
+        } else if first_run && app.hotkey_ok {
             app.tray.notify(
                 "WinDict is running",
                 &format!("Select a word anywhere and press {}.", app.config.hotkey),
@@ -296,7 +302,8 @@ impl App {
                 self.capture_thread,
                 WM_APP_CAPTURE,
                 WPARAM(self.request as usize),
-                LPARAM(0),
+                // Sent with every request so "Reload settings" applies it.
+                LPARAM(self.config.use_ui_automation as isize),
             );
         }
     }
@@ -647,7 +654,14 @@ impl App {
             tray::ID_AUTOSTART => autostart::set(!autostart::is_enabled()),
             tray::ID_SETTINGS => open_settings(),
             tray::ID_RELOAD => {
-                self.config = config::load().0;
+                match config::load() {
+                    Ok((config, _)) => self.config = config,
+                    Err(e) => {
+                        return self
+                            .tray
+                            .notify("Settings not reloaded, nothing changed", &e)
+                    }
+                }
                 self.cache.clear();
                 self.register_hotkey();
                 if self.hotkey_ok {

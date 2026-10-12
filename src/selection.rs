@@ -4,6 +4,7 @@
 //! us where the selection is on screen). Apps that don't expose a text pattern
 //! get the classic fallback: simulate Ctrl+C, read the clipboard, restore it.
 
+use std::cell::OnceCell;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -38,20 +39,17 @@ pub struct Selection {
 }
 
 pub struct Capturer {
-    uia: Option<IUIAutomation>,
+    /// Created on first use, as the setting can be turned on later.
+    uia: OnceCell<Option<IUIAutomation>>,
     clipboard_owner: HWND,
 }
 
 impl Capturer {
     /// Must be called on the thread that will call [`Capturer::capture`].
-    pub fn new(use_ui_automation: bool) -> Capturer {
+    pub fn new() -> Capturer {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            let uia = if use_ui_automation {
-                create_uia()
-            } else {
-                None
-            };
+            let uia = OnceCell::new();
             let clipboard_owner = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 w!("STATIC"),
@@ -74,9 +72,13 @@ impl Capturer {
         }
     }
 
-    pub fn capture(&self) -> Option<Selection> {
+    pub fn capture(&self, use_ui_automation: bool) -> Option<Selection> {
         let foreground = unsafe { GetForegroundWindow() };
-        let mut selection = self.via_ui_automation();
+        let mut selection = if use_ui_automation {
+            self.via_ui_automation()
+        } else {
+            None
+        };
         // In terminals Ctrl+C without a selection interrupts the running program.
         if selection.is_none() && !is_terminal(foreground) {
             selection = self
@@ -98,7 +100,7 @@ impl Capturer {
     }
 
     fn via_ui_automation(&self) -> Option<Selection> {
-        let uia = self.uia.as_ref()?;
+        let uia = self.uia.get_or_init(create_uia).as_ref()?;
         unsafe {
             let element = uia.GetFocusedElement().ok()?;
             let pattern: IUIAutomationTextPattern =
