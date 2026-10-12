@@ -2,6 +2,10 @@
 //! (https://dictionaryapi.dev, Wiktionary data). The bundled offline
 //! dictionary lives in `offline.rs`.
 
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
 use serde::Deserialize;
 
 use crate::http;
@@ -86,22 +90,75 @@ pub fn normalize(raw: &str) -> Result<String, &'static str> {
     Ok(words.join(" ").to_lowercase())
 }
 
-/// Tries the Free Dictionary API, then falls back to Wiktionary directly
-/// when that has no entry or is unavailable.
+/// How long the Free Dictionary API gets to answer alone before Wiktionary
+/// is asked too.
+const FALLBACK_DELAY: Duration = Duration::from_millis(500);
+
+/// Asks the Free Dictionary API first. If it hasn't produced a definition
+/// within `FALLBACK_DELAY` (or fails or has no entry sooner), Wiktionary is
+/// asked as well, and the first definition to arrive wins.
 pub fn lookup_online(word: &str, max_senses: usize, max_synonyms: usize) -> Lookup {
-    let first = lookup_free_dictionary(word, max_senses, max_synonyms);
-    if matches!(first, Lookup::Found(_)) {
-        return first;
+    let (w1, w2) = (word.to_string(), word.to_string());
+    race(
+        move || lookup_free_dictionary(&w1, max_senses, max_synonyms),
+        move || lookup_wiktionary(&w2, max_senses),
+        FALLBACK_DELAY,
+    )
+}
+
+fn race(
+    primary: impl FnOnce() -> Lookup + Send + 'static,
+    secondary: impl FnOnce() -> Lookup + Send + 'static,
+    delay: Duration,
+) -> Lookup {
+    let (tx, rx) = mpsc::channel();
+    let primary_tx = tx.clone();
+    thread::spawn(move || {
+        let _ = primary_tx.send(primary());
+    });
+    let mut secondary = Some((secondary, tx));
+    let mut start_secondary = move || {
+        if let Some((f, tx)) = secondary.take() {
+            thread::spawn(move || {
+                let _ = tx.send(f());
+            });
+            true
+        } else {
+            false
+        }
+    };
+
+    let mut pending = 1;
+    let mut failure: Option<String> = None;
+    while pending > 0 {
+        let result = match rx.recv_timeout(delay) {
+            Ok(result) => result,
+            Err(_) => {
+                // Still waiting on the primary: ask the secondary too.
+                if start_secondary() {
+                    pending += 1;
+                }
+                match rx.recv() {
+                    Ok(result) => result,
+                    Err(_) => break,
+                }
+            }
+        };
+        pending -= 1;
+        match result {
+            found @ Lookup::Found(_) => return found,
+            Lookup::Failed(e) => failure = Some(e),
+            Lookup::NotFound => {}
+        }
+        // The primary came up empty before the delay: don't wait any longer.
+        if start_secondary() {
+            pending += 1;
+        }
     }
-    match lookup_wiktionary(word, max_senses) {
-        found @ Lookup::Found(_) => found,
-        // Keep the more informative failure: a definite "not found" only
-        // counts if neither service was unreachable.
-        Lookup::NotFound => first,
-        Lookup::Failed(e) => match first {
-            Lookup::NotFound => Lookup::NotFound,
-            _ => Lookup::Failed(e),
-        },
+    // A definite "not found" only counts if neither source was unreachable.
+    match failure {
+        Some(e) => Lookup::Failed(e),
+        None => Lookup::NotFound,
     }
 }
 
@@ -422,6 +479,81 @@ mod tests {
             "present participle of underwhelm"
         );
         assert!(parse_wiktionary(br#"{"fr":[]}"#, "x", 3).is_none());
+    }
+
+    fn found(word: &str) -> Lookup {
+        Lookup::Found(Definition {
+            word: word.into(),
+            phonetic: None,
+            meanings: Vec::new(),
+            note: None,
+            sources: Vec::new(),
+        })
+    }
+
+    fn delayed(ms: u64, result: Lookup) -> impl FnOnce() -> Lookup + Send + 'static {
+        move || {
+            thread::sleep(Duration::from_millis(ms));
+            result
+        }
+    }
+
+    fn word_of(result: Lookup) -> String {
+        match result {
+            Lookup::Found(d) => d.word,
+            other => format!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn race_prefers_a_prompt_primary() {
+        let d = Duration::from_millis(100);
+        let r = race(
+            delayed(10, found("primary")),
+            delayed(0, found("secondary")),
+            d,
+        );
+        assert_eq!(word_of(r), "primary");
+    }
+
+    #[test]
+    fn race_falls_back_after_the_delay() {
+        let d = Duration::from_millis(50);
+        let r = race(
+            delayed(2000, found("primary")),
+            delayed(10, found("secondary")),
+            d,
+        );
+        assert_eq!(word_of(r), "secondary");
+    }
+
+    #[test]
+    fn race_falls_back_at_once_when_primary_is_empty() {
+        let start = std::time::Instant::now();
+        let r = race(
+            delayed(0, Lookup::NotFound),
+            delayed(0, found("secondary")),
+            Duration::from_secs(5),
+        );
+        assert_eq!(word_of(r), "secondary");
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn race_reports_failure_over_not_found() {
+        let d = Duration::from_millis(10);
+        let r = race(
+            delayed(0, Lookup::NotFound),
+            delayed(0, Lookup::Failed("x".into())),
+            d,
+        );
+        assert!(matches!(r, Lookup::Failed(_)));
+        let r = race(
+            delayed(0, Lookup::NotFound),
+            delayed(0, Lookup::NotFound),
+            d,
+        );
+        assert!(matches!(r, Lookup::NotFound));
     }
 
     #[test]
