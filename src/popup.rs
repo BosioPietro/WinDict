@@ -30,13 +30,15 @@ const PAD_TOP: f32 = 18.0;
 const HEADER_GAP: f32 = 12.0;
 const PAD_BOTTOM: f32 = 18.0;
 const SHADOW_DY: f32 = 6.0;
+/// How far the shadow extends past the card; it must fit in `MARGIN`.
+const SHADOW_SPREAD: f32 = MARGIN * 0.75;
 const ANCHOR_GAP: f32 = 10.0;
 const SCREEN_GAP: f32 = 8.0;
 
 // Durations, in ms.
 pub const SHOW_MS: u64 = 340;
 pub const HIDE_MS: u64 = 120;
-const RESIZE_MS: u64 = 300;
+pub const RESIZE_MS: u64 = 300;
 const SCROLL_MS: u64 = 140;
 /// Ease-out curve for scrolling: quick to respond, soft to settle.
 const SCROLL_EASE: (f32, f32, f32, f32) = (0.25, 0.8, 0.4, 1.0);
@@ -64,6 +66,45 @@ fn cubic_bezier((x1, y1, x2, y2): (f32, f32, f32, f32), t: f32) -> f32 {
     bezier(y1, y2, (lo + hi) / 2.0)
 }
 
+/// Where the window goes for a card next to `anchor` inside the monitor's
+/// `work` area, both in screen pixels, at `scale` pixels per DIP. Returns the
+/// window rectangle and whether the card grows upwards from the anchor (when
+/// there's more room above it than below).
+///
+/// The window always has room for the tallest card plus the shadow margin,
+/// so resizing never moves the window itself.
+fn placement(anchor: RECT, work: RECT, scale: f32) -> (RECT, bool) {
+    let px = |dip: f32| (dip * scale).round() as i32;
+    let (card_w, max_h, m) = (px(CARD_W), px(MAX_CARD_H), px(MARGIN));
+    let (gap, edge) = (px(ANCHOR_GAP), px(SCREEN_GAP));
+
+    let card_x = (anchor.left - px(PAD_X)).clamp(
+        work.left + edge,
+        (work.right - edge - card_w).max(work.left + edge),
+    );
+    let room_below = work.bottom - edge - (anchor.bottom + gap);
+    let room_above = (anchor.top - gap) - (work.top + edge);
+    let grow_up = room_below < max_h && room_above > room_below;
+
+    let window_h = max_h + 2 * m;
+    let window_y = if grow_up {
+        let card_bottom = (anchor.top - gap).max(work.top + edge + max_h);
+        card_bottom + m - window_h
+    } else {
+        let card_top = (anchor.bottom + gap)
+            .min(work.bottom - edge - max_h)
+            .max(work.top + edge);
+        card_top - m
+    };
+    let window = RECT {
+        left: card_x - m,
+        top: window_y,
+        right: card_x + card_w + m,
+        bottom: window_y + window_h,
+    };
+    (window, grow_up)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Transition {
     /// No animation (the card is appearing).
@@ -76,44 +117,19 @@ pub enum Transition {
 
 pub struct Popup {
     pub hwnd: HWND,
-    compositor: Compositor,
     _target: DesktopWindowTarget,
     renderer: Renderer,
-    decelerate: CompositionEasingFunction,
-    accelerate: CompositionEasingFunction,
-    scroll_ease: CompositionEasingFunction,
+    anim: Animator,
 
+    /// Everything on the window; moves and fades as one when showing and hiding.
     root: ContainerVisual,
-    frame: ContainerVisual,
-    shadow: SpriteVisual,
-    shadow_surface: CompositionSurfaceBrush,
-    shadow_brush: CompositionNineGridBrush,
-    card: ContainerVisual,
-    clip: CompositionRoundedRectangleGeometry,
-    tint: CompositionColorBrush,
-    header: SpriteVisual,
-    header_brush: CompositionSurfaceBrush,
-    header_back: SpriteVisual,
-    header_back_brush: CompositionSurfaceBrush,
-    header_surface: Option<CompositionDrawingSurface>,
-    links: Vec<Link>,
-    divider: SpriteVisual,
-    divider_brush: CompositionColorBrush,
-    body_host: ContainerVisual,
-    body: SpriteVisual,
-    body_brush: CompositionSurfaceBrush,
-    loader: ContainerVisual,
-    dots: Vec<SpriteVisual>,
-    dot_brush: CompositionColorBrush,
-    scrollbar: SpriteVisual,
-    scrollbar_clip: CompositionRoundedRectangleGeometry,
-    scrollbar_brush: CompositionColorBrush,
-    border: ShapeVisual,
-    border_geometry: CompositionRoundedRectangleGeometry,
-    border_brush: CompositionColorBrush,
+    frame: Frame,
+    header: Header,
+    content: Content,
+    loader: Loader,
+    scroll_chrome: ScrollChrome,
 
     theme: Theme,
-    shadow_key: Option<(u32, bool)>,
     scale: f32,
     grow_up: bool,
     /// Window position and size, physical pixels.
@@ -124,7 +140,6 @@ pub struct Popup {
     body_h: f32,
     scroll: f32,
     scroll_anim: Option<ScrollAnim>,
-    loading: bool,
     pub visible: bool,
 }
 
@@ -140,30 +155,31 @@ fn v3(x: f32, y: f32) -> Vector3 {
     Vector3 { X: x, Y: y, Z: 0.0 }
 }
 
-impl Popup {
-    pub fn new(hwnd: HWND, compositor: Compositor, theme: Theme) -> Result<Popup> {
-        unsafe {
-            // Lets the host backdrop brush sample what's behind the window.
-            let on = BOOL(1);
-            let size = std::mem::size_of::<BOOL>() as u32;
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_USE_HOSTBACKDROPBRUSH,
-                &on as *const _ as _,
-                size,
-            );
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_TRANSITIONS_FORCEDISABLED,
-                &on as *const _ as _,
-                size,
-            );
-        }
-        let interop: ICompositorDesktopInterop = compositor.cast()?;
-        let target = unsafe { interop.CreateDesktopWindowTarget(hwnd, true)? };
-        let renderer = Renderer::new(&compositor)?;
-        let c = &compositor;
+/// A visual showing a text surface at its natural size, from the top left.
+fn text_sprite(c: &Compositor) -> Result<(SpriteVisual, CompositionSurfaceBrush)> {
+    let brush = c.CreateSurfaceBrush()?;
+    brush.SetStretch(CompositionStretch::None)?;
+    brush.SetHorizontalAlignmentRatio(0.0)?;
+    brush.SetVerticalAlignmentRatio(0.0)?;
+    let sprite = c.CreateSpriteVisual()?;
+    sprite.SetBrush(&brush)?;
+    Ok((sprite, brush))
+}
 
+// ---------------------------------------------------------------------------
+// Parts of the card
+
+/// Starts compositor animations with the card's easing curves.
+struct Animator {
+    compositor: Compositor,
+    decelerate: CompositionEasingFunction,
+    accelerate: CompositionEasingFunction,
+    scroll_ease: CompositionEasingFunction,
+}
+
+impl Animator {
+    fn new(compositor: Compositor) -> Result<Animator> {
+        let c = &compositor;
         let decelerate = c
             .CreateCubicBezierEasingFunction(v2(0.1, 0.9), v2(0.2, 1.0))?
             .cast()?;
@@ -174,153 +190,13 @@ impl Popup {
         let accelerate = c
             .CreateCubicBezierEasingFunction(v2(0.7, 0.0), v2(1.0, 0.5))?
             .cast()?;
-
-        let root = c.CreateContainerVisual()?;
-        target.SetRoot(&root)?;
-        let frame = c.CreateContainerVisual()?;
-        root.Children()?.InsertAtTop(&frame)?;
-
-        let shadow = c.CreateSpriteVisual()?;
-        let shadow_surface = c.CreateSurfaceBrush()?;
-        let shadow_brush = c.CreateNineGridBrush()?;
-        shadow_brush.SetSource(&shadow_surface)?;
-        shadow.SetBrush(&shadow_brush)?;
-        frame.Children()?.InsertAtTop(&shadow)?;
-
-        let card = c.CreateContainerVisual()?;
-        let clip = c.CreateRoundedRectangleGeometry()?;
-        card.SetClip(&c.CreateGeometricClipWithGeometry(&clip)?)?;
-        frame.Children()?.InsertAtTop(&card)?;
-
-        // Acrylic: the blurred desktop, then a translucent tint on top.
-        let backdrop = c.CreateSpriteVisual()?;
-        backdrop.SetBrush(&c.CreateHostBackdropBrush()?)?;
-        backdrop.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
-        card.Children()?.InsertAtTop(&backdrop)?;
-        let tint = c.CreateColorBrushWithColor(theme.tint())?;
-        let tint_visual = c.CreateSpriteVisual()?;
-        tint_visual.SetBrush(&tint)?;
-        tint_visual.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
-        card.Children()?.InsertAtTop(&tint_visual)?;
-
-        let header_back = c.CreateSpriteVisual()?;
-        let header_back_brush = c.CreateSurfaceBrush()?;
-        header_back_brush.SetStretch(CompositionStretch::None)?;
-        header_back_brush.SetHorizontalAlignmentRatio(0.0)?;
-        header_back_brush.SetVerticalAlignmentRatio(0.0)?;
-        header_back.SetBrush(&header_back_brush)?;
-        header_back.SetOpacity(0.0)?;
-        card.Children()?.InsertAtTop(&header_back)?;
-
-        let header = c.CreateSpriteVisual()?;
-        let header_brush = c.CreateSurfaceBrush()?;
-        header_brush.SetStretch(CompositionStretch::None)?;
-        header_brush.SetHorizontalAlignmentRatio(0.0)?;
-        header_brush.SetVerticalAlignmentRatio(0.0)?;
-        header.SetBrush(&header_brush)?;
-        card.Children()?.InsertAtTop(&header)?;
-
-        let body_host = c.CreateContainerVisual()?;
-        body_host.SetClip(&c.CreateInsetClip()?)?;
-        card.Children()?.InsertAtTop(&body_host)?;
-        let body = c.CreateSpriteVisual()?;
-        let body_brush = c.CreateSurfaceBrush()?;
-        body_brush.SetStretch(CompositionStretch::None)?;
-        body_brush.SetHorizontalAlignmentRatio(0.0)?;
-        body_brush.SetVerticalAlignmentRatio(0.0)?;
-        body.SetBrush(&body_brush)?;
-        body_host.Children()?.InsertAtTop(&body)?;
-
-        let loader = c.CreateContainerVisual()?;
-        body_host.Children()?.InsertAtTop(&loader)?;
-        let dot_brush = c.CreateColorBrushWithColor(theme.accent)?;
-        let mut dots = Vec::new();
-        for _ in 0..3 {
-            let dot = c.CreateSpriteVisual()?;
-            dot.SetBrush(&dot_brush)?;
-            let ellipse = c.CreateEllipseGeometry()?;
-            dot.SetClip(&c.CreateGeometricClipWithGeometry(&ellipse)?)?;
-            loader.Children()?.InsertAtTop(&dot)?;
-            dots.push(dot);
-        }
-
-        let divider = c.CreateSpriteVisual()?;
-        let divider_brush = c.CreateColorBrush()?;
-        divider.SetBrush(&divider_brush)?;
-        divider.SetOpacity(0.0)?;
-        card.Children()?.InsertAtTop(&divider)?;
-
-        let scrollbar = c.CreateSpriteVisual()?;
-        let scrollbar_clip = c.CreateRoundedRectangleGeometry()?;
-        scrollbar.SetClip(&c.CreateGeometricClipWithGeometry(&scrollbar_clip)?)?;
-        let scrollbar_brush = c.CreateColorBrush()?;
-        scrollbar.SetBrush(&scrollbar_brush)?;
-        scrollbar.SetOpacity(0.0)?;
-        card.Children()?.InsertAtTop(&scrollbar)?;
-
-        // A hairline edge, as on Windows 11 flyouts.
-        let border = c.CreateShapeVisual()?;
-        let border_geometry = c.CreateRoundedRectangleGeometry()?;
-        let border_shape = c.CreateSpriteShapeWithGeometry(&border_geometry)?;
-        let border_brush = c.CreateColorBrush()?;
-        border_shape.SetStrokeBrush(&border_brush)?;
-        border_shape.SetStrokeThickness(1.0)?;
-        border.Shapes()?.Append(&border_shape)?;
-        frame.Children()?.InsertAtTop(&border)?;
-
-        Ok(Popup {
-            hwnd,
+        Ok(Animator {
             compositor,
-            _target: target,
-            renderer,
             decelerate,
             accelerate,
             scroll_ease,
-            root,
-            frame,
-            shadow,
-            shadow_surface,
-            shadow_brush,
-            card,
-            clip,
-            tint,
-            header,
-            header_brush,
-            header_back,
-            header_back_brush,
-            header_surface: None,
-            links: Vec::new(),
-            divider,
-            divider_brush,
-            body_host,
-            body,
-            body_brush,
-            loader,
-            dots,
-            dot_brush,
-            scrollbar,
-            scrollbar_clip,
-            scrollbar_brush,
-            border,
-            border_geometry,
-            border_brush,
-            theme,
-            shadow_key: None,
-            scale: 1.0,
-            grow_up: false,
-            window: RECT::default(),
-            card_h: 0.0,
-            header_h: 0.0,
-            body_h: 0.0,
-            scroll: 0.0,
-            scroll_anim: None,
-            loading: false,
-            visible: false,
         })
     }
-
-    // -----------------------------------------------------------------------
-    // Animation helpers
 
     fn scalar(
         &self,
@@ -378,6 +254,407 @@ impl Popup {
             }
         }
     }
+}
+
+/// The card's outline: its shadow, the clipped acrylic background that
+/// holds the content, and a hairline border on top.
+struct Frame {
+    visual: ContainerVisual,
+    shadow: SpriteVisual,
+    shadow_surface: CompositionSurfaceBrush,
+    shadow_brush: CompositionNineGridBrush,
+    /// Scale and darkness the shadow was last drawn for.
+    shadow_key: Option<(u32, bool)>,
+    /// The content goes in here.
+    card: ContainerVisual,
+    clip: CompositionRoundedRectangleGeometry,
+    tint: CompositionColorBrush,
+    border: ShapeVisual,
+    border_geometry: CompositionRoundedRectangleGeometry,
+    border_brush: CompositionColorBrush,
+}
+
+impl Frame {
+    fn new(c: &Compositor, parent: &ContainerVisual, theme: &Theme) -> Result<Frame> {
+        let visual = c.CreateContainerVisual()?;
+        parent.Children()?.InsertAtTop(&visual)?;
+
+        let shadow = c.CreateSpriteVisual()?;
+        let shadow_surface = c.CreateSurfaceBrush()?;
+        let shadow_brush = c.CreateNineGridBrush()?;
+        shadow_brush.SetSource(&shadow_surface)?;
+        shadow.SetBrush(&shadow_brush)?;
+        visual.Children()?.InsertAtTop(&shadow)?;
+
+        let card = c.CreateContainerVisual()?;
+        let clip = c.CreateRoundedRectangleGeometry()?;
+        card.SetClip(&c.CreateGeometricClipWithGeometry(&clip)?)?;
+        visual.Children()?.InsertAtTop(&card)?;
+
+        // Acrylic: the blurred desktop, then a translucent tint on top.
+        let backdrop = c.CreateSpriteVisual()?;
+        backdrop.SetBrush(&c.CreateHostBackdropBrush()?)?;
+        backdrop.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
+        card.Children()?.InsertAtTop(&backdrop)?;
+        let tint = c.CreateColorBrushWithColor(theme.tint())?;
+        let tint_visual = c.CreateSpriteVisual()?;
+        tint_visual.SetBrush(&tint)?;
+        tint_visual.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
+        card.Children()?.InsertAtTop(&tint_visual)?;
+
+        // A hairline edge, as on Windows 11 flyouts.
+        let border = c.CreateShapeVisual()?;
+        let border_geometry = c.CreateRoundedRectangleGeometry()?;
+        let border_shape = c.CreateSpriteShapeWithGeometry(&border_geometry)?;
+        let border_brush = c.CreateColorBrush()?;
+        border_shape.SetStrokeBrush(&border_brush)?;
+        border_shape.SetStrokeThickness(1.0)?;
+        border.Shapes()?.Append(&border_shape)?;
+        visual.Children()?.InsertAtTop(&border)?;
+
+        Ok(Frame {
+            visual,
+            shadow,
+            shadow_surface,
+            shadow_brush,
+            shadow_key: None,
+            card,
+            clip,
+            tint,
+            border,
+            border_geometry,
+            border_brush,
+        })
+    }
+
+    fn apply_theme(&mut self, renderer: &Renderer, t: &Theme, s: f32) -> Result<()> {
+        self.tint.SetColor(t.tint())?;
+        self.border_brush.SetColor(t.border())?;
+        let key = ((s * 100.0) as u32, t.dark);
+        if self.shadow_key != Some(key) {
+            let (surface, inset) =
+                renderer.draw_shadow(SHADOW_SPREAD * s, RADIUS * s, t.shadow_opacity())?;
+            self.shadow_surface.SetSurface(&surface)?;
+            self.shadow_brush.SetInsets(inset)?;
+            self.shadow_key = Some(key);
+        }
+        let shadow_margin = SHADOW_SPREAD * s;
+        self.shadow
+            .SetOffset(v3(-shadow_margin, -shadow_margin + SHADOW_DY * s))?;
+        self.clip.SetCornerRadius(v2(RADIUS * s, RADIUS * s))?;
+        self.border_geometry
+            .SetCornerRadius(v2(RADIUS * s - 0.5, RADIUS * s - 0.5))?;
+        self.border_geometry.SetOffset(v2(0.5, 0.5))?;
+        Ok(())
+    }
+
+    /// Sizes the card to `w` × `h` pixels with its top left at `offset`.
+    fn resize(
+        &self,
+        anim: &Animator,
+        w: f32,
+        h: f32,
+        offset: Vector3,
+        s: f32,
+        animate: bool,
+    ) -> Result<()> {
+        let shadow_margin = SHADOW_SPREAD * s;
+        let sizes: [(&dyn Fn() -> Result<CompositionObject>, Vector2); 5] = [
+            (&|| self.card.cast(), v2(w, h)),
+            (&|| self.clip.cast(), v2(w, h)),
+            (&|| self.border.cast(), v2(w, h)),
+            (&|| self.border_geometry.cast(), v2(w - 1.0, h - 1.0)),
+            (
+                &|| self.shadow.cast(),
+                v2(w + 2.0 * shadow_margin, h + 2.0 * shadow_margin),
+            ),
+        ];
+        if animate {
+            for (target, size) in sizes {
+                anim.vector2(&target()?, "Size", size, RESIZE_MS)?;
+            }
+            anim.vector3(
+                &self.visual,
+                "Offset",
+                offset,
+                RESIZE_MS,
+                0,
+                &anim.decelerate,
+            )
+        } else {
+            for (target, size) in sizes {
+                let object = target()?;
+                Animator::stop(&object, &["Size"]);
+                match object.cast::<Visual>() {
+                    Ok(visual) => visual.SetSize(size)?,
+                    Err(_) => object
+                        .cast::<CompositionRoundedRectangleGeometry>()?
+                        .SetSize(size)?,
+                }
+            }
+            Animator::stop(&self.visual, &["Offset"]);
+            self.visual.SetOffset(offset)
+        }
+    }
+}
+
+/// The word and its pronunciation. `back` holds the previous rendering
+/// while it cross-fades to the new one.
+struct Header {
+    visual: SpriteVisual,
+    brush: CompositionSurfaceBrush,
+    back: SpriteVisual,
+    back_brush: CompositionSurfaceBrush,
+    surface: Option<CompositionDrawingSurface>,
+}
+
+impl Header {
+    fn new(c: &Compositor, card: &ContainerVisual) -> Result<Header> {
+        let (back, back_brush) = text_sprite(c)?;
+        back.SetOpacity(0.0)?;
+        card.Children()?.InsertAtTop(&back)?;
+        let (visual, brush) = text_sprite(c)?;
+        card.Children()?.InsertAtTop(&visual)?;
+        Ok(Header {
+            visual,
+            brush,
+            back,
+            back_brush,
+            surface: None,
+        })
+    }
+}
+
+/// The scrolling part of the card: a clipped host below the header, and the
+/// rendered definition inside it.
+struct Content {
+    host: ContainerVisual,
+    visual: SpriteVisual,
+    brush: CompositionSurfaceBrush,
+    links: Vec<Link>,
+}
+
+impl Content {
+    fn new(c: &Compositor, card: &ContainerVisual) -> Result<Content> {
+        let host = c.CreateContainerVisual()?;
+        host.SetClip(&c.CreateInsetClip()?)?;
+        card.Children()?.InsertAtTop(&host)?;
+        let (visual, brush) = text_sprite(c)?;
+        host.Children()?.InsertAtTop(&visual)?;
+        Ok(Content {
+            host,
+            visual,
+            brush,
+            links: Vec::new(),
+        })
+    }
+}
+
+/// Three pulsing dots, shown while an online lookup runs.
+struct Loader {
+    visual: ContainerVisual,
+    dots: Vec<SpriteVisual>,
+    brush: CompositionColorBrush,
+    running: bool,
+}
+
+impl Loader {
+    fn new(c: &Compositor, host: &ContainerVisual, theme: &Theme) -> Result<Loader> {
+        let visual = c.CreateContainerVisual()?;
+        host.Children()?.InsertAtTop(&visual)?;
+        let brush = c.CreateColorBrushWithColor(theme.accent)?;
+        let mut dots = Vec::new();
+        for _ in 0..3 {
+            let dot = c.CreateSpriteVisual()?;
+            dot.SetBrush(&brush)?;
+            let ellipse = c.CreateEllipseGeometry()?;
+            dot.SetClip(&c.CreateGeometricClipWithGeometry(&ellipse)?)?;
+            visual.Children()?.InsertAtTop(&dot)?;
+            dots.push(dot);
+        }
+        Ok(Loader {
+            visual,
+            dots,
+            brush,
+            running: false,
+        })
+    }
+
+    fn start(&self, anim: &Animator, s: f32) -> Result<()> {
+        let size = 7.0 * s;
+        Animator::stop(&self.visual, &["Opacity"]);
+        self.visual.SetOpacity(1.0)?;
+        self.visual.SetOffset(v3(PAD_X * s, 6.0 * s))?;
+        for (i, dot) in self.dots.iter().enumerate() {
+            dot.SetSize(v2(size, size))?;
+            dot.SetOffset(v3(i as f32 * size * 1.9, 0.0))?;
+            dot.SetCenterPoint(Vector3 {
+                X: size / 2.0,
+                Y: size / 2.0,
+                Z: 0.0,
+            })?;
+            if let Ok(clip) = dot.Clip()?.cast::<CompositionGeometricClip>() {
+                if let Ok(ellipse) = clip.Geometry()?.cast::<CompositionEllipseGeometry>() {
+                    ellipse.SetCenter(v2(size / 2.0, size / 2.0))?;
+                    ellipse.SetRadius(v2(size / 2.0, size / 2.0))?;
+                }
+            }
+            let pulse = anim.compositor.CreateScalarKeyFrameAnimation()?;
+            pulse.InsertKeyFrame(0.0, 0.25)?;
+            pulse.InsertKeyFrameWithEasingFunction(0.3, 1.0, &anim.decelerate)?;
+            pulse.InsertKeyFrameWithEasingFunction(0.7, 0.25, &anim.decelerate)?;
+            pulse.InsertKeyFrame(1.0, 0.25)?;
+            pulse.SetDuration(ts(1100))?;
+            pulse.SetDelayTime(ts(i as u64 * 160))?;
+            pulse.SetIterationBehavior(AnimationIterationBehavior::Forever)?;
+            dot.SetOpacity(0.25)?;
+            dot.StartAnimation(&HSTRING::from("Opacity"), &pulse)?;
+
+            let bounce = anim.compositor.CreateVector3KeyFrameAnimation()?;
+            let small = Vector3 {
+                X: 0.8,
+                Y: 0.8,
+                Z: 1.0,
+            };
+            bounce.InsertKeyFrame(0.0, small)?;
+            bounce.InsertKeyFrameWithEasingFunction(
+                0.3,
+                Vector3 {
+                    X: 1.0,
+                    Y: 1.0,
+                    Z: 1.0,
+                },
+                &anim.decelerate,
+            )?;
+            bounce.InsertKeyFrameWithEasingFunction(0.7, small, &anim.decelerate)?;
+            bounce.InsertKeyFrame(1.0, small)?;
+            bounce.SetDuration(ts(1100))?;
+            bounce.SetDelayTime(ts(i as u64 * 160))?;
+            bounce.SetIterationBehavior(AnimationIterationBehavior::Forever)?;
+            dot.SetScale(small)?;
+            dot.StartAnimation(&HSTRING::from("Scale"), &bounce)?;
+        }
+        Ok(())
+    }
+
+    fn stop(&self) {
+        for dot in &self.dots {
+            Animator::stop(dot, &["Opacity", "Scale"]);
+        }
+        let _ = self.visual.SetOpacity(0.0);
+    }
+}
+
+/// The divider under the header and the scrollbar thumb, shown only when
+/// the content scrolls.
+struct ScrollChrome {
+    divider: SpriteVisual,
+    divider_brush: CompositionColorBrush,
+    thumb: SpriteVisual,
+    thumb_clip: CompositionRoundedRectangleGeometry,
+    thumb_brush: CompositionColorBrush,
+}
+
+impl ScrollChrome {
+    fn new(c: &Compositor, card: &ContainerVisual) -> Result<ScrollChrome> {
+        let divider = c.CreateSpriteVisual()?;
+        let divider_brush = c.CreateColorBrush()?;
+        divider.SetBrush(&divider_brush)?;
+        divider.SetOpacity(0.0)?;
+        card.Children()?.InsertAtTop(&divider)?;
+
+        let thumb = c.CreateSpriteVisual()?;
+        let thumb_clip = c.CreateRoundedRectangleGeometry()?;
+        thumb.SetClip(&c.CreateGeometricClipWithGeometry(&thumb_clip)?)?;
+        let thumb_brush = c.CreateColorBrush()?;
+        thumb.SetBrush(&thumb_brush)?;
+        thumb.SetOpacity(0.0)?;
+        card.Children()?.InsertAtTop(&thumb)?;
+
+        Ok(ScrollChrome {
+            divider,
+            divider_brush,
+            thumb,
+            thumb_clip,
+            thumb_brush,
+        })
+    }
+
+    fn apply_theme(&self, t: &Theme) -> Result<()> {
+        let ink = if t.dark { 0xFF } else { 0x00 };
+        self.divider_brush.SetColor(crate::theme::argb(
+            if t.dark { 0x1F } else { 0x14 },
+            ink,
+            ink,
+            ink,
+        ))?;
+        self.thumb_brush.SetColor(crate::theme::argb(
+            if t.dark { 0x60 } else { 0x50 },
+            ink,
+            ink,
+            ink,
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+impl Popup {
+    pub fn new(hwnd: HWND, compositor: Compositor, theme: Theme) -> Result<Popup> {
+        unsafe {
+            // Lets the host backdrop brush sample what's behind the window.
+            let on = BOOL(1);
+            let size = std::mem::size_of::<BOOL>() as u32;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_USE_HOSTBACKDROPBRUSH,
+                &on as *const _ as _,
+                size,
+            );
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_TRANSITIONS_FORCEDISABLED,
+                &on as *const _ as _,
+                size,
+            );
+        }
+        let interop: ICompositorDesktopInterop = compositor.cast()?;
+        let target = unsafe { interop.CreateDesktopWindowTarget(hwnd, true)? };
+        let renderer = Renderer::new(&compositor)?;
+        let c = &compositor;
+
+        // Creation order is stacking order: later visuals draw on top.
+        let root = c.CreateContainerVisual()?;
+        target.SetRoot(&root)?;
+        let frame = Frame::new(c, &root, &theme)?;
+        let header = Header::new(c, &frame.card)?;
+        let content = Content::new(c, &frame.card)?;
+        let loader = Loader::new(c, &content.host, &theme)?;
+        let scroll_chrome = ScrollChrome::new(c, &frame.card)?;
+
+        Ok(Popup {
+            hwnd,
+            _target: target,
+            renderer,
+            anim: Animator::new(compositor)?,
+            root,
+            frame,
+            header,
+            content,
+            loader,
+            scroll_chrome,
+            theme,
+            scale: 1.0,
+            grow_up: false,
+            window: RECT::default(),
+            card_h: 0.0,
+            header_h: 0.0,
+            body_h: 0.0,
+            scroll: 0.0,
+            scroll_anim: None,
+            visible: false,
+        })
+    }
 
     // -----------------------------------------------------------------------
     // Public API
@@ -392,16 +669,16 @@ impl Popup {
         body: Body,
     ) -> Result<()> {
         self.theme = theme;
-        self.place(anchor)?;
+        self.place(anchor);
         self.apply_theme()?;
 
         // Reset everything to its resting state before animating in.
         for v in [
             &self.root.cast::<Visual>()?,
-            &self.frame.cast()?,
-            &self.body.cast()?,
+            &self.frame.visual.cast()?,
+            &self.content.visual.cast()?,
         ] {
-            Self::stop(v, &["Opacity", "Offset", "Scale"]);
+            Animator::stop(v, &["Opacity", "Offset", "Scale"]);
         }
         self.card_h = 0.0;
         self.set_content(word, phonetic, body, Transition::Instant)?;
@@ -440,8 +717,9 @@ impl Popup {
         }
         self.visible = true;
 
-        self.scalar(&self.root, "Opacity", 1.0, 160, 0, &self.decelerate)?;
-        self.vector3(
+        let anim = &self.anim;
+        anim.scalar(&self.root, "Opacity", 1.0, 160, 0, &anim.decelerate)?;
+        anim.vector3(
             &self.root,
             "Scale",
             Vector3 {
@@ -451,15 +729,15 @@ impl Popup {
             },
             SHOW_MS,
             0,
-            &self.decelerate,
+            &anim.decelerate,
         )?;
-        self.vector3(
+        anim.vector3(
             &self.root,
             "Offset",
             v3(0.0, 0.0),
             SHOW_MS,
             0,
-            &self.decelerate,
+            &anim.decelerate,
         )?;
         Ok(())
     }
@@ -471,16 +749,17 @@ impl Popup {
         }
         self.visible = false;
         let dy = if self.grow_up { 6.0 } else { -6.0 } * self.scale;
-        self.scalar(&self.root, "Opacity", 0.0, HIDE_MS, 0, &self.accelerate)?;
-        self.vector3(
+        let anim = &self.anim;
+        anim.scalar(&self.root, "Opacity", 0.0, HIDE_MS, 0, &anim.accelerate)?;
+        anim.vector3(
             &self.root,
             "Offset",
             v3(0.0, dy),
             HIDE_MS,
             0,
-            &self.accelerate,
+            &anim.accelerate,
         )?;
-        self.vector3(
+        anim.vector3(
             &self.root,
             "Scale",
             Vector3 {
@@ -490,7 +769,7 @@ impl Popup {
             },
             HIDE_MS,
             0,
-            &self.accelerate,
+            &anim.accelerate,
         )
     }
 
@@ -502,13 +781,14 @@ impl Popup {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
         // Release the text surfaces while idle.
-        let _ = self.header_brush.SetSurface(None::<&ICompositionSurface>);
-        let _ = self.body_brush.SetSurface(None::<&ICompositionSurface>);
+        let _ = self.header.brush.SetSurface(None::<&ICompositionSurface>);
+        let _ = self.content.brush.SetSurface(None::<&ICompositionSurface>);
         let _ = self
-            .header_back_brush
+            .header
+            .back_brush
             .SetSurface(None::<&ICompositionSurface>);
-        self.header_surface = None;
-        self.stop_loader();
+        self.header.surface = None;
+        self.loader.stop();
         self.renderer.trim();
     }
 
@@ -522,12 +802,12 @@ impl Popup {
     ) -> Result<()> {
         let s = self.scale;
         let content_w = CARD_W - 2.0 * PAD_X;
-        let header = self.renderer.layout_header(word, phonetic, content_w)?;
+        let header_layout = self.renderer.layout_header(word, phonetic, content_w)?;
         let body_layout = self.renderer.layout_body(&body, content_w, PAD_BOTTOM)?;
-        let header_surface = self.renderer.draw(&header, s, &self.theme)?;
+        let header_surface = self.renderer.draw(&header_layout, s, &self.theme)?;
         let body_surface = self.renderer.draw(&body_layout, s, &self.theme)?;
 
-        let header_h = (PAD_TOP + header.height + HEADER_GAP) * s;
+        let header_h = (PAD_TOP + header_layout.height + HEADER_GAP) * s;
         let body_h = body_layout.height * s;
         let max_h = MAX_CARD_H * s;
         let card_h = (header_h + body_h.min(max_h - header_h)).ceil();
@@ -539,89 +819,114 @@ impl Popup {
         let previous_header_h = self.header_h;
         self.header_h = header_h;
         self.body_h = body_h;
-        self.links = body_layout.links.clone();
+        self.content.links = body_layout.links.clone();
 
         // Header: on a refinement, cross-fade from the old rendering so only
         // what changed (typically the pronunciation) appears to fade in.
-        let old_header = self.header_surface.replace(header_surface.clone());
-        Self::stop(&self.header, &["Opacity"]);
-        Self::stop(&self.header_back, &["Opacity"]);
-        self.header_back.SetOpacity(0.0)?;
+        let anim = &self.anim;
+        let header = &mut self.header;
+        let old_header = header.surface.replace(header_surface.clone());
+        Animator::stop(&header.visual, &["Opacity"]);
+        Animator::stop(&header.back, &["Opacity"]);
+        header.back.SetOpacity(0.0)?;
         if let (Transition::Refine, Some(old)) = (transition, old_header) {
-            self.header_back_brush.SetSurface(&old)?;
-            self.header_back.SetSize(self.header.Size()?)?;
-            self.header_back.SetOffset(v3(PAD_X * s, PAD_TOP * s))?;
-            self.header_back.SetOpacity(1.0)?;
-            self.header.SetOpacity(0.0)?;
-            self.scalar(&self.header_back, "Opacity", 0.0, 240, 0, &self.decelerate)?;
-            self.scalar(&self.header, "Opacity", 1.0, 240, 0, &self.decelerate)?;
+            header.back_brush.SetSurface(&old)?;
+            header.back.SetSize(header.visual.Size()?)?;
+            header.back.SetOffset(v3(PAD_X * s, PAD_TOP * s))?;
+            header.back.SetOpacity(1.0)?;
+            header.visual.SetOpacity(0.0)?;
+            anim.scalar(&header.back, "Opacity", 0.0, 240, 0, &anim.decelerate)?;
+            anim.scalar(&header.visual, "Opacity", 1.0, 240, 0, &anim.decelerate)?;
         } else {
-            self.header.SetOpacity(1.0)?;
+            header.visual.SetOpacity(1.0)?;
         }
-        self.header_brush.SetSurface(&header_surface)?;
-        self.header.SetSize(v2(content_w * s, header.height * s))?;
-        self.header.SetOffset(v3(PAD_X * s, PAD_TOP * s))?;
-        self.body_brush.SetSurface(&body_surface)?;
-        self.body.SetSize(v2(content_w * s, body_h))?;
-        Self::stop(&self.body, &["Offset", "Opacity"]);
-        Self::stop(&self.body_host, &["Offset"]);
+        header.brush.SetSurface(&header_surface)?;
+        header
+            .visual
+            .SetSize(v2(content_w * s, header_layout.height * s))?;
+        header.visual.SetOffset(v3(PAD_X * s, PAD_TOP * s))?;
 
-        let was_loading = self.loading;
-        self.loading = matches!(body, Body::Loading);
-        if self.loading {
-            self.start_loader()?;
+        let content = &self.content;
+        content.brush.SetSurface(&body_surface)?;
+        content.visual.SetSize(v2(content_w * s, body_h))?;
+        Animator::stop(&content.visual, &["Offset", "Opacity"]);
+        Animator::stop(&content.host, &["Offset"]);
+
+        let was_loading = self.loader.running;
+        self.loader.running = matches!(body, Body::Loading);
+        if self.loader.running {
+            self.loader.start(&self.anim, s)?;
         } else if was_loading {
-            self.scalar(&self.loader, "Opacity", 0.0, 120, 0, &self.accelerate)?;
+            let anim = &self.anim;
+            anim.scalar(
+                &self.loader.visual,
+                "Opacity",
+                0.0,
+                120,
+                0,
+                &anim.accelerate,
+            )?;
         }
 
+        let anim = &self.anim;
+        let content = &self.content;
         match transition {
             Transition::Instant => {
                 self.scroll = 0.0;
                 self.scroll_anim = None;
-                self.body.SetOpacity(1.0)?;
-                self.body.SetOffset(v3(PAD_X * s, 0.0))?;
-                self.body_host.SetOffset(v3(0.0, header_h))?;
+                content.visual.SetOpacity(1.0)?;
+                content.visual.SetOffset(v3(PAD_X * s, 0.0))?;
+                content.host.SetOffset(v3(0.0, header_h))?;
                 self.resize(card_h, false)?;
             }
             Transition::Replace => {
                 // New body slides up a touch and fades in while the card resizes.
                 self.scroll = 0.0;
                 self.scroll_anim = None;
-                self.body.SetOpacity(0.0)?;
-                self.body.SetOffset(v3(PAD_X * s, 8.0 * s))?;
-                self.scalar(&self.body, "Opacity", 1.0, 220, 80, &self.decelerate)?;
+                content.visual.SetOpacity(0.0)?;
+                content.visual.SetOffset(v3(PAD_X * s, 8.0 * s))?;
+                anim.scalar(&content.visual, "Opacity", 1.0, 220, 80, &anim.decelerate)?;
                 let rest = v3(PAD_X * s, 0.0);
-                self.vector3(&self.body, "Offset", rest, RESIZE_MS, 80, &self.decelerate)?;
-                self.move_body_host(previous_header_h)?;
+                anim.vector3(
+                    &content.visual,
+                    "Offset",
+                    rest,
+                    RESIZE_MS,
+                    80,
+                    &anim.decelerate,
+                )?;
+                self.move_content_host(previous_header_h)?;
                 self.resize(card_h, true)?;
             }
             Transition::Refine => {
                 // Same entry with more detail: keep the reader's place.
-                self.body.SetOpacity(1.0)?;
+                content.visual.SetOpacity(1.0)?;
                 self.resize(card_h, true)?;
                 self.scroll = self.scroll.min(self.max_scroll());
                 self.scroll_anim = None;
-                self.body.SetOffset(v3(PAD_X * s, -self.scroll.round()))?;
-                self.move_body_host(previous_header_h)?;
+                self.content
+                    .visual
+                    .SetOffset(v3(PAD_X * s, -self.scroll.round()))?;
+                self.move_content_host(previous_header_h)?;
             }
         }
         self.update_scroll_chrome(false)?;
         Ok(())
     }
 
-    fn move_body_host(&self, previous_header_h: f32) -> Result<()> {
+    fn move_content_host(&self, previous_header_h: f32) -> Result<()> {
         let to = v3(0.0, self.header_h);
         if (previous_header_h - self.header_h).abs() > 0.5 {
-            self.vector3(
-                &self.body_host,
+            self.anim.vector3(
+                &self.content.host,
                 "Offset",
                 to,
                 RESIZE_MS,
                 0,
-                &self.decelerate,
+                &self.anim.decelerate,
             )
         } else {
-            self.body_host.SetOffset(to)
+            self.content.host.SetOffset(to)
         }
     }
 
@@ -643,11 +948,17 @@ impl Popup {
         });
 
         let x = PAD_X * self.scale;
-        let anim = self.compositor.CreateVector3KeyFrameAnimation()?;
+        let anim = self.anim.compositor.CreateVector3KeyFrameAnimation()?;
         anim.InsertKeyFrame(0.0, v3(x, -from))?;
-        anim.InsertKeyFrameWithEasingFunction(1.0, v3(x, -self.scroll.round()), &self.scroll_ease)?;
+        anim.InsertKeyFrameWithEasingFunction(
+            1.0,
+            v3(x, -self.scroll.round()),
+            &self.anim.scroll_ease,
+        )?;
         anim.SetDuration(ts(SCROLL_MS))?;
-        self.body.StartAnimation(&HSTRING::from("Offset"), &anim)?;
+        self.content
+            .visual
+            .StartAnimation(&HSTRING::from("Offset"), &anim)?;
         self.update_scroll_chrome(true)
     }
 
@@ -672,7 +983,8 @@ impl Popup {
             return None;
         }
         let (bx, by) = ((x - PAD_X * s) / s, (y - self.header_h + self.scroll) / s);
-        self.links
+        self.content
+            .links
             .iter()
             .find(|l| bx >= l.x && bx < l.x + l.width && by >= l.y && by < l.y + l.height)
             .map(|l| l.url.as_str())
@@ -717,94 +1029,32 @@ impl Popup {
         }
     }
 
-    fn place(&mut self, anchor: RECT) -> Result<()> {
+    /// Picks the window position and scale for a card next to `anchor`, on
+    /// the monitor the anchor is on.
+    fn place(&mut self, anchor: RECT) {
+        let center = POINT {
+            x: (anchor.left + anchor.right) / 2,
+            y: (anchor.top + anchor.bottom) / 2,
+        };
+        let monitor = unsafe { MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST) };
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
         unsafe {
-            let center = POINT {
-                x: (anchor.left + anchor.right) / 2,
-                y: (anchor.top + anchor.bottom) / 2,
-            };
-            let monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST);
-            let mut info = MONITORINFO {
-                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-                ..Default::default()
-            };
             let _ = GetMonitorInfoW(monitor, &mut info);
-            let work = info.rcWork;
-            let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
             let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
-            let s = dpi_x as f32 / 96.0;
-            self.scale = s;
-
-            let px = |dip: f32| (dip * s).round() as i32;
-            let (card_w, max_h, m) = (px(CARD_W), px(MAX_CARD_H), px(MARGIN));
-            let (gap, edge) = (px(ANCHOR_GAP), px(SCREEN_GAP));
-
-            let card_x = (anchor.left - px(PAD_X)).clamp(
-                work.left + edge,
-                (work.right - edge - card_w).max(work.left + edge),
-            );
-            let room_below = work.bottom - edge - (anchor.bottom + gap);
-            let room_above = (anchor.top - gap) - (work.top + edge);
-            self.grow_up = room_below < max_h && room_above > room_below;
-
-            let window_h = max_h + 2 * m;
-            let window_y = if self.grow_up {
-                let card_bottom = (anchor.top - gap).max(work.top + edge + max_h);
-                card_bottom + m - window_h
-            } else {
-                let card_top = (anchor.bottom + gap)
-                    .min(work.bottom - edge - max_h)
-                    .max(work.top + edge);
-                card_top - m
-            };
-            self.window = RECT {
-                left: card_x - m,
-                top: window_y,
-                right: card_x + card_w + m,
-                bottom: window_y + window_h,
-            };
         }
-        Ok(())
+        self.scale = dpi_x as f32 / 96.0;
+        (self.window, self.grow_up) = placement(anchor, info.rcWork, self.scale);
     }
 
     fn apply_theme(&mut self) -> Result<()> {
         let t = self.theme;
-        self.tint.SetColor(t.tint())?;
-        self.border_brush.SetColor(t.border())?;
-        self.dot_brush.SetColor(t.accent)?;
-        let ink = if t.dark { 0xFF } else { 0x00 };
-        self.divider_brush.SetColor(crate::theme::argb(
-            if t.dark { 0x1F } else { 0x14 },
-            ink,
-            ink,
-            ink,
-        ))?;
-        self.scrollbar_brush.SetColor(crate::theme::argb(
-            if t.dark { 0x60 } else { 0x50 },
-            ink,
-            ink,
-            ink,
-        ))?;
-
-        let s = self.scale;
-        let key = ((s * 100.0) as u32, t.dark);
-        if self.shadow_key != Some(key) {
-            let (surface, inset) =
-                self.renderer
-                    .draw_shadow(MARGIN * s * 0.75, RADIUS * s, t.shadow_opacity())?;
-            self.shadow_surface.SetSurface(&surface)?;
-            self.shadow_brush.SetInsets(inset)?;
-            self.shadow_key = Some(key);
-        }
-        let m = MARGIN * s;
-        let shadow_margin = m * 0.75;
-        self.shadow
-            .SetOffset(v3(-shadow_margin, -shadow_margin + SHADOW_DY * s))?;
-        self.clip.SetCornerRadius(v2(RADIUS * s, RADIUS * s))?;
-        self.border_geometry
-            .SetCornerRadius(v2(RADIUS * s - 0.5, RADIUS * s - 0.5))?;
-        self.border_geometry.SetOffset(v2(0.5, 0.5))?;
-        Ok(())
+        self.frame.apply_theme(&self.renderer, &t, self.scale)?;
+        self.loader.brush.SetColor(t.accent)?;
+        self.scroll_chrome.apply_theme(&t)
     }
 
     fn resize(&mut self, card_h: f32, animate: bool) -> Result<()> {
@@ -812,58 +1062,20 @@ impl Popup {
         let w = (CARD_W * s).round();
         let old_h = self.card_h;
         self.card_h = card_h;
-        let shadow_margin = MARGIN * s * 0.75;
-        let window_h = (self.window.bottom - self.window.top) as f32;
-        let m = MARGIN * s;
-        let frame_y = if self.grow_up {
-            window_h - m - card_h
-        } else {
-            m
-        };
-
-        let sizes: [(&dyn Fn() -> Result<CompositionObject>, Vector2); 5] = [
-            (&|| self.card.cast(), v2(w, card_h)),
-            (&|| self.clip.cast(), v2(w, card_h)),
-            (&|| self.border.cast(), v2(w, card_h)),
-            (&|| self.border_geometry.cast(), v2(w - 1.0, card_h - 1.0)),
-            (
-                &|| self.shadow.cast(),
-                v2(w + 2.0 * shadow_margin, card_h + 2.0 * shadow_margin),
-            ),
-        ];
-        let body_host_size = v2(w, (card_h - self.header_h).max(0.0));
+        let offset = v3(MARGIN * s, self.frame_y());
+        let host_size = v2(w, (card_h - self.header_h).max(0.0));
         if animate {
             self.set_region(old_h, card_h);
-            for (target, size) in sizes {
-                self.vector2(&target()?, "Size", size, RESIZE_MS)?;
-            }
-            self.vector2(&self.body_host, "Size", body_host_size, RESIZE_MS)?;
-            self.vector3(
-                &self.frame,
-                "Offset",
-                v3(m, frame_y),
-                RESIZE_MS,
-                0,
-                &self.decelerate,
-            )?;
+            self.frame.resize(&self.anim, w, card_h, offset, s, true)?;
+            self.anim
+                .vector2(&self.content.host, "Size", host_size, RESIZE_MS)?;
         } else {
-            for (target, size) in sizes {
-                let object = target()?;
-                Self::stop(&object, &["Size"]);
-                match object.cast::<Visual>() {
-                    Ok(visual) => visual.SetSize(size)?,
-                    Err(_) => object
-                        .cast::<CompositionRoundedRectangleGeometry>()?
-                        .SetSize(size)?,
-                }
-            }
-            Self::stop(&self.body_host, &["Size"]);
-            self.body_host.SetSize(body_host_size)?;
-            Self::stop(&self.frame, &["Offset"]);
-            self.frame.SetOffset(v3(m, frame_y))?;
+            self.frame.resize(&self.anim, w, card_h, offset, s, false)?;
+            Animator::stop(&self.content.host, &["Size"]);
+            self.content.host.SetSize(host_size)?;
             self.set_region(card_h, card_h);
         }
-        self.divider.SetSize(v2(w, 1.0))?;
+        self.scroll_chrome.divider.SetSize(v2(w, 1.0))?;
         Ok(())
     }
 
@@ -891,20 +1103,22 @@ impl Popup {
     fn update_scroll_chrome(&self, animate: bool) -> Result<()> {
         let s = self.scale;
         let max = self.max_scroll();
-        self.divider.SetOffset(v3(0.0, self.header_h - 1.0))?;
+        let anim = &self.anim;
+        let chrome = &self.scroll_chrome;
+        chrome.divider.SetOffset(v3(0.0, self.header_h - 1.0))?;
         let divider_opacity = if self.scroll > 0.5 { 1.0 } else { 0.0 };
-        self.scalar(
-            &self.divider,
+        anim.scalar(
+            &chrome.divider,
             "Opacity",
             divider_opacity,
             150,
             0,
-            &self.decelerate,
+            &anim.decelerate,
         )?;
 
         if max <= 0.0 {
-            Self::stop(&self.scrollbar, &["Opacity"]);
-            self.scrollbar.SetOpacity(0.0)?;
+            Animator::stop(&chrome.thumb, &["Opacity"]);
+            chrome.thumb.SetOpacity(0.0)?;
             return Ok(());
         }
         let viewport = self.card_h - self.header_h;
@@ -915,86 +1129,98 @@ impl Popup {
         };
         let y = thumb_y(self.scroll);
         let x = CARD_W * s - 7.0 * s;
-        self.scrollbar.SetSize(v2(3.0 * s, thumb))?;
-        self.scrollbar_clip.SetSize(v2(3.0 * s, thumb))?;
-        self.scrollbar_clip.SetCornerRadius(v2(1.5 * s, 1.5 * s))?;
+        chrome.thumb.SetSize(v2(3.0 * s, thumb))?;
+        chrome.thumb_clip.SetSize(v2(3.0 * s, thumb))?;
+        chrome.thumb_clip.SetCornerRadius(v2(1.5 * s, 1.5 * s))?;
         if animate {
             // Track the content exactly, starting from where the thumb is now.
-            let anim = self.compositor.CreateVector3KeyFrameAnimation()?;
-            anim.InsertKeyFrame(0.0, v3(x, thumb_y(self.visible_scroll())))?;
-            anim.InsertKeyFrameWithEasingFunction(1.0, v3(x, y), &self.scroll_ease)?;
-            anim.SetDuration(ts(SCROLL_MS))?;
-            self.scrollbar
-                .StartAnimation(&HSTRING::from("Offset"), &anim)?;
+            let a = anim.compositor.CreateVector3KeyFrameAnimation()?;
+            a.InsertKeyFrame(0.0, v3(x, thumb_y(self.visible_scroll())))?;
+            a.InsertKeyFrameWithEasingFunction(1.0, v3(x, y), &anim.scroll_ease)?;
+            a.SetDuration(ts(SCROLL_MS))?;
+            chrome.thumb.StartAnimation(&HSTRING::from("Offset"), &a)?;
         } else {
-            Self::stop(&self.scrollbar, &["Offset"]);
-            self.scrollbar.SetOffset(v3(x, y))?;
+            Animator::stop(&chrome.thumb, &["Offset"]);
+            chrome.thumb.SetOffset(v3(x, y))?;
         }
-        self.scalar(&self.scrollbar, "Opacity", 1.0, 200, 150, &self.decelerate)
+        anim.scalar(&chrome.thumb, "Opacity", 1.0, 200, 150, &anim.decelerate)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SCREEN: RECT = RECT {
+        left: 0,
+        top: 0,
+        right: 1920,
+        bottom: 1040,
+    };
+
+    fn word_at(x: i32, y: i32) -> RECT {
+        RECT {
+            left: x,
+            top: y,
+            right: x + 60,
+            bottom: y + 20,
+        }
     }
 
-    fn start_loader(&self) -> Result<()> {
-        let s = self.scale;
-        let size = 7.0 * s;
-        Self::stop(&self.loader, &["Opacity"]);
-        self.loader.SetOpacity(1.0)?;
-        self.loader.SetOffset(v3(PAD_X * s, 6.0 * s))?;
-        for (i, dot) in self.dots.iter().enumerate() {
-            dot.SetSize(v2(size, size))?;
-            dot.SetOffset(v3(i as f32 * size * 1.9, 0.0))?;
-            dot.SetCenterPoint(Vector3 {
-                X: size / 2.0,
-                Y: size / 2.0,
-                Z: 0.0,
-            })?;
-            if let Ok(clip) = dot.Clip()?.cast::<CompositionGeometricClip>() {
-                if let Ok(ellipse) = clip.Geometry()?.cast::<CompositionEllipseGeometry>() {
-                    ellipse.SetCenter(v2(size / 2.0, size / 2.0))?;
-                    ellipse.SetRadius(v2(size / 2.0, size / 2.0))?;
-                }
+    #[test]
+    fn places_the_card_below_the_selection() {
+        let anchor = word_at(500, 100);
+        let (window, grow_up) = placement(anchor, SCREEN, 1.0);
+        assert!(!grow_up);
+        // The card starts ANCHOR_GAP below the selection, aligned with its text.
+        assert_eq!(
+            window.top + MARGIN as i32,
+            anchor.bottom + ANCHOR_GAP as i32
+        );
+        assert_eq!(window.left + MARGIN as i32, anchor.left - PAD_X as i32);
+        let height = MAX_CARD_H as i32 + 2 * MARGIN as i32;
+        assert_eq!(window.bottom - window.top, height);
+    }
+
+    #[test]
+    fn grows_up_near_the_bottom_of_the_screen() {
+        let anchor = word_at(500, 950);
+        let (window, grow_up) = placement(anchor, SCREEN, 1.0);
+        assert!(grow_up);
+        // The card's bottom edge sits ANCHOR_GAP above the selection.
+        assert_eq!(
+            window.bottom - MARGIN as i32,
+            anchor.top - ANCHOR_GAP as i32
+        );
+    }
+
+    #[test]
+    fn stays_on_screen() {
+        for scale in [1.0, 1.5, 2.0] {
+            for (x, y) in [(-50, 10), (1900, 500), (0, 0), (1900, 1030)] {
+                let (window, _) = placement(word_at(x, y), SCREEN, scale);
+                let m = (MARGIN * scale).round() as i32;
+                let edge = (SCREEN_GAP * scale).round() as i32;
+                assert!(window.left + m >= SCREEN.left + edge, "{x},{y} @{scale}");
+                assert!(window.right - m <= SCREEN.right - edge, "{x},{y} @{scale}");
+                assert!(window.top + m >= SCREEN.top + edge, "{x},{y} @{scale}");
+                assert!(
+                    window.bottom - m <= SCREEN.bottom - edge,
+                    "{x},{y} @{scale}"
+                );
             }
-            let pulse = self.compositor.CreateScalarKeyFrameAnimation()?;
-            pulse.InsertKeyFrame(0.0, 0.25)?;
-            pulse.InsertKeyFrameWithEasingFunction(0.3, 1.0, &self.decelerate)?;
-            pulse.InsertKeyFrameWithEasingFunction(0.7, 0.25, &self.decelerate)?;
-            pulse.InsertKeyFrame(1.0, 0.25)?;
-            pulse.SetDuration(ts(1100))?;
-            pulse.SetDelayTime(ts(i as u64 * 160))?;
-            pulse.SetIterationBehavior(AnimationIterationBehavior::Forever)?;
-            dot.SetOpacity(0.25)?;
-            dot.StartAnimation(&HSTRING::from("Opacity"), &pulse)?;
-
-            let bounce = self.compositor.CreateVector3KeyFrameAnimation()?;
-            let small = Vector3 {
-                X: 0.8,
-                Y: 0.8,
-                Z: 1.0,
-            };
-            bounce.InsertKeyFrame(0.0, small)?;
-            bounce.InsertKeyFrameWithEasingFunction(
-                0.3,
-                Vector3 {
-                    X: 1.0,
-                    Y: 1.0,
-                    Z: 1.0,
-                },
-                &self.decelerate,
-            )?;
-            bounce.InsertKeyFrameWithEasingFunction(0.7, small, &self.decelerate)?;
-            bounce.InsertKeyFrame(1.0, small)?;
-            bounce.SetDuration(ts(1100))?;
-            bounce.SetDelayTime(ts(i as u64 * 160))?;
-            bounce.SetIterationBehavior(AnimationIterationBehavior::Forever)?;
-            dot.SetScale(small)?;
-            dot.StartAnimation(&HSTRING::from("Scale"), &bounce)?;
         }
-        Ok(())
     }
 
-    fn stop_loader(&self) {
-        for dot in &self.dots {
-            Self::stop(dot, &["Opacity", "Scale"]);
-        }
-        let _ = self.loader.SetOpacity(0.0);
+    #[test]
+    fn eases_like_css() {
+        assert!(cubic_bezier(SCROLL_EASE, 0.0).abs() < 1e-3);
+        assert!((cubic_bezier(SCROLL_EASE, 1.0) - 1.0).abs() < 1e-3);
+        // An ease-out is ahead of linear halfway through, and never goes back.
+        assert!(cubic_bezier(SCROLL_EASE, 0.5) > 0.5);
+        let samples: Vec<f32> = (0..=20)
+            .map(|i| cubic_bezier(SCROLL_EASE, i as f32 / 20.0))
+            .collect();
+        assert!(samples.windows(2).all(|w| w[1] >= w[0]));
     }
 }

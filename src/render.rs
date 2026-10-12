@@ -58,6 +58,33 @@ pub struct Link {
     pub url: String,
 }
 
+/// Room for the sense numbers, in DIPs.
+const SENSE_INDENT: f32 = 22.0;
+
+/// A layout being built top to bottom.
+#[derive(Default)]
+struct Stack {
+    items: Vec<Item>,
+    links: Vec<Link>,
+    /// Top of the current line.
+    y: f32,
+}
+
+impl Stack {
+    /// Places text on the current line, `x` from the left. Returns its width
+    /// and height; moving down is up to the caller.
+    fn text(&mut self, layout: IDWriteTextLayout, x: f32, ink: Ink) -> (f32, f32) {
+        let (w, h, _) = metrics(&layout);
+        self.items.push(Item::Text {
+            layout,
+            x,
+            y: self.y,
+            ink,
+        });
+        (w, h)
+    }
+}
+
 /// What the body of the card shows.
 pub enum Body<'a> {
     Loading,
@@ -173,178 +200,141 @@ impl Renderer {
     }
 
     pub fn layout_body(&self, body: &Body, width: f32, bottom_padding: f32) -> Result<Layout> {
-        let mut items = Vec::new();
-        let mut links = Vec::new();
-        let mut y = 0.0;
+        let mut out = Stack::default();
         match body {
-            Body::Loading => y = 26.0,
+            // Room for the loading dots, which popup.rs draws.
+            Body::Loading => out.y = 26.0,
             Body::Message { title, detail } => {
-                let t = self.text(title, &self.formats.title, width)?;
-                y += metrics(&t).1 + 4.0;
-                items.push(Item::Text {
-                    layout: t,
-                    x: 0.0,
-                    y: 0.0,
-                    ink: Ink::Primary,
-                });
-                if !detail.is_empty() {
-                    let d = self.text(detail, &self.formats.body, width)?;
-                    let h = metrics(&d).1;
-                    items.push(Item::Text {
-                        layout: d,
-                        x: 0.0,
-                        y,
-                        ink: Ink::Secondary,
-                    });
-                    y += h;
-                }
+                self.layout_message(&mut out, title, detail, width)?
             }
             Body::Definition(def) => {
-                let indent = 22.0;
-                if let Some(note) = &def.note {
-                    let n = self.text(note, &self.formats.example, width)?;
-                    let h = metrics(&n).1;
-                    items.push(Item::Text {
-                        layout: n,
-                        x: 0.0,
-                        y,
-                        ink: Ink::Tertiary,
-                    });
-                    y += h + 10.0;
-                }
-                for (i, meaning) in def.meanings.iter().enumerate() {
-                    if i > 0 {
-                        y += 6.0;
-                        items.push(Item::Rule { y, x: 0.0, width });
-                        y += 14.0;
-                    }
-                    let pos = self.text(
-                        &meaning.part_of_speech.to_uppercase(),
-                        &self.formats.part_of_speech,
-                        width,
-                    )?;
-                    if let Ok(pos1) = pos.cast::<IDWriteTextLayout1>() {
-                        let range = DWRITE_TEXT_RANGE {
-                            startPosition: 0,
-                            length: u32::MAX,
-                        };
-                        unsafe {
-                            let _ = pos1.SetCharacterSpacing(0.0, 0.9, 0.0, range);
-                        }
-                    }
-                    let h = metrics(&pos).1;
-                    items.push(Item::Text {
-                        layout: pos,
-                        x: 0.0,
-                        y,
-                        ink: Ink::Accent,
-                    });
-                    y += h + 6.0;
-
-                    for (n, sense) in meaning.senses.iter().enumerate() {
-                        let number =
-                            self.text(&format!("{}", n + 1), &self.formats.number, indent)?;
-                        items.push(Item::Text {
-                            layout: number,
-                            x: 0.0,
-                            y,
-                            ink: Ink::Tertiary,
-                        });
-                        let text = self.text(&sense.text, &self.formats.body, width - indent)?;
-                        let h = metrics(&text).1;
-                        items.push(Item::Text {
-                            layout: text,
-                            x: indent,
-                            y,
-                            ink: Ink::Primary,
-                        });
-                        y += h;
-                        if let Some(example) = &sense.example {
-                            y += 3.0;
-                            let ex = self.text(
-                                &format!("\u{201C}{example}\u{201D}"),
-                                &self.formats.example,
-                                width - indent,
-                            )?;
-                            let h = metrics(&ex).1;
-                            items.push(Item::Text {
-                                layout: ex,
-                                x: indent,
-                                y,
-                                ink: Ink::Secondary,
-                            });
-                            y += h;
-                        }
-                        y += 9.0;
-                    }
-                    if !meaning.synonyms.is_empty() {
-                        let label = "Similar  ";
-                        let line = format!("{label}{}", meaning.synonyms.join(" \u{00B7} "));
-                        let syn = self.text(&line, &self.formats.meta, width - indent)?;
-                        unsafe {
-                            let range = DWRITE_TEXT_RANGE {
-                                startPosition: 0,
-                                length: label.trim_end().len() as u32,
-                            };
-                            let _ = syn.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, range);
-                        }
-                        let h = metrics(&syn).1;
-                        items.push(Item::Text {
-                            layout: syn,
-                            x: indent,
-                            y,
-                            ink: Ink::Secondary,
-                        });
-                        y += h + 6.0;
-                    }
-                }
-                // Sources, each linking to the word's page there.
-                y += 8.0;
-                let mut x = 0.0;
-                let mut line_h: f32 = 0.0;
-                for (i, source) in def.sources.iter().enumerate() {
-                    if i > 0 {
-                        let dot = self.text(" \u{00B7} ", &self.formats.footer, width)?;
-                        let (w, h, _) = metrics(&dot);
-                        items.push(Item::Text {
-                            layout: dot,
-                            x,
-                            y,
-                            ink: Ink::Tertiary,
-                        });
-                        x += w;
-                        line_h = line_h.max(h);
-                    }
-                    let label = self.text(source, &self.formats.footer, width)?;
-                    let (w, h, _) = metrics(&label);
-                    items.push(Item::Text {
-                        layout: label,
-                        x,
-                        y,
-                        ink: Ink::Accent,
-                    });
-                    if let Some(url) = dictionary::source_url(source, &def.word) {
-                        // A little slack around small text makes it easier to hit.
-                        links.push(Link {
-                            x: x - 4.0,
-                            y: y - 4.0,
-                            width: w + 8.0,
-                            height: h + 8.0,
-                            url,
-                        });
-                    }
-                    x += w;
-                    line_h = line_h.max(h);
-                }
-                y += line_h;
+                self.layout_definition(&mut out, def, width)?;
+                self.layout_sources(&mut out, def, width)?;
             }
         }
         Ok(Layout {
-            items,
+            items: out.items,
             width,
-            height: y + bottom_padding,
-            links,
+            height: out.y + bottom_padding,
+            links: out.links,
         })
+    }
+
+    fn layout_message(&self, out: &mut Stack, title: &str, detail: &str, width: f32) -> Result<()> {
+        let (_, h) = out.text(
+            self.text(title, &self.formats.title, width)?,
+            0.0,
+            Ink::Primary,
+        );
+        out.y += h + 4.0;
+        if !detail.is_empty() {
+            let d = self.text(detail, &self.formats.body, width)?;
+            let (_, h) = out.text(d, 0.0, Ink::Secondary);
+            out.y += h;
+        }
+        Ok(())
+    }
+
+    /// The note, then each part of speech with its numbered senses.
+    fn layout_definition(&self, out: &mut Stack, def: &Definition, width: f32) -> Result<()> {
+        let indent = SENSE_INDENT;
+        if let Some(note) = &def.note {
+            let n = self.text(note, &self.formats.example, width)?;
+            let (_, h) = out.text(n, 0.0, Ink::Tertiary);
+            out.y += h + 10.0;
+        }
+        for (i, meaning) in def.meanings.iter().enumerate() {
+            if i > 0 {
+                out.y += 6.0;
+                out.items.push(Item::Rule {
+                    y: out.y,
+                    x: 0.0,
+                    width,
+                });
+                out.y += 14.0;
+            }
+            let pos = self.text(
+                &meaning.part_of_speech.to_uppercase(),
+                &self.formats.part_of_speech,
+                width,
+            )?;
+            if let Ok(pos1) = pos.cast::<IDWriteTextLayout1>() {
+                let range = DWRITE_TEXT_RANGE {
+                    startPosition: 0,
+                    length: u32::MAX,
+                };
+                unsafe {
+                    let _ = pos1.SetCharacterSpacing(0.0, 0.9, 0.0, range);
+                }
+            }
+            let (_, h) = out.text(pos, 0.0, Ink::Accent);
+            out.y += h + 6.0;
+
+            for (n, sense) in meaning.senses.iter().enumerate() {
+                let number = self.text(&format!("{}", n + 1), &self.formats.number, indent)?;
+                out.text(number, 0.0, Ink::Tertiary);
+                let text = self.text(&sense.text, &self.formats.body, width - indent)?;
+                let (_, h) = out.text(text, indent, Ink::Primary);
+                out.y += h;
+                if let Some(example) = &sense.example {
+                    out.y += 3.0;
+                    let ex = self.text(
+                        &format!("\u{201C}{example}\u{201D}"),
+                        &self.formats.example,
+                        width - indent,
+                    )?;
+                    let (_, h) = out.text(ex, indent, Ink::Secondary);
+                    out.y += h;
+                }
+                out.y += 9.0;
+            }
+            if !meaning.synonyms.is_empty() {
+                let label = "Similar  ";
+                let line = format!("{label}{}", meaning.synonyms.join(" \u{00B7} "));
+                let syn = self.text(&line, &self.formats.meta, width - indent)?;
+                unsafe {
+                    let range = DWRITE_TEXT_RANGE {
+                        startPosition: 0,
+                        length: label.trim_end().len() as u32,
+                    };
+                    let _ = syn.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, range);
+                }
+                let (_, h) = out.text(syn, indent, Ink::Secondary);
+                out.y += h + 6.0;
+            }
+        }
+        Ok(())
+    }
+
+    /// The footer: the sources, each linking to the word's page there.
+    fn layout_sources(&self, out: &mut Stack, def: &Definition, width: f32) -> Result<()> {
+        out.y += 8.0;
+        let mut x = 0.0;
+        let mut line_h: f32 = 0.0;
+        for (i, source) in def.sources.iter().enumerate() {
+            if i > 0 {
+                let dot = self.text(" \u{00B7} ", &self.formats.footer, width)?;
+                let (w, h) = out.text(dot, x, Ink::Tertiary);
+                x += w;
+                line_h = line_h.max(h);
+            }
+            let label = self.text(source, &self.formats.footer, width)?;
+            let (w, h) = out.text(label, x, Ink::Accent);
+            if let Some(url) = dictionary::source_url(source, &def.word) {
+                // A little slack around small text makes it easier to hit.
+                out.links.push(Link {
+                    x: x - 4.0,
+                    y: out.y - 4.0,
+                    width: w + 8.0,
+                    height: h + 8.0,
+                    url,
+                });
+            }
+            x += w;
+            line_h = line_h.max(h);
+        }
+        out.y += line_h;
+        Ok(())
     }
 
     /// Draws `layout` into a new surface. `scale` is pixels per DIP.

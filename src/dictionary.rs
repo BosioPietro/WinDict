@@ -77,15 +77,23 @@ struct ApiDefinition {
     synonyms: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NormalizeError {
+    /// No letters or digits at all.
+    Empty,
+    /// More than a short phrase.
+    TooLong,
+}
+
 /// Cleans up raw selected text into something worth looking up.
-pub fn normalize(raw: &str) -> Result<String, &'static str> {
+pub fn normalize(raw: &str) -> Result<String, NormalizeError> {
     let trimmed = raw.trim_matches(|c: char| !c.is_alphanumeric());
     let words: Vec<&str> = trimmed.split_whitespace().collect();
     if words.is_empty() {
-        return Err("empty");
+        return Err(NormalizeError::Empty);
     }
     if words.len() > 4 || trimmed.chars().count() > 60 {
-        return Err("too long");
+        return Err(NormalizeError::TooLong);
     }
     Ok(words.join(" ").to_lowercase())
 }
@@ -164,11 +172,25 @@ fn race(
 
 fn lookup_free_dictionary(word: &str, max_senses: usize, max_synonyms: usize) -> Lookup {
     let path = format!("/api/v2/entries/en/{}", percent_encode(word));
-    match http::get("api.dictionaryapi.dev", &path) {
-        Ok((200, body)) => match parse(&body, max_senses, max_synonyms) {
-            Some(def) => Lookup::Found(def),
-            None => Lookup::NotFound,
-        },
+    fetch("api.dictionaryapi.dev", &path, |body| {
+        parse(body, max_senses, max_synonyms)
+    })
+}
+
+fn lookup_wiktionary(word: &str, max_senses: usize) -> Lookup {
+    let path = format!(
+        "/api/rest_v1/page/definition/{}",
+        percent_encode(&word.replace(' ', "_"))
+    );
+    fetch("en.wiktionary.org", &path, |body| {
+        parse_wiktionary(body, word, max_senses)
+    })
+}
+
+/// GETs `path` and parses a successful response with `parse`.
+fn fetch(host: &str, path: &str, parse: impl FnOnce(&[u8]) -> Option<Definition>) -> Lookup {
+    match http::get(host, path) {
+        Ok((200, body)) => parse(&body).map_or(Lookup::NotFound, Lookup::Found),
         Ok((404, _)) => Lookup::NotFound,
         Ok((429, _)) => Lookup::Failed("Too many lookups, try again in a moment.".into()),
         Ok((code, _)) => Lookup::Failed(format!(
@@ -178,22 +200,12 @@ fn lookup_free_dictionary(word: &str, max_senses: usize, max_synonyms: usize) ->
     }
 }
 
-fn lookup_wiktionary(word: &str, max_senses: usize) -> Lookup {
-    let path = format!(
-        "/api/rest_v1/page/definition/{}",
-        percent_encode(&word.replace(' ', "_"))
-    );
-    match http::get("en.wiktionary.org", &path) {
-        Ok((200, body)) => match parse_wiktionary(&body, word, max_senses) {
-            Some(def) => Lookup::Found(def),
-            None => Lookup::NotFound,
-        },
-        Ok((404, _)) => Lookup::NotFound,
-        Ok((429, _)) => Lookup::Failed("Too many lookups, try again in a moment.".into()),
-        Ok((code, _)) => Lookup::Failed(format!(
-            "The dictionary service returned an error ({code})."
-        )),
-        Err(e) => Lookup::Failed(e),
+/// A part of speech as shown on the card; sources sometimes leave it out.
+fn part_of_speech(raw: &str) -> String {
+    if raw.is_empty() {
+        "other".to_string()
+    } else {
+        raw.to_lowercase()
     }
 }
 
@@ -226,12 +238,7 @@ fn parse_wiktionary(body: &[u8], word: &str, max_senses: usize) -> Option<Defini
 
     let mut meanings: Vec<Meaning> = Vec::new();
     for entry in entries {
-        let pos = entry.part_of_speech.to_lowercase();
-        let pos = if pos.is_empty() {
-            "other".to_string()
-        } else {
-            pos
-        };
+        let pos = part_of_speech(&entry.part_of_speech);
         let senses: Vec<Sense> = entry
             .definitions
             .iter()
@@ -319,11 +326,7 @@ fn parse(body: &[u8], max_senses: usize, max_synonyms: usize) -> Option<Definiti
     // merge meanings that share a part of speech.
     let mut meanings: Vec<Meaning> = Vec::new();
     for meaning in entries.iter().flat_map(|e| &e.meanings) {
-        let pos = if meaning.part_of_speech.is_empty() {
-            "other".to_string()
-        } else {
-            meaning.part_of_speech.clone()
-        };
+        let pos = part_of_speech(&meaning.part_of_speech);
         let idx = match meanings.iter().position(|m| m.part_of_speech == pos) {
             Some(i) => i,
             None => {
@@ -444,8 +447,23 @@ mod tests {
         assert_eq!(normalize("“serendipity”.").unwrap(), "serendipity");
         assert_eq!(normalize("ice  cream\r\n").unwrap(), "ice cream");
         assert_eq!(normalize("don't").unwrap(), "don't");
-        assert!(normalize(" ... ").is_err());
-        assert!(normalize("this is a much longer sentence than a word").is_err());
+        assert_eq!(normalize(" ... "), Err(NormalizeError::Empty));
+        assert_eq!(
+            normalize("this is a much longer sentence than a word"),
+            Err(NormalizeError::TooLong)
+        );
+    }
+
+    #[test]
+    fn strips_html() {
+        assert_eq!(strip_html("<b>bold</b>  and\n<i>x</i>"), "bold and x");
+        // Entities are decoded once: "&amp;lt;" is the literal text "&lt;".
+        assert_eq!(strip_html("a &amp;lt; b &lt; c"), "a &lt; b < c");
+        assert_eq!(
+            strip_html("x&nbsp;y &quot;z&quot; &#39;w&#39;"),
+            "x y \"z\" 'w'"
+        );
+        assert_eq!(strip_html(""), "");
     }
 
     #[test]

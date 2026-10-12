@@ -280,26 +280,21 @@ fn inflection_bases(word: &str) -> Vec<String> {
             out.push(candidate);
         }
     };
+    let positions = if words.len() > 1 {
+        vec![0, words.len() - 1]
+    } else {
+        vec![0]
+    };
     for (suffix, replacement) in DETACHMENTS {
-        let first = words[0];
-        if let Some(stem) = first.strip_suffix(suffix) {
+        for &i in &positions {
+            let Some(stem) = words[i].strip_suffix(suffix) else {
+                continue;
+            };
             if stem.chars().count() >= 2 {
-                let mut w = words.clone();
                 let base = format!("{stem}{replacement}");
-                w[0] = &base;
+                let mut w = words.clone();
+                w[i] = &base;
                 push(w.join(" "));
-            }
-        }
-        if words.len() > 1 {
-            let last = words[words.len() - 1];
-            if let Some(stem) = last.strip_suffix(suffix) {
-                if stem.chars().count() >= 2 {
-                    let base = format!("{stem}{replacement}");
-                    let mut w = words.clone();
-                    let n = w.len() - 1;
-                    w[n] = &base;
-                    push(w.join(" "));
-                }
             }
         }
     }
@@ -360,6 +355,26 @@ mod tests {
         assert!(lookup("", 4, 6).is_none());
         assert!(lookup("zzzzzzzzz", 4, 6).is_none());
         assert!(lookup("a", 4, 6).is_some());
+    }
+
+    #[test]
+    fn guesses_inflection_bases() {
+        let bases = inflection_bases("cities");
+        assert_eq!(bases[0], "city");
+        assert!(bases.contains(&"citie".to_string()));
+        // Phrases inflect their first and last words.
+        assert!(inflection_bases("looking up").contains(&"look up".to_string()));
+        assert!(inflection_bases("ice creams").contains(&"ice cream".to_string()));
+        // Stems need at least two letters.
+        assert!(inflection_bases("is").is_empty());
+        assert!(!inflection_bases("bed").contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn lists_compound_spellings() {
+        assert_eq!(spellings("e-mail"), ["e-mail", "e mail", "email"]);
+        assert_eq!(spellings("ice cream"), ["ice cream", "ice-cream"]);
+        assert_eq!(spellings("dog"), ["dog"]);
     }
 
     #[test]

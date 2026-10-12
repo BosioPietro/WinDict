@@ -19,7 +19,7 @@ use windows::UI::Composition::Compositor;
 
 use crate::autostart;
 use crate::config::{self, Config};
-use crate::dictionary::{self, Definition, Lookup};
+use crate::dictionary::{self, Definition, Lookup, NormalizeError};
 use crate::hotkey;
 use crate::offline;
 use crate::popup::{self, Popup, Transition};
@@ -47,6 +47,14 @@ const TIMER_COVERED: usize = 5;
 
 /// Free the GPU resources after this long without a lookup.
 const IDLE_TEARDOWN_MS: u32 = 3 * 60 * 1000;
+/// Messages ("Nothing selected") close on their own after this long.
+const AUTOHIDE_MS: u32 = 3500;
+/// How soon after showing to check whether Start/Search covers the card.
+const COVERED_CHECK_MS: u32 = 150;
+/// Hide the window once the fade-out has played, with a little slack.
+const HIDE_DONE_MS: u32 = popup::HIDE_MS as u32 + 30;
+/// Shrink the hit-test region once a resize animation has played.
+const SETTLE_MS: u32 = popup::RESIZE_MS as u32 + 60;
 const CACHE_SIZE: usize = 64;
 
 thread_local! {
@@ -214,6 +222,10 @@ fn post<T>(hwnd: isize, msg: u32, payload: Box<T>) {
     }
 }
 
+/// Runs `f` on the app state. Returns `None`, dropping the event, if the state
+/// is already borrowed: that only happens when a handler pumps messages (a
+/// modal loop, some COM calls), so handlers that do must release it first,
+/// as the tray menu does.
 fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
     APP.with(|a| a.try_borrow_mut().ok().and_then(|mut a| a.as_mut().map(f)))
 }
@@ -319,11 +331,11 @@ impl App {
         };
         let word = match dictionary::normalize(&text) {
             Ok(word) => word,
-            Err("too long") => {
+            Err(NormalizeError::TooLong) => {
                 let detail = "Select a single word or a short phrase.";
                 return self.show_message(anchor, "That\u{2019}s a lot of text", detail, true);
             }
-            Err(_) => {
+            Err(NormalizeError::Empty) => {
                 let detail = format!("Select a word in any app, then press {hotkey}.");
                 return self.show_message(None, "Nothing selected", &detail, true);
             }
@@ -413,10 +425,12 @@ impl App {
         }
     }
 
-    fn body_for<'a>(result: &'a Lookup) -> (Option<&'a str>, Body<'a>) {
+    /// The card's title, pronunciation and body for a lookup of `word`.
+    fn card_for<'a>(word: &'a str, result: &'a Lookup) -> (&'a str, Option<&'a str>, Body<'a>) {
         match result {
-            Lookup::Found(def) => (def.phonetic.as_deref(), Body::Definition(def)),
+            Lookup::Found(def) => (&def.word, def.phonetic.as_deref(), Body::Definition(def)),
             Lookup::NotFound => (
+                word,
                 None,
                 Body::Message {
                     title: "No definition found",
@@ -424,6 +438,7 @@ impl App {
                 },
             ),
             Lookup::Failed(error) => (
+                word,
                 None,
                 Body::Message {
                     title: "Couldn\u{2019}t look that up",
@@ -434,32 +449,24 @@ impl App {
     }
 
     fn show(&mut self, anchor: RECT, word: &str, result: &Lookup, auto_hide: bool) {
-        let title = match result {
-            Lookup::Found(def) => def.word.clone(),
-            _ => word.to_string(),
-        };
-        let (phonetic, body) = Self::body_for(result);
-        self.show_body(anchor, &title, phonetic, body, auto_hide);
+        let (title, phonetic, body) = Self::card_for(word, result);
+        self.show_body(anchor, title, phonetic, body, auto_hide);
     }
 
     fn update(&mut self, word: &str, result: &Lookup, transition: Transition) {
-        let title = match result {
-            Lookup::Found(def) => def.word.clone(),
-            _ => word.to_string(),
-        };
-        let (phonetic, body) = Self::body_for(result);
+        let (title, phonetic, body) = Self::card_for(word, result);
         let Some(popup) = self.popup.as_mut() else {
             return;
         };
         if popup
-            .set_content(&title, phonetic, body, transition)
+            .set_content(title, phonetic, body, transition)
             .is_err()
         {
             return;
         }
         CARD_RECT.set(popup.card_rect());
         unsafe {
-            SetTimer(Some(self.hwnd), TIMER_SETTLE, 360, None);
+            SetTimer(Some(self.hwnd), TIMER_SETTLE, SETTLE_MS, None);
         }
     }
 
@@ -498,13 +505,13 @@ impl App {
             let _ = KillTimer(Some(hwnd), TIMER_TEARDOWN);
             let _ = KillTimer(Some(hwnd), TIMER_AUTOHIDE);
             if auto_hide {
-                SetTimer(Some(hwnd), TIMER_AUTOHIDE, 3500, None);
+                SetTimer(Some(hwnd), TIMER_AUTOHIDE, AUTOHIDE_MS, None);
             }
         }
         SHOWN_AT.set(unsafe { GetTickCount64() });
         self.install_dismiss_hooks();
         unsafe {
-            SetTimer(Some(hwnd), TIMER_COVERED, 150, None);
+            SetTimer(Some(hwnd), TIMER_COVERED, COVERED_CHECK_MS, None);
         }
     }
 
@@ -539,12 +546,7 @@ impl App {
         let _ = popup.begin_hide();
         unsafe {
             let _ = KillTimer(Some(self.hwnd), TIMER_AUTOHIDE);
-            SetTimer(
-                Some(self.hwnd),
-                TIMER_HIDE,
-                popup::HIDE_MS as u32 + 30,
-                None,
-            );
+            SetTimer(Some(self.hwnd), TIMER_HIDE, HIDE_DONE_MS, None);
         }
     }
 

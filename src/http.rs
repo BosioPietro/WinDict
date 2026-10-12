@@ -29,8 +29,13 @@ unsafe impl Sync for Handle {}
 fn session() -> Result<&'static Handle, String> {
     static SESSION: OnceLock<Handle> = OnceLock::new();
     let session = SESSION.get_or_init(|| unsafe {
+        let user_agent = HSTRING::from(concat!(
+            "WinDict/",
+            env!("CARGO_PKG_VERSION"),
+            " (+https://github.com/BosioPietro/WinDict)"
+        ));
         let h = WinHttpOpen(
-            w!("WinDict/0.4.1 (+https://github.com/BosioPietro/WinDict)"),
+            &user_agent,
             WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
             PCWSTR::null(),
             PCWSTR::null(),

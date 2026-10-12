@@ -413,6 +413,11 @@ fn read_clipboard_text(owner: HWND) -> Option<String> {
 }
 
 /// A copy of the memory-backed formats on the clipboard.
+///
+/// Formats held as GDI or OLE objects, and anything past 32 MB in total,
+/// aren't saved: restoring after a copy loses them. Windows synthesizes the
+/// common ones (CF_BITMAP from CF_DIB, for instance), so in practice that
+/// is rare, and the alternative is reading no selection at all.
 struct SavedClipboard {
     formats: Vec<(u32, Vec<u8>)>,
 }
