@@ -64,5 +64,6 @@ anything else. Run it again to update, or with `-Uninstall` to remove it.
 
 Definitions from [Open English WordNet](https://en-word.net/) (CC BY 4.0,
 derived from Princeton WordNet; see `data/LICENSE-WordNet.txt`) and
-[Wiktionary](https://www.wiktionary.org/) via
-[dictionaryapi.dev](https://dictionaryapi.dev). WinDict is MIT licensed.
+[Wiktionary](https://www.wiktionary.org/), via
+[dictionaryapi.dev](https://dictionaryapi.dev) with a direct Wiktionary
+fallback. WinDict is MIT licensed.

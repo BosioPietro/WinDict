@@ -30,7 +30,7 @@ fn session() -> Result<&'static Handle, String> {
     static SESSION: OnceLock<Handle> = OnceLock::new();
     let session = SESSION.get_or_init(|| unsafe {
         let h = WinHttpOpen(
-            w!("WinDict/0.1"),
+            w!("WinDict/0.4 (+https://github.com/BosioPietro/WinDict)"),
             WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
             PCWSTR::null(),
             PCWSTR::null(),
