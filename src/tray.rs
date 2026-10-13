@@ -1,6 +1,6 @@
-//! Notification-area icon and its context menu.
+//! Notification-area icon. Its menu is drawn by `menu.rs`; the commands are numbered here.
 
-use windows::core::{w, PCSTR, PCWSTR};
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::*;
 use windows::Win32::UI::Shell::*;
@@ -54,15 +54,6 @@ impl Tray {
         tray
     }
 
-    /// Another handle to the same icon (the icon itself is shared).
-    pub fn clone_handle(&self) -> Tray {
-        Tray {
-            hwnd: self.hwnd,
-            callback: self.callback,
-            icon: self.icon,
-        }
-    }
-
     fn data(&self) -> NOTIFYICONDATAW {
         let mut data = NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
@@ -111,68 +102,6 @@ impl Tray {
         let data = self.data();
         unsafe {
             let _ = Shell_NotifyIconW(NIM_DELETE, &data);
-        }
-    }
-
-    /// Shows the context menu and returns the chosen command, if any.
-    pub fn menu(&self, hotkey: &str, autostart: bool) -> Option<u32> {
-        unsafe {
-            let menu = CreatePopupMenu().ok()?;
-            let title: Vec<u16> = format!("WinDict  -  {hotkey}\0").encode_utf16().collect();
-            let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(title.as_ptr()));
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-            let check = if autostart { MF_CHECKED } else { MF_UNCHECKED };
-            let _ = AppendMenuW(
-                menu,
-                MF_STRING | check,
-                ID_AUTOSTART as usize,
-                w!("Start with Windows"),
-            );
-            let _ = AppendMenuW(
-                menu,
-                MF_STRING,
-                ID_SETTINGS as usize,
-                w!("Edit settings\u{2026}"),
-            );
-            let _ = AppendMenuW(menu, MF_STRING, ID_RELOAD as usize, w!("Reload settings"));
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-            let _ = AppendMenuW(menu, MF_STRING, ID_QUIT as usize, w!("Quit"));
-
-            let mut pt = POINT::default();
-            let _ = GetCursorPos(&mut pt);
-            // Required so the menu closes when clicking elsewhere.
-            let _ = SetForegroundWindow(self.hwnd);
-            let cmd = TrackPopupMenu(
-                menu,
-                TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_RIGHTALIGN,
-                pt.x,
-                pt.y,
-                None,
-                self.hwnd,
-                None,
-            );
-            let _ = PostMessageW(Some(self.hwnd), WM_NULL, WPARAM(0), LPARAM(0));
-            let _ = DestroyMenu(menu);
-            (cmd.0 != 0).then_some(cmd.0 as u32)
-        }
-    }
-}
-
-/// Opts the process into dark context menus when Windows is in dark mode.
-/// Uses uxtheme's unnamed SetPreferredAppMode export (ordinal 135, Windows 10 1903+).
-pub fn allow_dark_menus() {
-    unsafe {
-        let Ok(uxtheme) = LoadLibraryExW(w!("uxtheme.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32)
-        else {
-            return;
-        };
-        if let Some(f) = GetProcAddress(uxtheme, PCSTR(135usize as *const u8)) {
-            let set_preferred_app_mode: extern "system" fn(i32) -> i32 = std::mem::transmute(f);
-            set_preferred_app_mode(1); // AllowDark
-        }
-        if let Some(f) = GetProcAddress(uxtheme, PCSTR(136usize as *const u8)) {
-            let flush_menu_themes: extern "system" fn() = std::mem::transmute(f);
-            flush_menu_themes();
         }
     }
 }

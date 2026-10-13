@@ -23,7 +23,7 @@ use crate::theme::Theme;
 // Geometry, in DIPs.
 const CARD_W: f32 = 384.0;
 const MAX_CARD_H: f32 = 460.0;
-const MARGIN: f32 = 32.0; // room for the shadow
+pub(crate) const MARGIN: f32 = 32.0; // room for the shadow
 const RADIUS: f32 = 12.0;
 const PAD_X: f32 = 22.0;
 const PAD_TOP: f32 = 18.0;
@@ -105,6 +105,45 @@ fn placement(anchor: RECT, work: RECT, scale: f32) -> (RECT, bool) {
     (window, grow_up)
 }
 
+/// The work area and scale (pixels per DIP) of the monitor nearest `point`.
+pub(crate) fn monitor_at(point: POINT) -> (RECT, f32) {
+    let monitor = unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST) };
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
+    unsafe {
+        let _ = GetMonitorInfoW(monitor, &mut info);
+        let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
+    }
+    (info.rcWork, dpi_x as f32 / 96.0)
+}
+
+/// Makes `hwnd` a composition surface: the host backdrop brush can sample
+/// what's behind it, DWM's own show/hide animations are off, and the
+/// returned target (kept alive by the caller) displays the visual tree.
+pub(crate) fn attach(hwnd: HWND, compositor: &Compositor) -> Result<DesktopWindowTarget> {
+    unsafe {
+        let on = BOOL(1);
+        let size = std::mem::size_of::<BOOL>() as u32;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_HOSTBACKDROPBRUSH,
+            &on as *const _ as _,
+            size,
+        );
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED,
+            &on as *const _ as _,
+            size,
+        );
+        let interop: ICompositorDesktopInterop = compositor.cast()?;
+        interop.CreateDesktopWindowTarget(hwnd, true)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Transition {
     /// No animation (the card is appearing).
@@ -147,16 +186,16 @@ fn ts(ms: u64) -> TimeSpan {
     TimeSpan::from(Duration::from_millis(ms))
 }
 
-fn v2(x: f32, y: f32) -> Vector2 {
+pub(crate) fn v2(x: f32, y: f32) -> Vector2 {
     Vector2 { X: x, Y: y }
 }
 
-fn v3(x: f32, y: f32) -> Vector3 {
+pub(crate) fn v3(x: f32, y: f32) -> Vector3 {
     Vector3 { X: x, Y: y, Z: 0.0 }
 }
 
 /// A visual showing a text surface at its natural size, from the top left.
-fn text_sprite(c: &Compositor) -> Result<(SpriteVisual, CompositionSurfaceBrush)> {
+pub(crate) fn text_sprite(c: &Compositor) -> Result<(SpriteVisual, CompositionSurfaceBrush)> {
     let brush = c.CreateSurfaceBrush()?;
     brush.SetStretch(CompositionStretch::None)?;
     brush.SetHorizontalAlignmentRatio(0.0)?;
@@ -170,15 +209,15 @@ fn text_sprite(c: &Compositor) -> Result<(SpriteVisual, CompositionSurfaceBrush)
 // Parts of the card
 
 /// Starts compositor animations with the card's easing curves.
-struct Animator {
-    compositor: Compositor,
-    decelerate: CompositionEasingFunction,
-    accelerate: CompositionEasingFunction,
+pub(crate) struct Animator {
+    pub(crate) compositor: Compositor,
+    pub(crate) decelerate: CompositionEasingFunction,
+    pub(crate) accelerate: CompositionEasingFunction,
     scroll_ease: CompositionEasingFunction,
 }
 
 impl Animator {
-    fn new(compositor: Compositor) -> Result<Animator> {
+    pub(crate) fn new(compositor: Compositor) -> Result<Animator> {
         let c = &compositor;
         let decelerate = c
             .CreateCubicBezierEasingFunction(v2(0.1, 0.9), v2(0.2, 1.0))?
@@ -198,7 +237,7 @@ impl Animator {
         })
     }
 
-    fn scalar(
+    pub(crate) fn scalar(
         &self,
         target: &impl Interface,
         property: &str,
@@ -227,7 +266,7 @@ impl Animator {
             .StartAnimation(&HSTRING::from(property), &anim)
     }
 
-    fn vector3(
+    pub(crate) fn vector3(
         &self,
         target: &impl Interface,
         property: &str,
@@ -247,7 +286,7 @@ impl Animator {
             .StartAnimation(&HSTRING::from(property), &anim)
     }
 
-    fn stop(target: &impl Interface, properties: &[&str]) {
+    pub(crate) fn stop(target: &impl Interface, properties: &[&str]) {
         if let Ok(object) = target.cast::<CompositionObject>() {
             for p in properties {
                 let _ = object.StopAnimation(&HSTRING::from(*p));
@@ -258,15 +297,15 @@ impl Animator {
 
 /// The card's outline: its shadow, the clipped acrylic background that
 /// holds the content, and a hairline border on top.
-struct Frame {
-    visual: ContainerVisual,
+pub(crate) struct Frame {
+    pub(crate) visual: ContainerVisual,
     shadow: SpriteVisual,
     shadow_surface: CompositionSurfaceBrush,
     shadow_brush: CompositionNineGridBrush,
     /// Scale and darkness the shadow was last drawn for.
     shadow_key: Option<(u32, bool)>,
     /// The content goes in here.
-    card: ContainerVisual,
+    pub(crate) card: ContainerVisual,
     clip: CompositionRoundedRectangleGeometry,
     tint: CompositionColorBrush,
     border: ShapeVisual,
@@ -275,7 +314,7 @@ struct Frame {
 }
 
 impl Frame {
-    fn new(c: &Compositor, parent: &ContainerVisual, theme: &Theme) -> Result<Frame> {
+    pub(crate) fn new(c: &Compositor, parent: &ContainerVisual, theme: &Theme) -> Result<Frame> {
         let visual = c.CreateContainerVisual()?;
         parent.Children()?.InsertAtTop(&visual)?;
 
@@ -327,7 +366,7 @@ impl Frame {
         })
     }
 
-    fn apply_theme(&mut self, renderer: &Renderer, t: &Theme, s: f32) -> Result<()> {
+    pub(crate) fn apply_theme(&mut self, renderer: &Renderer, t: &Theme, s: f32) -> Result<()> {
         self.tint.SetColor(t.tint())?;
         self.border_brush.SetColor(t.border())?;
         let key = ((s * 100.0) as u32, t.dark);
@@ -349,7 +388,7 @@ impl Frame {
     }
 
     /// Sizes the card to `w` × `h` pixels with its top left at `offset`.
-    fn resize(
+    pub(crate) fn resize(
         &self,
         anim: &Animator,
         w: f32,
@@ -601,25 +640,7 @@ impl ScrollChrome {
 
 impl Popup {
     pub fn new(hwnd: HWND, compositor: Compositor, theme: Theme) -> Result<Popup> {
-        unsafe {
-            // Lets the host backdrop brush sample what's behind the window.
-            let on = BOOL(1);
-            let size = std::mem::size_of::<BOOL>() as u32;
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_USE_HOSTBACKDROPBRUSH,
-                &on as *const _ as _,
-                size,
-            );
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_TRANSITIONS_FORCEDISABLED,
-                &on as *const _ as _,
-                size,
-            );
-        }
-        let interop: ICompositorDesktopInterop = compositor.cast()?;
-        let target = unsafe { interop.CreateDesktopWindowTarget(hwnd, true)? };
+        let target = attach(hwnd, &compositor)?;
         let renderer = Renderer::new(&compositor)?;
         let c = &compositor;
 
@@ -1036,18 +1057,9 @@ impl Popup {
             x: (anchor.left + anchor.right) / 2,
             y: (anchor.top + anchor.bottom) / 2,
         };
-        let monitor = unsafe { MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST) };
-        let mut info = MONITORINFO {
-            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-            ..Default::default()
-        };
-        let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
-        unsafe {
-            let _ = GetMonitorInfoW(monitor, &mut info);
-            let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
-        }
-        self.scale = dpi_x as f32 / 96.0;
-        (self.window, self.grow_up) = placement(anchor, info.rcWork, self.scale);
+        let (work, scale) = monitor_at(center);
+        self.scale = scale;
+        (self.window, self.grow_up) = placement(anchor, work, scale);
     }
 
     fn apply_theme(&mut self) -> Result<()> {

@@ -85,6 +85,16 @@ impl Stack {
     }
 }
 
+/// The typeface of a line of menu text.
+#[derive(Clone, Copy)]
+pub enum Face {
+    Menu,
+    /// Smaller, for the menu's heading.
+    Small,
+    /// Symbol glyphs, such as the check mark.
+    Icon,
+}
+
 /// What the body of the card shows.
 pub enum Body<'a> {
     Loading,
@@ -102,6 +112,8 @@ struct Formats {
     meta: IDWriteTextFormat,
     footer: IDWriteTextFormat,
     title: IDWriteTextFormat,
+    menu: IDWriteTextFormat,
+    icon: IDWriteTextFormat,
 }
 
 pub struct Renderer {
@@ -193,6 +205,23 @@ impl Renderer {
         );
         Ok(Layout {
             items,
+            width,
+            height,
+            links: Vec::new(),
+        })
+    }
+
+    /// One unwrapped line of menu text.
+    pub fn layout_line(&self, text: &str, face: Face, ink: Ink, width: f32) -> Result<Layout> {
+        let format = match face {
+            Face::Menu => &self.formats.menu,
+            Face::Small => &self.formats.footer,
+            Face::Icon => &self.formats.icon,
+        };
+        let mut out = Stack::default();
+        let (_, height) = out.text(self.text(text, format, width)?, 0.0, ink);
+        Ok(Layout {
+            items: out.items,
             width,
             height,
             links: Vec::new(),
@@ -565,6 +594,16 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
         Ok::<_, windows::core::Error>(format)
     };
     let normal = DWRITE_FONT_STYLE_NORMAL;
+    let menu = make(&text, 13.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
+    unsafe { menu.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)? };
+    // Windows 11 ships Segoe Fluent Icons; Windows 10 has Segoe MDL2 Assets.
+    let fluent = HSTRING::from("Segoe Fluent Icons");
+    let symbols = if font_exists(dwrite, &fluent) {
+        fluent
+    } else {
+        HSTRING::from("Segoe MDL2 Assets")
+    };
+    let icon = make(&symbols, 11.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
     Ok(Formats {
         word: make(&display, 26.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?,
         phonetic: make(&text, 15.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?,
@@ -581,6 +620,8 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
         meta: make(&text, 13.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 1.4)?,
         footer: make(&small, 12.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?,
         title: make(&text, 15.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?,
+        menu,
+        icon,
     })
 }
 

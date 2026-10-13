@@ -21,6 +21,7 @@ use crate::autostart;
 use crate::config::{self, Config};
 use crate::dictionary::{self, Definition, Lookup, NormalizeError};
 use crate::hotkey;
+use crate::menu::Menu;
 use crate::offline;
 use crate::popup::{self, Popup, Transition};
 use crate::render::Body;
@@ -35,6 +36,8 @@ const WM_APP_DISMISS: u32 = WM_APP + 4;
 const WM_APP_WHEEL: u32 = WM_APP + 5;
 const WM_APP_CAPTURE: u32 = WM_APP + 6;
 const WM_APP_CLICK: u32 = WM_APP + 7;
+/// Not in the windows crate's message set (it lives with the common controls).
+const WM_MOUSELEAVE: u32 = 0x02A3;
 
 const HOTKEY_LOOKUP: i32 = 1;
 const HOTKEY_ESCAPE: i32 = 2;
@@ -44,6 +47,8 @@ const TIMER_SETTLE: usize = 2;
 const TIMER_AUTOHIDE: usize = 3;
 const TIMER_TEARDOWN: usize = 4;
 const TIMER_COVERED: usize = 5;
+const TIMER_MENU_HIDE: usize = 6;
+const TIMER_MENU_TEARDOWN: usize = 7;
 
 /// Free the GPU resources after this long without a lookup.
 const IDLE_TEARDOWN_MS: u32 = 3 * 60 * 1000;
@@ -51,6 +56,8 @@ const IDLE_TEARDOWN_MS: u32 = 3 * 60 * 1000;
 const AUTOHIDE_MS: u32 = 3500;
 /// How soon after showing to check whether Start/Search covers the card.
 const COVERED_CHECK_MS: u32 = 150;
+/// A click that lands this soon after the tray menu closed was the one that closed it.
+const MENU_REOPEN_GUARD_MS: u64 = 300;
 /// Hide the window once the fade-out has played, with a little slack.
 const HIDE_DONE_MS: u32 = popup::HIDE_MS as u32 + 30;
 /// Shrink the hit-test region once a resize animation has played.
@@ -82,6 +89,11 @@ pub struct App {
     hwnd: HWND,
     compositor: Compositor,
     popup: Option<Popup>,
+    menu: Option<Menu>,
+    /// When the tray menu last started closing (GetTickCount64).
+    menu_closed_at: u64,
+    /// The press on the tray icon that closed the menu; its release mustn't reopen it.
+    swallow_tray_release: bool,
     tray: Tray,
     taskbar_created: u32,
     capture_thread: u32,
@@ -117,6 +129,14 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             ..Default::default()
         };
         RegisterClassW(&popup_class);
+        let menu_class = WNDCLASSW {
+            lpfnWndProc: Some(menu_proc),
+            hInstance: instance,
+            hCursor: LoadCursorW(None, IDC_ARROW)?,
+            lpszClassName: w!("WinDict.Menu"),
+            ..Default::default()
+        };
+        RegisterClassW(&menu_class);
 
         // A hidden top-level window (not message-only: it must receive the
         // TaskbarCreated broadcast).
@@ -136,7 +156,6 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
         )?;
         MSG_HWND.set(hwnd);
 
-        tray::allow_dark_menus();
         let tray = Tray::new(hwnd, WM_APP_TRAY);
         let taskbar_created = RegisterWindowMessageW(w!("TaskbarCreated"));
 
@@ -175,6 +194,9 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             hwnd,
             compositor,
             popup: None,
+            menu: None,
+            menu_closed_at: 0,
+            swallow_tray_release: false,
             tray,
             taskbar_created,
             capture_thread,
@@ -302,6 +324,42 @@ impl App {
             }
         }
         self.popup.as_mut()
+    }
+
+    fn ensure_menu(&mut self) -> Option<&mut Menu> {
+        if self.menu.is_none() {
+            let created = unsafe {
+                // Never takes the focus: the taskbar's overflow flyout closes
+                // as soon as something else is activated.
+                CreateWindowExW(
+                    WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
+                    w!("WinDict.Menu"),
+                    w!("WinDict"),
+                    WS_POPUP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    None,
+                    None,
+                    GetModuleHandleW(None).ok().map(|m| HINSTANCE(m.0)),
+                    None,
+                )
+            };
+            let hwnd = created.ok()?;
+            match Menu::new(hwnd, self.compositor.clone(), self.theme()) {
+                Ok(m) => self.menu = Some(m),
+                Err(e) => {
+                    unsafe {
+                        let _ = DestroyWindow(hwnd);
+                    }
+                    self.tray
+                        .notify("WinDict couldn't draw its menu", &e.message());
+                    return None;
+                }
+            }
+        }
+        self.menu.as_mut()
     }
 
     // -----------------------------------------------------------------------
@@ -489,6 +547,7 @@ impl App {
         body: Body,
         auto_hide: bool,
     ) {
+        self.dismiss_menu();
         let theme = self.theme();
         let hwnd = self.hwnd;
         let Some(popup) = self.ensure_popup() else {
@@ -537,6 +596,7 @@ impl App {
 
     fn dismiss(&mut self) {
         self.remove_dismiss_hooks();
+        self.dismiss_menu();
         let Some(popup) = self.popup.as_mut() else {
             return;
         };
@@ -561,6 +621,25 @@ impl App {
                 if let Some(p) = self.popup.as_mut() {
                     p.settle();
                 }
+            }
+            TIMER_MENU_HIDE => {
+                if let Some(m) = self.menu.as_mut() {
+                    m.finish_hide();
+                }
+                trim_working_set();
+                unsafe {
+                    SetTimer(Some(self.hwnd), TIMER_MENU_TEARDOWN, IDLE_TEARDOWN_MS, None);
+                }
+            }
+            TIMER_MENU_TEARDOWN if self.menu.as_ref().is_some_and(|m| !m.visible) => {
+                if let Some(m) = self.menu.take() {
+                    let hwnd = m.hwnd;
+                    drop(m);
+                    unsafe {
+                        let _ = DestroyWindow(hwnd);
+                    }
+                }
+                trim_working_set();
             }
             TIMER_HIDE => {
                 if let Some(p) = self.popup.as_mut() {
@@ -650,6 +729,104 @@ impl App {
 
     // -----------------------------------------------------------------------
     // Tray
+
+    /// A button went down on the tray icon. If that's what closes the menu
+    /// (the click-away dismissal gets there first), the release that follows
+    /// must not open it again.
+    fn on_tray_press(&mut self) {
+        let closing = self.menu.as_ref().is_some_and(|m| m.visible)
+            || unsafe { GetTickCount64() }.saturating_sub(self.menu_closed_at)
+                < MENU_REOPEN_GUARD_MS;
+        self.swallow_tray_release = closing;
+    }
+
+    fn on_tray_release(&mut self) {
+        if std::mem::take(&mut self.swallow_tray_release) {
+            return;
+        }
+        self.open_menu();
+    }
+
+    fn open_menu(&mut self) {
+        if self.menu.as_ref().is_some_and(|m| m.visible) {
+            return;
+        }
+        self.dismiss();
+        let (theme, hotkey) = (self.theme(), self.config.hotkey.clone());
+        let Some(menu) = self.ensure_menu() else {
+            return;
+        };
+        let mut cursor = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut cursor);
+        }
+        if let Err(e) = menu.show(cursor, theme, &hotkey, autostart::is_enabled()) {
+            self.tray
+                .notify("WinDict couldn't draw its menu", &e.message());
+            return;
+        }
+        CARD_RECT.set(menu.card_rect());
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_MENU_HIDE);
+            let _ = KillTimer(Some(self.hwnd), TIMER_MENU_TEARDOWN);
+        }
+        SHOWN_AT.set(unsafe { GetTickCount64() });
+        self.install_dismiss_hooks();
+    }
+
+    /// Starts closing the tray menu, if it's open.
+    fn dismiss_menu(&mut self) {
+        let Some(menu) = self.menu.as_mut().filter(|m| m.visible) else {
+            return;
+        };
+        let _ = menu.begin_hide();
+        self.menu_closed_at = unsafe { GetTickCount64() };
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_MENU_HIDE, HIDE_DONE_MS, None);
+        }
+    }
+
+    fn menu_hover(&mut self, point: Option<(i32, i32)>) {
+        if let Some(menu) = self.menu.as_mut().filter(|m| m.visible) {
+            let _ = menu.hover(point);
+        }
+    }
+
+    fn menu_click(&mut self, x: i32, y: i32) {
+        let command = self
+            .menu
+            .as_ref()
+            .filter(|m| m.visible)
+            .and_then(|m| m.command_at(x, y));
+        if let Some(command) = command {
+            self.run_menu_command(command);
+        }
+    }
+
+    fn menu_key(&mut self, key: VIRTUAL_KEY) {
+        let Some(menu) = self.menu.as_mut().filter(|m| m.visible) else {
+            return;
+        };
+        let _ = match key {
+            VK_DOWN => menu.step(true),
+            VK_UP => menu.step(false),
+            VK_HOME => menu.jump(false),
+            VK_END => menu.jump(true),
+            VK_RETURN | VK_SPACE => {
+                if let Some(command) = menu.selected_command() {
+                    self.run_menu_command(command);
+                }
+                return;
+            }
+            VK_ESCAPE => return self.dismiss(),
+            _ => return,
+        };
+    }
+
+    fn run_menu_command(&mut self, command: u32) {
+        self.dismiss();
+        self.on_command(command);
+    }
 
     fn on_command(&mut self, command: u32) {
         match command {
@@ -786,18 +963,15 @@ unsafe extern "system" fn main_proc(
         WM_APP_TRAY => {
             let event = (lparam.0 & 0xFFFF) as u32;
             match event {
+                WM_LBUTTONDOWN | WM_RBUTTONDOWN => {
+                    with_app(|app| app.on_tray_press());
+                }
                 // Either button opens the menu.
-                WM_LBUTTONUP | WM_RBUTTONUP | WM_CONTEXTMENU => {
-                    // The menu runs a modal loop; don't hold the app borrow across it.
-                    let info = with_app(|app| {
-                        app.dismiss();
-                        (app.config.hotkey.clone(), app.tray_handle())
-                    });
-                    if let Some((hotkey, tray)) = info {
-                        if let Some(cmd) = tray.menu(&hotkey, autostart::is_enabled()) {
-                            with_app(|app| app.on_command(cmd));
-                        }
-                    }
+                WM_LBUTTONUP | WM_RBUTTONUP => {
+                    with_app(|app| app.on_tray_release());
+                }
+                WM_CONTEXTMENU => {
+                    with_app(|app| app.open_menu());
                 }
                 _ => {}
             }
@@ -811,13 +985,6 @@ unsafe extern "system" fn main_proc(
             }
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
-    }
-}
-
-impl App {
-    /// A copy of the tray handle for use outside the app borrow.
-    fn tray_handle(&self) -> Tray {
-        self.tray.clone_handle()
     }
 }
 
@@ -864,6 +1031,48 @@ unsafe extern "system" fn popup_proc(
             } else {
                 unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
             }
+        }
+        // We size ourselves for the target monitor's DPI already.
+        WM_DPICHANGED => LRESULT(0),
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+unsafe extern "system" fn menu_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    // Mouse messages carry client coordinates.
+    let (x, y) = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
+    match msg {
+        WM_MOUSEMOVE => {
+            // Ask for WM_MOUSELEAVE, to drop the highlight when the pointer goes.
+            let mut track = TRACKMOUSEEVENT {
+                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            };
+            unsafe {
+                let _ = TrackMouseEvent(&mut track);
+            }
+            with_app(|app| app.menu_hover(Some((x, y))));
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            with_app(|app| app.menu_hover(None));
+            LRESULT(0)
+        }
+        WM_LBUTTONUP | WM_RBUTTONUP => {
+            with_app(|app| app.menu_click(x, y));
+            LRESULT(0)
+        }
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_KEYDOWN => {
+            with_app(|app| app.menu_key(VIRTUAL_KEY(wparam.0 as u16)));
+            LRESULT(0)
         }
         // We size ourselves for the target monitor's DPI already.
         WM_DPICHANGED => LRESULT(0),
