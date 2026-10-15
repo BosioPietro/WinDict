@@ -5,7 +5,6 @@
 //! get the classic fallback: simulate Ctrl+C, read the clipboard, restore it.
 
 use std::cell::OnceCell;
-use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use windows::core::{w, Interface, PWSTR};
@@ -91,7 +90,7 @@ impl Capturer {
         if !has_ui_access() && is_shell_flyout(foreground) {
             close_flyout();
             // Let the closing animation finish before the card appears.
-            sleep(Duration::from_millis(200));
+            wait(Duration::from_millis(200));
             if let Some(s) = selection.as_mut() {
                 s.anchor = None;
             }
@@ -128,7 +127,7 @@ impl Capturer {
         let deadline = Instant::now() + Duration::from_millis(600);
         let mut changed = false;
         while Instant::now() < deadline {
-            sleep(Duration::from_millis(10));
+            wait(Duration::from_millis(10));
             if unsafe { GetClipboardSequenceNumber() } != before {
                 changed = true;
                 break;
@@ -136,7 +135,7 @@ impl Capturer {
         }
         let text = if changed {
             // Some apps write several formats one after another.
-            sleep(Duration::from_millis(25));
+            wait(Duration::from_millis(25));
             read_clipboard_text(self.clipboard_owner)
         } else {
             None
@@ -347,7 +346,7 @@ const MODIFIERS: [VIRTUAL_KEY; 8] = [
 fn release_modifiers() {
     let deadline = Instant::now() + Duration::from_millis(350);
     while MODIFIERS.iter().any(|&vk| is_down(vk)) && Instant::now() < deadline {
-        sleep(Duration::from_millis(10));
+        wait(Duration::from_millis(10));
     }
     let held: Vec<VIRTUAL_KEY> = MODIFIERS
         .iter()
@@ -377,12 +376,39 @@ fn send_copy() {
 // ---------------------------------------------------------------------------
 // Clipboard
 
+/// Sleeps for `duration` while answering messages sent to this thread's
+/// windows. After a restore we own the clipboard, and an app that copies
+/// sends us WM_DESTROYCLIPBOARD and waits for the reply: a plain sleep would
+/// hold its copy back until we stopped waiting for it.
+fn wait(duration: Duration) {
+    let deadline = Instant::now() + duration;
+    loop {
+        let mut msg = MSG::default();
+        // Delivers sent messages; posted ones stay queued for the thread's loop.
+        unsafe {
+            let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE | PM_QS_SENDMESSAGE);
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return;
+        }
+        unsafe {
+            MsgWaitForMultipleObjectsEx(
+                None,
+                left.as_millis().max(1) as u32,
+                QS_SENDMESSAGE,
+                MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS(0),
+            );
+        }
+    }
+}
+
 fn open_clipboard(owner: HWND) -> bool {
     for _ in 0..10 {
         if unsafe { OpenClipboard(Some(owner)) }.is_ok() {
             return true;
         }
-        sleep(Duration::from_millis(15));
+        wait(Duration::from_millis(15));
     }
     false
 }
