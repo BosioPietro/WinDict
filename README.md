@@ -4,6 +4,10 @@ A small Windows tray app for looking up words. Select a word in any app, press
 **Ctrl+Alt+D**, and its definition shows up in a card next to the selection.
 Press Esc or click elsewhere to close it.
 
+Click a synonym to open its definition in the same card; the arrow next to
+the word, Backspace, Alt+← or the mouse's back button returns to the
+previous one.
+
 ## Footprint
 
 - About 2 MB of memory while idle and 4 MB while a card is open.

@@ -121,11 +121,7 @@ impl Highlight {
     }
 
     fn apply(&self, theme: &Theme, s: f32) -> Result<()> {
-        self.brush.SetColor(if theme.dark {
-            argb(0x17, 0xFF, 0xFF, 0xFF)
-        } else {
-            argb(0x0F, 0x00, 0x00, 0x00)
-        })?;
+        self.brush.SetColor(theme.highlight())?;
         let size = v2((WIDTH - 2.0 * INSET) * s, (ROW_H - 4.0) * s);
         self.visual.SetSize(size)?;
         self.clip.SetSize(size)?;

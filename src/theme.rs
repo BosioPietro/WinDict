@@ -62,6 +62,15 @@ impl Theme {
         }
     }
 
+    /// The soft fill behind whatever is under the pointer.
+    pub fn highlight(&self) -> Color {
+        if self.dark {
+            argb(0x17, 0xFF, 0xFF, 0xFF)
+        } else {
+            argb(0x0F, 0x00, 0x00, 0x00)
+        }
+    }
+
     pub fn shadow_opacity(&self) -> f32 {
         if self.dark {
             0.55

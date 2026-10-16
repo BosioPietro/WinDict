@@ -24,7 +24,7 @@ use crate::hotkey;
 use crate::menu::Menu;
 use crate::offline;
 use crate::popup::{self, Popup, Transition};
-use crate::render::Body;
+use crate::render::{Body, Target};
 use crate::selection::{self, Capturer, Selection};
 use crate::theme::Theme;
 use crate::tray::{self, Tray};
@@ -36,11 +36,14 @@ const WM_APP_DISMISS: u32 = WM_APP + 4;
 const WM_APP_WHEEL: u32 = WM_APP + 5;
 const WM_APP_CAPTURE: u32 = WM_APP + 6;
 const WM_APP_CLICK: u32 = WM_APP + 7;
+const WM_APP_BACK: u32 = WM_APP + 8;
 /// Not in the windows crate's message set (it lives with the common controls).
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 const HOTKEY_LOOKUP: i32 = 1;
 const HOTKEY_ESCAPE: i32 = 2;
+const HOTKEY_BACK: i32 = 3;
+const HOTKEY_BACK_ALT: i32 = 4;
 
 const TIMER_HIDE: usize = 1;
 const TIMER_SETTLE: usize = 2;
@@ -63,6 +66,8 @@ const HIDE_DONE_MS: u32 = popup::HIDE_MS as u32 + 30;
 /// Shrink the hit-test region once a resize animation has played.
 const SETTLE_MS: u32 = popup::RESIZE_MS as u32 + 60;
 const CACHE_SIZE: usize = 64;
+/// How many words "back" remembers.
+const HISTORY_SIZE: usize = 50;
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -84,6 +89,15 @@ struct Looked {
     result: Lookup,
 }
 
+/// Where a lookup's answer goes.
+#[derive(Clone, Copy)]
+enum Place {
+    /// A new card next to the selection.
+    New(RECT),
+    /// The open card, in place of what it shows.
+    Same,
+}
+
 pub struct App {
     config: Config,
     hwnd: HWND,
@@ -102,6 +116,12 @@ pub struct App {
     cache: Vec<(String, Lookup)>,
     /// The offline entry for the current request, if any.
     local: Option<Definition>,
+    /// The word the card shows, as it was looked up.
+    current: Option<String>,
+    /// Words the card showed before synonyms were followed, most recent last.
+    history: Vec<String>,
+    /// Whether Backspace and Alt+Left are registered.
+    back_keys: bool,
     hotkey_ok: bool,
     mouse_hook: Option<HHOOK>,
     focus_hook: Option<HWINEVENTHOOK>,
@@ -203,6 +223,9 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             request: 0,
             cache: Vec::new(),
             local: None,
+            current: None,
+            history: Vec::new(),
+            back_keys: false,
             hotkey_ok: false,
             mouse_hook: None,
             focus_hook: None,
@@ -382,6 +405,9 @@ impl App {
         if captured.id != self.request {
             return;
         }
+        self.current = None;
+        self.history.clear();
+        self.sync_back_keys();
         let hotkey = self.config.hotkey.clone();
         let (text, anchor) = match captured.selection {
             Some(s) => (s.text, s.anchor),
@@ -398,10 +424,14 @@ impl App {
                 return self.show_message(None, "Nothing selected", &detail, true);
             }
         };
-        let anchor = anchor_or_cursor(anchor);
-        let (max_defs, max_syn) = (self.config.max_definitions, self.config.max_synonyms);
+        self.lookup(word, Place::New(anchor_or_cursor(anchor)));
+    }
 
-        // The bundled dictionary answers instantly; the online one fills gaps.
+    /// Looks `word` up and shows the answer at `place`. The bundled
+    /// dictionary answers instantly; the online one fills gaps.
+    fn lookup(&mut self, word: String, place: Place) {
+        let (max_defs, max_syn) = (self.config.max_definitions, self.config.max_synonyms);
+        self.current = Some(word.clone());
         self.local = offline::lookup(&word, max_defs, max_syn);
         let online_key = match &self.local {
             Some(def) => def.word.to_lowercase(),
@@ -413,22 +443,21 @@ impl App {
             (Some(local), online) => {
                 let shown = dictionary::merge(local.clone(), online.as_ref());
                 let title = shown.word.clone();
-                self.show_body(
-                    anchor,
+                self.present_body(
+                    place,
                     &title,
                     shown.phonetic.as_deref(),
                     Body::Definition(&shown),
-                    false,
                 );
                 if online.is_some() || !self.config.online_lookup {
                     return;
                 }
             }
-            (None, Some(online)) => return self.show(anchor, &word, &online, false),
+            (None, Some(online)) => return self.present(place, &word, &online),
             (None, None) if !self.config.online_lookup => {
-                return self.show(anchor, &word, &Lookup::NotFound, false);
+                return self.present(place, &word, &Lookup::NotFound);
             }
-            (None, None) => self.show_body(anchor, &word, None, Body::Loading, false),
+            (None, None) => self.present_body(place, &word, None, Body::Loading),
         }
 
         let (id, notify) = (self.request, self.hwnd.0 as isize);
@@ -506,13 +535,36 @@ impl App {
         }
     }
 
-    fn show(&mut self, anchor: RECT, word: &str, result: &Lookup, auto_hide: bool) {
+    fn present(&mut self, place: Place, word: &str, result: &Lookup) {
         let (title, phonetic, body) = Self::card_for(word, result);
-        self.show_body(anchor, title, phonetic, body, auto_hide);
+        self.present_body(place, title, phonetic, body);
+    }
+
+    fn present_body(&mut self, place: Place, title: &str, phonetic: Option<&str>, body: Body) {
+        match place {
+            Place::New(anchor) => self.show_body(anchor, title, phonetic, body, false),
+            Place::Same => {
+                let back = !self.history.is_empty();
+                if let Some(popup) = self.popup.as_mut() {
+                    let _ = popup.set_back(back);
+                }
+                self.update_body(title, phonetic, body, Transition::Replace);
+            }
+        }
     }
 
     fn update(&mut self, word: &str, result: &Lookup, transition: Transition) {
         let (title, phonetic, body) = Self::card_for(word, result);
+        self.update_body(title, phonetic, body, transition);
+    }
+
+    fn update_body(
+        &mut self,
+        title: &str,
+        phonetic: Option<&str>,
+        body: Body,
+        transition: Transition,
+    ) {
         let Some(popup) = self.popup.as_mut() else {
             return;
         };
@@ -594,7 +646,67 @@ impl App {
         }
     }
 
+    /// Shows a synonym's definition in the card, remembering the way back.
+    fn follow(&mut self, word: &str) {
+        let Ok(word) = dictionary::normalize(word) else {
+            return;
+        };
+        if self.current.as_ref() == Some(&word) {
+            return;
+        }
+        if let Some(current) = self.current.take() {
+            self.history.push(current);
+            if self.history.len() > HISTORY_SIZE {
+                self.history.remove(0);
+            }
+        }
+        // Answers still on their way are for the word we're leaving.
+        self.request += 1;
+        self.lookup(word, Place::Same);
+        self.sync_back_keys();
+    }
+
+    /// Goes back to the word shown before the last synonym was followed.
+    fn back(&mut self) {
+        if !self.popup.as_ref().is_some_and(|p| p.visible) {
+            return;
+        }
+        let Some(word) = self.history.pop() else {
+            return;
+        };
+        self.request += 1;
+        self.lookup(word, Place::Same);
+        self.sync_back_keys();
+    }
+
+    /// Backspace and Alt+Left go back, but only while there's somewhere to
+    /// go: otherwise they belong to the app underneath.
+    fn sync_back_keys(&mut self) {
+        let wanted = !self.history.is_empty();
+        if wanted == self.back_keys {
+            return;
+        }
+        self.back_keys = wanted;
+        unsafe {
+            if wanted {
+                let _ =
+                    RegisterHotKey(Some(self.hwnd), HOTKEY_BACK, MOD_NOREPEAT, VK_BACK.0 as u32);
+                let _ = RegisterHotKey(
+                    Some(self.hwnd),
+                    HOTKEY_BACK_ALT,
+                    MOD_ALT | MOD_NOREPEAT,
+                    VK_LEFT.0 as u32,
+                );
+            } else {
+                let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_BACK);
+                let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_BACK_ALT);
+            }
+        }
+    }
+
     fn dismiss(&mut self) {
+        self.history.clear();
+        self.sync_back_keys();
         self.remove_dismiss_hooks();
         self.dismiss_menu();
         let Some(popup) = self.popup.as_mut() else {
@@ -706,25 +818,28 @@ impl App {
     }
 
     fn on_click(&mut self, x: i32, y: i32) {
-        let Some(url) = self
-            .popup
-            .as_ref()
-            .and_then(|p| p.link_at(x, y))
-            .map(HSTRING::from)
-        else {
+        if self.popup.as_ref().is_some_and(|p| p.back_at(x, y)) {
+            return self.back();
+        }
+        let Some(target) = self.popup.as_ref().and_then(|p| p.link_at(x, y)).cloned() else {
             return;
         };
-        unsafe {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                &url,
-                PCWSTR::null(),
-                PCWSTR::null(),
-                SW_SHOWNORMAL,
-            );
+        match target {
+            Target::Word(word) => self.follow(&word),
+            Target::Url(url) => {
+                unsafe {
+                    ShellExecuteW(
+                        None,
+                        w!("open"),
+                        &HSTRING::from(url),
+                        PCWSTR::null(),
+                        PCWSTR::null(),
+                        SW_SHOWNORMAL,
+                    );
+                }
+                self.dismiss();
+            }
         }
-        self.dismiss();
     }
 
     // -----------------------------------------------------------------------
@@ -925,6 +1040,7 @@ unsafe extern "system" fn main_proc(
             match wparam.0 as i32 {
                 HOTKEY_LOOKUP => with_app(|app| app.on_hotkey()),
                 HOTKEY_ESCAPE => with_app(|app| app.dismiss()),
+                HOTKEY_BACK | HOTKEY_BACK_ALT => with_app(|app| app.back()),
                 _ => None,
             };
             LRESULT(0)
@@ -954,6 +1070,10 @@ unsafe extern "system" fn main_proc(
         WM_APP_CLICK => {
             let (x, y) = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
             with_app(|app| app.on_click(x, y));
+            LRESULT(0)
+        }
+        WM_APP_BACK => {
+            with_app(|app| app.back());
             LRESULT(0)
         }
         WM_TIMER => {
@@ -997,6 +1117,25 @@ unsafe extern "system" fn popup_proc(
     match msg {
         // Never steal focus from the app the user is reading in.
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_MOUSEMOVE => {
+            // Ask for WM_MOUSELEAVE, to drop the hover when the pointer goes.
+            let mut track = TRACKMOUSEEVENT {
+                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            };
+            unsafe {
+                let _ = TrackMouseEvent(&mut track);
+            }
+            let (x, y) = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
+            with_app(|app| app.popup.as_mut().map(|p| p.hover(Some((x, y)))));
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            with_app(|app| app.popup.as_mut().map(|p| p.hover(None)));
+            LRESULT(0)
+        }
         WM_MOUSEWHEEL => {
             let delta = (wparam.0 >> 16) & 0xFFFF;
             unsafe {
@@ -1010,7 +1149,16 @@ unsafe extern "system" fn popup_proc(
             }
             LRESULT(0)
         }
-        // A hand over the footer links.
+        // The mouse's back button.
+        WM_XBUTTONUP => {
+            if (wparam.0 >> 16) as u16 == XBUTTON1 {
+                unsafe {
+                    let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_BACK, WPARAM(0), LPARAM(0));
+                }
+            }
+            LRESULT(1)
+        }
+        // A hand over the links.
         WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
             let mut pt = POINT::default();
             let over_link =

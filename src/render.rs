@@ -32,6 +32,8 @@ enum Item {
         x: f32,
         y: f32,
         ink: Ink,
+        /// Ranges drawn in the accent color instead.
+        accents: Vec<DWRITE_TEXT_RANGE>,
     },
     Rule {
         y: f32,
@@ -49,17 +51,41 @@ pub struct Layout {
     pub links: Vec<Link>,
 }
 
+impl Layout {
+    /// The bottom of the first line of text, in DIPs.
+    pub fn first_line_bottom(&self) -> f32 {
+        self.items
+            .iter()
+            .find_map(|item| match item {
+                Item::Text { layout, y, .. } => Some(y + first_line_height(layout)),
+                Item::Rule { .. } => None,
+            })
+            .unwrap_or(0.0)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Link {
     pub x: f32,
     pub y: f32,
     pub width: f32,
     pub height: f32,
-    pub url: String,
+    pub target: Target,
+}
+
+/// What a click on a link does.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Target {
+    /// Opens a web page.
+    Url(String),
+    /// Looks the word up in the same card.
+    Word(String),
 }
 
 /// Room for the sense numbers, in DIPs.
 const SENSE_INDENT: f32 = 22.0;
+/// "Open in new window", after links that open the browser.
+const EXTERNAL_ICON: &str = "\u{E8A7}";
 
 /// A layout being built top to bottom.
 #[derive(Default)]
@@ -74,12 +100,24 @@ impl Stack {
     /// Places text on the current line, `x` from the left. Returns its width
     /// and height; moving down is up to the caller.
     fn text(&mut self, layout: IDWriteTextLayout, x: f32, ink: Ink) -> (f32, f32) {
+        self.text_with_accents(layout, x, ink, Vec::new())
+    }
+
+    /// Like [`Stack::text`], with `accents` drawn in the accent color.
+    fn text_with_accents(
+        &mut self,
+        layout: IDWriteTextLayout,
+        x: f32,
+        ink: Ink,
+        accents: Vec<DWRITE_TEXT_RANGE>,
+    ) -> (f32, f32) {
         let (w, h, _) = metrics(&layout);
         self.items.push(Item::Text {
             layout,
             x,
             y: self.y,
             ink,
+            accents,
         });
         (w, h)
     }
@@ -93,6 +131,8 @@ pub enum Face {
     Small,
     /// Symbol glyphs, such as the check mark.
     Icon,
+    /// A larger symbol, centred in its width, for a button.
+    Button,
 }
 
 /// What the body of the card shows.
@@ -114,6 +154,9 @@ struct Formats {
     title: IDWriteTextFormat,
     menu: IDWriteTextFormat,
     icon: IDWriteTextFormat,
+    /// [`EXTERNAL_ICON`], sized for the footer.
+    external: IDWriteTextFormat,
+    button: IDWriteTextFormat,
 }
 
 pub struct Renderer {
@@ -166,30 +209,39 @@ impl Renderer {
         }
     }
 
-    /// The word and its pronunciation.
-    pub fn layout_header(&self, word: &str, phonetic: Option<&str>, width: f32) -> Result<Layout> {
+    /// The word and its pronunciation, `indent` DIPs from the left.
+    pub fn layout_header(
+        &self,
+        word: &str,
+        phonetic: Option<&str>,
+        width: f32,
+        indent: f32,
+    ) -> Result<Layout> {
         let mut items = Vec::new();
-        let title = self.text(&capitalize(word), &self.formats.word, width)?;
+        let room = width - indent;
+        let title = self.text(&capitalize(word), &self.formats.word, room)?;
         let (title_w, title_h, baseline) = metrics(&title);
         let mut height = title_h;
         if let Some(p) = phonetic {
             let gap = 10.0;
-            let phon = self.text(p, &self.formats.phonetic, width)?;
+            let phon = self.text(p, &self.formats.phonetic, room)?;
             let (phon_w, phon_h, phon_baseline) = metrics(&phon);
-            if title_w + gap + phon_w <= width {
+            if title_w + gap + phon_w <= room {
                 // Same line, sharing the baseline.
                 items.push(Item::Text {
                     layout: phon,
-                    x: title_w + gap,
+                    x: indent + title_w + gap,
                     y: baseline - phon_baseline,
                     ink: Ink::Secondary,
+                    accents: Vec::new(),
                 });
             } else {
                 items.push(Item::Text {
                     layout: phon,
-                    x: 0.0,
+                    x: indent,
                     y: title_h + 2.0,
                     ink: Ink::Secondary,
+                    accents: Vec::new(),
                 });
                 height += 2.0 + phon_h;
             }
@@ -198,9 +250,10 @@ impl Renderer {
             0,
             Item::Text {
                 layout: title,
-                x: 0.0,
+                x: indent,
                 y: 0.0,
                 ink: Ink::Primary,
+                accents: Vec::new(),
             },
         );
         Ok(Layout {
@@ -217,6 +270,7 @@ impl Renderer {
             Face::Menu => &self.formats.menu,
             Face::Small => &self.formats.footer,
             Face::Icon => &self.formats.icon,
+            Face::Button => &self.formats.button,
         };
         let mut out = Stack::default();
         let (_, height) = out.text(self.text(text, format, width)?, 0.0, ink);
@@ -318,20 +372,61 @@ impl Renderer {
                 out.y += 9.0;
             }
             if !meaning.synonyms.is_empty() {
-                let label = "Similar  ";
-                let line = format!("{label}{}", meaning.synonyms.join(" \u{00B7} "));
-                let syn = self.text(&line, &self.formats.meta, width - indent)?;
-                unsafe {
-                    let range = DWRITE_TEXT_RANGE {
-                        startPosition: 0,
-                        length: label.trim_end().len() as u32,
-                    };
-                    let _ = syn.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, range);
-                }
-                let (_, h) = out.text(syn, indent, Ink::Secondary);
-                out.y += h + 6.0;
+                self.layout_synonyms(out, &meaning.synonyms, indent, width - indent)?;
             }
         }
+        Ok(())
+    }
+
+    /// "Similar" and the synonyms, each a link to its own definition.
+    fn layout_synonyms(
+        &self,
+        out: &mut Stack,
+        synonyms: &[String],
+        x: f32,
+        width: f32,
+    ) -> Result<()> {
+        let label = "Similar  ";
+        let separator = " \u{00B7} ";
+        let mut line = String::from(label);
+        // DirectWrite counts UTF-16 code units.
+        let utf16 = |s: &str| s.encode_utf16().count() as u32;
+        let mut ranges = Vec::new();
+        for (i, synonym) in synonyms.iter().enumerate() {
+            if i > 0 {
+                line.push_str(separator);
+            }
+            ranges.push(DWRITE_TEXT_RANGE {
+                startPosition: utf16(&line),
+                length: utf16(synonym),
+            });
+            line.push_str(synonym);
+        }
+        let syn = self.text(&line, &self.formats.meta, width)?;
+        unsafe {
+            let range = DWRITE_TEXT_RANGE {
+                startPosition: 0,
+                length: label.trim_end().len() as u32,
+            };
+            let _ = syn.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, range);
+            for range in &ranges {
+                let _ = syn.SetUnderline(true, *range);
+            }
+        }
+        for (synonym, range) in synonyms.iter().zip(&ranges) {
+            // One rectangle per line, should a synonym wrap.
+            for r in hit_rects(&syn, *range) {
+                out.links.push(Link {
+                    x: x + r.left - 2.0,
+                    y: out.y + r.top,
+                    width: r.width + 4.0,
+                    height: r.height,
+                    target: Target::Word(synonym.clone()),
+                });
+            }
+        }
+        let (_, h) = out.text_with_accents(syn, x, Ink::Secondary, ranges);
+        out.y += h + 6.0;
         Ok(())
     }
 
@@ -348,15 +443,36 @@ impl Renderer {
                 line_h = line_h.max(h);
             }
             let label = self.text(source, &self.formats.footer, width)?;
-            let (w, h) = out.text(label, x, Ink::Accent);
-            if let Some(url) = dictionary::source_url(source, &def.word) {
+            let url = dictionary::source_url(source, &def.word);
+            if url.is_some() {
+                let all = DWRITE_TEXT_RANGE {
+                    startPosition: 0,
+                    length: u32::MAX,
+                };
+                unsafe {
+                    let _ = label.SetUnderline(true, all);
+                }
+            }
+            let (mut w, h) = out.text(label, x, Ink::Accent);
+            if let Some(url) = url {
+                let gap = 3.0;
+                let icon = self.text(EXTERNAL_ICON, &self.formats.external, width)?;
+                let (icon_w, icon_h, _) = metrics(&icon);
+                out.items.push(Item::Text {
+                    layout: icon,
+                    x: x + w + gap,
+                    y: out.y + (h - icon_h) / 2.0,
+                    ink: Ink::Accent,
+                    accents: Vec::new(),
+                });
+                w += gap + icon_w;
                 // A little slack around small text makes it easier to hit.
                 out.links.push(Link {
                     x: x - 4.0,
                     y: out.y - 4.0,
                     width: w + 8.0,
                     height: h + 8.0,
-                    url,
+                    target: Target::Url(url),
                 });
             }
             x += w;
@@ -385,7 +501,16 @@ impl Renderer {
             let divider = brush(theme.divider())?;
             for item in &layout.items {
                 match item {
-                    Item::Text { layout, x, y, ink } => {
+                    Item::Text {
+                        layout,
+                        x,
+                        y,
+                        ink,
+                        accents,
+                    } => {
+                        for range in accents {
+                            let _ = layout.SetDrawingEffect(&accent, *range);
+                        }
                         let b = match ink {
                             Ink::Primary => &primary,
                             Ink::Secondary => &secondary,
@@ -604,6 +729,9 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
         HSTRING::from("Segoe MDL2 Assets")
     };
     let icon = make(&symbols, 11.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
+    let external = make(&symbols, 9.5, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
+    let button = make(&symbols, 14.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
+    unsafe { button.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)? };
     Ok(Formats {
         word: make(&display, 26.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?,
         phonetic: make(&text, 15.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?,
@@ -622,6 +750,8 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
         title: make(&text, 15.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?,
         menu,
         icon,
+        external,
+        button,
     })
 }
 
@@ -648,6 +778,34 @@ fn metrics(layout: &IDWriteTextLayout) -> (f32, f32, f32) {
             lines[0].baseline,
         )
     }
+}
+
+/// The rectangles covering `range` of a laid-out text, one per line it spans.
+fn hit_rects(layout: &IDWriteTextLayout, range: DWRITE_TEXT_RANGE) -> Vec<DWRITE_HIT_TEST_METRICS> {
+    let (start, length) = (range.startPosition, range.length);
+    unsafe {
+        // The first call only counts them.
+        let mut count = 0;
+        let _ = layout.HitTestTextRange(start, length, 0.0, 0.0, None, &mut count);
+        let mut rects = vec![DWRITE_HIT_TEST_METRICS::default(); count as usize];
+        if layout
+            .HitTestTextRange(start, length, 0.0, 0.0, Some(&mut rects), &mut count)
+            .is_err()
+        {
+            return Vec::new();
+        }
+        rects.truncate(count as usize);
+        rects
+    }
+}
+
+/// The height of the first line of a laid-out text.
+fn first_line_height(layout: &IDWriteTextLayout) -> f32 {
+    let mut lines = [DWRITE_LINE_METRICS::default(); 1];
+    let mut count = 0;
+    // Fails with "buffer too small" when there are more lines, after filling in the first.
+    let _ = unsafe { layout.GetLineMetrics(Some(&mut lines), &mut count) };
+    lines[0].height
 }
 
 fn rounded_rect_distance(x: f32, y: f32, lo: f32, hi: f32, r: f32) -> f32 {

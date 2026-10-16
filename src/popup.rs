@@ -5,19 +5,20 @@
 
 use std::time::{Duration, Instant};
 
-use windows::core::{Interface, Result, BOOL, HSTRING};
+use windows::core::{Interface, Result, BOOL, HSTRING, PWSTR};
 use windows::Foundation::TimeSpan;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::WinRT::Composition::ICompositorDesktopInterop;
+use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
-use crate::render::{Body, Link, Renderer};
+use crate::render::{Body, Face, Ink, Link, Renderer, Target};
 use crate::theme::Theme;
 
 // Geometry, in DIPs.
@@ -34,6 +35,18 @@ const SHADOW_DY: f32 = 6.0;
 const SHADOW_SPREAD: f32 = MARGIN * 0.75;
 const ANCHOR_GAP: f32 = 10.0;
 const SCREEN_GAP: f32 = 8.0;
+const BACK_SIZE: f32 = 28.0;
+/// The back button's left edge: it reaches a little into the padding, so
+/// its arrow lines up with the text below.
+const BACK_X: f32 = PAD_X - 7.0;
+/// How far the word moves right to make room for the back button.
+const BACK_INDENT: f32 = BACK_X + BACK_SIZE + 6.0 - PAD_X;
+const BACK_RADIUS: f32 = 5.0;
+/// How far the back button slides in from as it appears.
+const BACK_SLIDE: f32 = 10.0;
+/// "Back" in Segoe Fluent Icons and Segoe MDL2 Assets.
+const BACK_GLYPH: &str = "\u{E72B}";
+const BACK_TIP: &str = "Back (Backspace)";
 
 // Durations, in ms.
 pub const SHOW_MS: u64 = 340;
@@ -167,6 +180,7 @@ pub struct Popup {
     content: Content,
     loader: Loader,
     scroll_chrome: ScrollChrome,
+    back: BackButton,
 
     theme: Theme,
     scale: f32,
@@ -176,6 +190,8 @@ pub struct Popup {
     /// Card height and header area height, physical pixels.
     card_h: f32,
     header_h: f32,
+    /// How far the word is indented for the back button, in DIPs.
+    header_indent: f32,
     body_h: f32,
     scroll: f32,
     scroll_anim: Option<ScrollAnim>,
@@ -214,6 +230,8 @@ pub(crate) struct Animator {
     pub(crate) decelerate: CompositionEasingFunction,
     pub(crate) accelerate: CompositionEasingFunction,
     scroll_ease: CompositionEasingFunction,
+    /// Ease-in-out, for fades that should be seen happening.
+    fade: CompositionEasingFunction,
 }
 
 impl Animator {
@@ -229,11 +247,15 @@ impl Animator {
         let accelerate = c
             .CreateCubicBezierEasingFunction(v2(0.7, 0.0), v2(1.0, 0.5))?
             .cast()?;
+        let fade = c
+            .CreateCubicBezierEasingFunction(v2(0.4, 0.0), v2(0.6, 1.0))?
+            .cast()?;
         Ok(Animator {
             compositor,
             decelerate,
             accelerate,
             scroll_ease,
+            fade,
         })
     }
 
@@ -489,6 +511,143 @@ impl Content {
     }
 }
 
+/// The arrow left of the word, shown once a synonym has been followed.
+struct BackButton {
+    visual: ContainerVisual,
+    /// Inside `visual`, which keeps the button's place: slides in and out.
+    slide: ContainerVisual,
+    hover: SpriteVisual,
+    hover_clip: CompositionRoundedRectangleGeometry,
+    hover_brush: CompositionColorBrush,
+    glyph: SpriteVisual,
+    glyph_brush: CompositionSurfaceBrush,
+    /// Owned by the card's window, which destroys it.
+    tooltip: Option<HWND>,
+    shown: bool,
+    hovered: bool,
+    /// Top of the button in the card, physical pixels.
+    top: f32,
+}
+
+impl BackButton {
+    fn new(c: &Compositor, card: &ContainerVisual, hwnd: HWND) -> Result<BackButton> {
+        let visual = c.CreateContainerVisual()?;
+        visual.SetOpacity(0.0)?;
+        card.Children()?.InsertAtTop(&visual)?;
+        let slide = c.CreateContainerVisual()?;
+        visual.Children()?.InsertAtTop(&slide)?;
+        let hover = c.CreateSpriteVisual()?;
+        let hover_clip = c.CreateRoundedRectangleGeometry()?;
+        hover.SetClip(&c.CreateGeometricClipWithGeometry(&hover_clip)?)?;
+        let hover_brush = c.CreateColorBrush()?;
+        hover.SetBrush(&hover_brush)?;
+        hover.SetOpacity(0.0)?;
+        slide.Children()?.InsertAtTop(&hover)?;
+        let (glyph, glyph_brush) = text_sprite(c)?;
+        slide.Children()?.InsertAtTop(&glyph)?;
+        Ok(BackButton {
+            visual,
+            slide,
+            hover,
+            hover_clip,
+            hover_brush,
+            glyph,
+            glyph_brush,
+            tooltip: create_tooltip(hwnd, BACK_TIP),
+            shown: false,
+            hovered: false,
+            top: 0.0,
+        })
+    }
+
+    fn apply_theme(&self, renderer: &Renderer, t: &Theme, s: f32) -> Result<()> {
+        self.hover_brush.SetColor(t.highlight())?;
+        let size = v2(BACK_SIZE * s, BACK_SIZE * s);
+        self.visual.SetSize(size)?;
+        self.hover.SetSize(size)?;
+        self.hover_clip.SetSize(size)?;
+        self.hover_clip
+            .SetCornerRadius(v2(BACK_RADIUS * s, BACK_RADIUS * s))?;
+        let layout = renderer.layout_line(BACK_GLYPH, Face::Button, Ink::Primary, BACK_SIZE)?;
+        self.glyph_brush
+            .SetSurface(&renderer.draw(&layout, s, t)?)?;
+        self.glyph
+            .SetSize(v2(layout.width * s, layout.height * s))?;
+        self.glyph
+            .SetOffset(v3(0.0, ((BACK_SIZE - layout.height) / 2.0 * s).round()))
+    }
+
+    /// Moves the tooltip's area to `rect`, in window pixels; an empty one turns it off.
+    fn set_tooltip_rect(&self, owner: HWND, rect: RECT) {
+        let Some(tooltip) = self.tooltip else {
+            return;
+        };
+        let info = TTTOOLINFOW {
+            cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
+            hwnd: owner,
+            uId: 1,
+            rect,
+            ..Default::default()
+        };
+        unsafe {
+            SendMessageW(
+                tooltip,
+                TTM_NEWTOOLRECTW,
+                None,
+                Some(LPARAM(&info as *const _ as isize)),
+            );
+            if rect.right <= rect.left {
+                SendMessageW(tooltip, TTM_POP, None, None);
+            }
+        }
+    }
+}
+
+/// A system tooltip showing `text` over an area of `owner`, initially empty.
+fn create_tooltip(owner: HWND, text: &str) -> Option<HWND> {
+    unsafe {
+        let controls = INITCOMMONCONTROLSEX {
+            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
+            dwICC: ICC_WIN95_CLASSES,
+        };
+        let _ = InitCommonControlsEx(&controls);
+        // Always: the card never becomes the active window.
+        let tooltip = CreateWindowExW(
+            WS_EX_TOPMOST,
+            TOOLTIPS_CLASSW,
+            None,
+            WINDOW_STYLE(TTS_ALWAYSTIP | TTS_NOPREFIX),
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            Some(owner),
+            None,
+            None,
+            None,
+        )
+        .ok()?;
+        // The tooltip keeps its own copy.
+        let mut wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+        let info = TTTOOLINFOW {
+            cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
+            // Watches the owner's mouse messages itself.
+            uFlags: TTF_SUBCLASS,
+            hwnd: owner,
+            uId: 1,
+            lpszText: PWSTR(wide.as_mut_ptr()),
+            ..Default::default()
+        };
+        SendMessageW(
+            tooltip,
+            TTM_ADDTOOLW,
+            None,
+            Some(LPARAM(&info as *const _ as isize)),
+        );
+        Some(tooltip)
+    }
+}
+
 /// Three pulsing dots, shown while an online lookup runs.
 struct Loader {
     visual: ContainerVisual,
@@ -649,6 +808,7 @@ impl Popup {
         target.SetRoot(&root)?;
         let frame = Frame::new(c, &root, &theme)?;
         let header = Header::new(c, &frame.card)?;
+        let back = BackButton::new(c, &frame.card, hwnd)?;
         let content = Content::new(c, &frame.card)?;
         let loader = Loader::new(c, &content.host, &theme)?;
         let scroll_chrome = ScrollChrome::new(c, &frame.card)?;
@@ -664,12 +824,14 @@ impl Popup {
             content,
             loader,
             scroll_chrome,
+            back,
             theme,
             scale: 1.0,
             grow_up: false,
             window: RECT::default(),
             card_h: 0.0,
             header_h: 0.0,
+            header_indent: 0.0,
             body_h: 0.0,
             scroll: 0.0,
             scroll_anim: None,
@@ -701,6 +863,13 @@ impl Popup {
         ] {
             Animator::stop(v, &["Opacity", "Offset", "Scale"]);
         }
+        // A new card has nowhere to go back to.
+        let back = &mut self.back;
+        Animator::stop(&back.visual, &["Opacity"]);
+        Animator::stop(&back.hover, &["Opacity"]);
+        back.visual.SetOpacity(0.0)?;
+        back.hover.SetOpacity(0.0)?;
+        (back.shown, back.hovered) = (false, false);
         self.card_h = 0.0;
         self.set_content(word, phonetic, body, Transition::Instant)?;
 
@@ -805,6 +974,10 @@ impl Popup {
         let _ = self.header.brush.SetSurface(None::<&ICompositionSurface>);
         let _ = self.content.brush.SetSurface(None::<&ICompositionSurface>);
         let _ = self
+            .back
+            .glyph_brush
+            .SetSurface(None::<&ICompositionSurface>);
+        let _ = self
             .header
             .back_brush
             .SetSurface(None::<&ICompositionSurface>);
@@ -823,7 +996,10 @@ impl Popup {
     ) -> Result<()> {
         let s = self.scale;
         let content_w = CARD_W - 2.0 * PAD_X;
-        let header_layout = self.renderer.layout_header(word, phonetic, content_w)?;
+        let indent = if self.back.shown { BACK_INDENT } else { 0.0 };
+        let header_layout = self
+            .renderer
+            .layout_header(word, phonetic, content_w, indent)?;
         let body_layout = self.renderer.layout_body(&body, content_w, PAD_BOTTOM)?;
         let header_surface = self.renderer.draw(&header_layout, s, &self.theme)?;
         let body_surface = self.renderer.draw(&body_layout, s, &self.theme)?;
@@ -838,6 +1014,7 @@ impl Popup {
             Transition::Instant
         };
         let previous_header_h = self.header_h;
+        let previous_indent = std::mem::replace(&mut self.header_indent, indent);
         self.header_h = header_h;
         self.body_h = body_h;
         self.content.links = body_layout.links.clone();
@@ -865,7 +1042,33 @@ impl Popup {
         header
             .visual
             .SetSize(v2(content_w * s, header_layout.height * s))?;
-        header.visual.SetOffset(v3(PAD_X * s, PAD_TOP * s))?;
+        let rest = v3(PAD_X * s, PAD_TOP * s);
+        Animator::stop(&header.visual, &["Offset"]);
+        if transition != Transition::Instant && previous_indent != indent {
+            // The word glides over to make room for the back button, or
+            // to take its place.
+            // Moving left, it waits a moment for the arrow to fade first.
+            let from = PAD_X + previous_indent - indent;
+            let delay = if indent < previous_indent { 60 } else { 0 };
+            header.visual.SetOffset(v3(from * s, PAD_TOP * s))?;
+            anim.vector3(
+                &header.visual,
+                "Offset",
+                rest,
+                RESIZE_MS,
+                delay,
+                &anim.decelerate,
+            )?;
+        } else {
+            header.visual.SetOffset(rest)?;
+        }
+
+        // The back button sits level with the word.
+        let line = header_layout.first_line_bottom();
+        self.back.top = ((PAD_TOP + (line - BACK_SIZE) / 2.0) * s).round();
+        self.back
+            .visual
+            .SetOffset(v3((BACK_X * s).round(), self.back.top))?;
 
         let content = &self.content;
         content.brush.SetSurface(&body_surface)?;
@@ -932,7 +1135,89 @@ impl Popup {
             }
         }
         self.update_scroll_chrome(false)?;
+        self.sync_tooltip();
         Ok(())
+    }
+
+    /// Shows or hides the back button. The word moves to make room for it
+    /// with the next [`Popup::set_content`].
+    pub fn set_back(&mut self, shown: bool) -> Result<()> {
+        if shown == self.back.shown {
+            return Ok(());
+        }
+        self.back.shown = shown;
+        let (anim, back, s) = (&self.anim, &self.back, self.scale);
+        let away = v3(-BACK_SLIDE * s, 0.0);
+        if shown {
+            // Slides in from the left alongside the word making room for it.
+            Animator::stop(&back.slide, &["Offset"]);
+            back.slide.SetOffset(away)?;
+            anim.scalar(&back.visual, "Opacity", 1.0, RESIZE_MS, 0, &anim.fade)?;
+            let home = v3(0.0, 0.0);
+            anim.vector3(&back.slide, "Offset", home, RESIZE_MS, 0, &anim.decelerate)?;
+        } else {
+            // Gone before the word slides over where it was.
+            anim.scalar(&back.visual, "Opacity", 0.0, 100, 0, &anim.decelerate)?;
+            anim.vector3(&back.slide, "Offset", away, 150, 0, &anim.accelerate)?;
+        }
+        if !shown {
+            self.set_back_hovered(false)?;
+        }
+        self.sync_tooltip();
+        Ok(())
+    }
+
+    /// Highlights the back button while the pointer, in window pixels, is on it.
+    pub fn hover(&mut self, point: Option<(i32, i32)>) -> Result<()> {
+        let over = point.is_some_and(|(x, y)| self.back_at(x, y));
+        self.set_back_hovered(over)
+    }
+
+    /// Whether a point in window pixels is on the back button.
+    pub fn back_at(&self, x: i32, y: i32) -> bool {
+        let r = self.back_rect();
+        self.back.shown && x >= r.left && x < r.right && y >= r.top && y < r.bottom
+    }
+
+    fn set_back_hovered(&mut self, hovered: bool) -> Result<()> {
+        if hovered == self.back.hovered {
+            return Ok(());
+        }
+        self.back.hovered = hovered;
+        let anim = &self.anim;
+        let opacity = if hovered { 1.0 } else { 0.0 };
+        anim.scalar(
+            &self.back.hover,
+            "Opacity",
+            opacity,
+            100,
+            0,
+            &anim.decelerate,
+        )
+    }
+
+    /// The back button in window pixels.
+    fn back_rect(&self) -> RECT {
+        let s = self.scale;
+        let left = (MARGIN * s + (BACK_X * s).round()) as i32;
+        let top = (self.frame_y() + self.back.top) as i32;
+        let size = (BACK_SIZE * s).round() as i32;
+        RECT {
+            left,
+            top,
+            right: left + size,
+            bottom: top + size,
+        }
+    }
+
+    /// Keeps the tooltip over the back button, and off while it's hidden.
+    fn sync_tooltip(&self) {
+        let rect = if self.back.shown {
+            self.back_rect()
+        } else {
+            RECT::default()
+        };
+        self.back.set_tooltip_rect(self.hwnd, rect);
     }
 
     fn move_content_host(&self, previous_header_h: f32) -> Result<()> {
@@ -996,7 +1281,7 @@ impl Popup {
     }
 
     /// The link under a point in window coordinates, if any.
-    pub fn link_at(&self, x: i32, y: i32) -> Option<&str> {
+    pub fn link_at(&self, x: i32, y: i32) -> Option<&Target> {
         let s = self.scale;
         let (x, y) = (x as f32 - MARGIN * s, y as f32 - self.frame_y());
         // Only the visible part of the body is clickable.
@@ -1008,7 +1293,7 @@ impl Popup {
             .links
             .iter()
             .find(|l| bx >= l.x && bx < l.x + l.width && by >= l.y && by < l.y + l.height)
-            .map(|l| l.url.as_str())
+            .map(|l| &l.target)
     }
 
     /// The card's bounds in screen pixels.
@@ -1066,6 +1351,7 @@ impl Popup {
         let t = self.theme;
         self.frame.apply_theme(&self.renderer, &t, self.scale)?;
         self.loader.brush.SetColor(t.accent)?;
+        self.back.apply_theme(&self.renderer, &t, self.scale)?;
         self.scroll_chrome.apply_theme(&t)
     }
 
