@@ -45,6 +45,9 @@ const HOTKEY_LOOKUP: i32 = 1;
 const HOTKEY_ESCAPE: i32 = 2;
 const HOTKEY_BACK: i32 = 3;
 const HOTKEY_BACK_ALT: i32 = 4;
+const HOTKEY_NEXT_LINK: i32 = 5;
+const HOTKEY_PREV_LINK: i32 = 6;
+const HOTKEY_OPEN_LINK: i32 = 7;
 
 const TIMER_HIDE: usize = 1;
 const TIMER_SETTLE: usize = 2;
@@ -153,6 +156,10 @@ pub struct App {
     history: Vec<String>,
     /// Whether Backspace and Alt+Left are registered.
     back_keys: bool,
+    /// Whether Tab and Shift+Tab are registered.
+    link_keys: bool,
+    /// Whether Enter is registered.
+    open_key: bool,
     /// The search box, while the card shows one.
     search: Option<Search>,
     /// The window the search box took the keyboard from.
@@ -261,6 +268,8 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             current: None,
             history: Vec::new(),
             back_keys: false,
+            link_keys: false,
+            open_key: false,
             search: None,
             return_focus: None,
             hotkey_ok: false,
@@ -512,6 +521,7 @@ impl App {
             title,
             ..Search::default()
         });
+        self.sync_link_keys();
     }
 
     /// A character typed into the card (WM_CHAR).
@@ -565,26 +575,20 @@ impl App {
         self.refresh_search();
     }
 
-    /// A key pressed in the card (WM_KEYDOWN): the arrows pick a
-    /// suggestion, Tab copies it into the field.
+    /// A key pressed in the card (WM_KEYDOWN): the arrows, Tab and
+    /// Shift+Tab pick a suggestion.
     fn on_key(&mut self, key: VIRTUAL_KEY) {
-        let (Some(search), Some(popup)) = (self.search.as_mut(), self.popup.as_mut()) else {
+        let (Some(_), Some(popup)) = (self.search.as_ref(), self.popup.as_mut()) else {
             return;
         };
-        match key {
-            VK_DOWN | VK_UP => {
-                let _ = popup.step_suggestion(key == VK_DOWN);
-            }
-            VK_TAB => {
-                let pick = popup.suggestion().unwrap_or(0);
-                let Some(suggestion) = search.suggestions.get(pick) else {
-                    return;
-                };
-                search.text = suggestion.word.clone();
-                self.refresh_search();
-            }
-            _ => {}
-        }
+        let down = match key {
+            VK_DOWN => true,
+            VK_UP => false,
+            // The high bit (a negative state) means Shift is down.
+            VK_TAB => unsafe { GetKeyState(VK_SHIFT.0 as i32) >= 0 },
+            _ => return,
+        };
+        let _ = popup.step_suggestion(down);
     }
 
     /// Shows what's typed in the search box, and the words it could be the
@@ -798,6 +802,7 @@ impl App {
         unsafe {
             SetTimer(Some(self.hwnd), TIMER_SETTLE, SETTLE_MS, None);
         }
+        self.sync_link_keys();
     }
 
     fn show_message(&mut self, anchor: Option<RECT>, title: &str, detail: &str, auto_hide: bool) {
@@ -846,6 +851,7 @@ impl App {
         }
         SHOWN_AT.set(unsafe { GetTickCount64() });
         self.install_dismiss_hooks();
+        self.sync_link_keys();
         unsafe {
             SetTimer(Some(hwnd), TIMER_COVERED, COVERED_CHECK_MS, None);
         }
@@ -941,9 +947,90 @@ impl App {
         }
     }
 
+    /// Tab and Shift+Tab move between the card's links, and Enter opens the
+    /// one they reached, but only while there's one to go to: otherwise the
+    /// keys belong to the app underneath. The search box reads its own keys.
+    fn sync_link_keys(&mut self) {
+        let popup = self
+            .popup
+            .as_ref()
+            .filter(|p| p.visible && self.search.is_none());
+        let tab = popup.is_some_and(|p| p.has_links());
+        let enter = popup.is_some_and(|p| p.focused_link().is_some());
+        self.set_link_keys(tab, enter);
+    }
+
+    fn set_link_keys(&mut self, tab: bool, enter: bool) {
+        let hwnd = Some(self.hwnd);
+        unsafe {
+            if tab != self.link_keys {
+                self.link_keys = tab;
+                if tab {
+                    // Held down, Tab keeps moving, as it does everywhere else.
+                    let none = HOT_KEY_MODIFIERS::default();
+                    let _ = RegisterHotKey(hwnd, HOTKEY_NEXT_LINK, none, VK_TAB.0 as u32);
+                    let _ = RegisterHotKey(hwnd, HOTKEY_PREV_LINK, MOD_SHIFT, VK_TAB.0 as u32);
+                } else {
+                    let _ = UnregisterHotKey(hwnd, HOTKEY_NEXT_LINK);
+                    let _ = UnregisterHotKey(hwnd, HOTKEY_PREV_LINK);
+                }
+            }
+            if enter != self.open_key {
+                self.open_key = enter;
+                if enter {
+                    let key = VK_RETURN.0 as u32;
+                    let _ = RegisterHotKey(hwnd, HOTKEY_OPEN_LINK, MOD_NOREPEAT, key);
+                } else {
+                    let _ = UnregisterHotKey(hwnd, HOTKEY_OPEN_LINK);
+                }
+            }
+        }
+    }
+
+    /// Tab or Shift+Tab: rings the next or previous link.
+    fn step_link(&mut self, forward: bool) {
+        if let Some(popup) = self.popup.as_mut().filter(|p| p.visible) {
+            let _ = popup.step_link(forward);
+        }
+        self.sync_link_keys();
+    }
+
+    /// Enter: opens the link Tab moved to.
+    fn open_focused_link(&mut self) {
+        let target = self
+            .popup
+            .as_ref()
+            .filter(|p| p.visible)
+            .and_then(|p| p.focused_link())
+            .cloned();
+        if let Some(target) = target {
+            self.open_link(target);
+        }
+    }
+
+    fn open_link(&mut self, target: Target) {
+        match target {
+            Target::Word(word) => self.follow(&word),
+            Target::Url(url) => {
+                unsafe {
+                    ShellExecuteW(
+                        None,
+                        w!("open"),
+                        &HSTRING::from(url),
+                        PCWSTR::null(),
+                        PCWSTR::null(),
+                        SW_SHOWNORMAL,
+                    );
+                }
+                self.dismiss();
+            }
+        }
+    }
+
     fn dismiss(&mut self) {
         self.history.clear();
         self.sync_back_keys();
+        self.set_link_keys(false, false);
         self.remove_dismiss_hooks();
         self.dismiss_menu();
         self.search = None;
@@ -1076,24 +1163,8 @@ impl App {
         if self.popup.as_ref().is_some_and(|p| p.back_at(x, y)) {
             return self.back();
         }
-        let Some(target) = self.popup.as_ref().and_then(|p| p.link_at(x, y)).cloned() else {
-            return;
-        };
-        match target {
-            Target::Word(word) => self.follow(&word),
-            Target::Url(url) => {
-                unsafe {
-                    ShellExecuteW(
-                        None,
-                        w!("open"),
-                        &HSTRING::from(url),
-                        PCWSTR::null(),
-                        PCWSTR::null(),
-                        SW_SHOWNORMAL,
-                    );
-                }
-                self.dismiss();
-            }
+        if let Some(target) = self.popup.as_ref().and_then(|p| p.link_at(x, y)).cloned() {
+            self.open_link(target);
         }
     }
 
@@ -1321,6 +1392,9 @@ unsafe extern "system" fn main_proc(
                 HOTKEY_LOOKUP => with_app(|app| app.on_hotkey()),
                 HOTKEY_ESCAPE => with_app(|app| app.dismiss()),
                 HOTKEY_BACK | HOTKEY_BACK_ALT => with_app(|app| app.back()),
+                HOTKEY_NEXT_LINK => with_app(|app| app.step_link(true)),
+                HOTKEY_PREV_LINK => with_app(|app| app.step_link(false)),
+                HOTKEY_OPEN_LINK => with_app(|app| app.open_focused_link()),
                 _ => None,
             };
             LRESULT(0)

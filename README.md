@@ -8,13 +8,14 @@ With nothing selected, the shortcut opens a small box to type a word into
 instead, for text that can't be selected: in an image, a protected PDF or a
 game. It opens at the text cursor if the app reports one, and in the middle
 of the screen otherwise. Words from the dictionary
-are suggested as you type; pick one with the arrow keys or the mouse, or
-press Tab to complete it. Press Enter to look it up; Esc or the shortcut
+are suggested as you type; pick one with Tab, Shift+Tab, the arrow keys or
+the mouse. Press Enter to look it up; Esc or the shortcut
 again closes it.
 
 Click a synonym to open its definition in the same card; the arrow next to
 the word, Backspace, Alt+← or the mouse's back button returns to the
-previous one.
+previous one. Tab and Shift+Tab move between the synonyms and the source
+links in order, and Enter opens the one that's ringed.
 
 ## Footprint
 

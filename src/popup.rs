@@ -48,6 +48,11 @@ const BACK_SLIDE: f32 = 10.0;
 /// "Back" in Segoe Fluent Icons and Segoe MDL2 Assets.
 const BACK_GLYPH: &str = "\u{E72B}";
 const BACK_TIP: &str = "Back (Backspace)";
+/// The ring around the link Tab moved to, as on Windows 11 controls.
+const FOCUS_STROKE: f32 = 2.0;
+const FOCUS_RADIUS: f32 = 4.0;
+/// Room kept above and below a link Tab scrolls into view.
+const FOCUS_MARGIN: f32 = 12.0;
 
 // Durations, in ms.
 pub const SHOW_MS: u64 = 340;
@@ -522,6 +527,11 @@ struct Content {
     visual: SpriteVisual,
     brush: CompositionSurfaceBrush,
     links: Vec<Link>,
+    /// Rings the link Tab moved to; inside `visual`, so it scrolls with it.
+    focus: ShapeVisual,
+    focus_brush: CompositionColorBrush,
+    /// The first of the focused link's rectangles in `links`.
+    focused: Option<usize>,
 }
 
 impl Content {
@@ -531,12 +541,34 @@ impl Content {
         card.Children()?.InsertAtTop(&host)?;
         let (visual, brush) = text_sprite(c)?;
         host.Children()?.InsertAtTop(&visual)?;
+        let focus = c.CreateShapeVisual()?;
+        focus.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
+        visual.Children()?.InsertAtTop(&focus)?;
         Ok(Content {
             host,
             visual,
             brush,
             links: Vec::new(),
+            focus,
+            focus_brush: c.CreateColorBrush()?,
+            focused: None,
         })
+    }
+
+    /// The rectangles of the link starting at `start`: more than one when
+    /// a synonym wraps.
+    fn rects(&self, start: usize) -> impl Iterator<Item = &Link> {
+        let target = &self.links[start].target;
+        self.links[start..]
+            .iter()
+            .take_while(move |l| &l.target == target)
+    }
+
+    /// Where each link starts in `links`, in reading order.
+    fn stops(&self) -> Vec<usize> {
+        (0..self.links.len())
+            .filter(|&i| i == 0 || self.links[i - 1].target != self.links[i].target)
+            .collect()
     }
 }
 
@@ -1057,7 +1089,15 @@ impl Popup {
         let previous_indent = std::mem::replace(&mut self.header_indent, indent);
         self.header_h = header_h;
         self.body_h = body_h;
+        // A refinement keeps the reader's place, and so the focused link.
+        let kept = match transition {
+            Transition::Refine => self.focused_link().cloned(),
+            _ => None,
+        };
         self.content.links = body_layout.links.clone();
+        let links = &self.content.links;
+        let focused = kept.and_then(|t| links.iter().position(|l| l.target == t));
+        self.focus_link(focused)?;
 
         // Header: on a refinement, cross-fade from the old rendering so only
         // what changed (typically the pronunciation) appears to fade in.
@@ -1302,12 +1342,17 @@ impl Popup {
         if max <= 0.0 {
             return Ok(());
         }
+        let step = -(wheel_delta as f32 / 120.0) * 56.0 * self.scale;
+        self.scroll_to((self.scroll + step).clamp(0.0, max))
+    }
+
+    /// Scrolls the body smoothly to `to`, in pixels from the top.
+    fn scroll_to(&mut self, to: f32) -> Result<()> {
         // Start from where the content is on screen right now, not from the
         // previous target: restarting from a stale value is what made
         // scrolling feel like it lagged behind the wheel.
         let from = self.visible_scroll();
-        let step = -(wheel_delta as f32 / 120.0) * 56.0 * self.scale;
-        self.scroll = (self.scroll + step).clamp(0.0, max);
+        self.scroll = to;
         self.scroll_anim = Some(ScrollAnim {
             from,
             started: Instant::now(),
@@ -1354,6 +1399,85 @@ impl Popup {
             .iter()
             .find(|l| bx >= l.x && bx < l.x + l.width && by >= l.y && by < l.y + l.height)
             .map(|l| &l.target)
+    }
+
+    /// Whether the body has links to Tab through.
+    pub fn has_links(&self) -> bool {
+        !self.content.links.is_empty()
+    }
+
+    /// The link Tab moved to, if any.
+    pub fn focused_link(&self) -> Option<&Target> {
+        self.content.focused.map(|i| &self.content.links[i].target)
+    }
+
+    /// Moves the keyboard focus to the next link, or the previous one,
+    /// going round from the last to the first, and scrolls it into view.
+    pub fn step_link(&mut self, forward: bool) -> Result<()> {
+        let stops = self.content.stops();
+        if stops.is_empty() {
+            return Ok(());
+        }
+        let n = stops.len();
+        let at = self
+            .content
+            .focused
+            .and_then(|f| stops.iter().position(|&s| s == f));
+        let next = match (at, forward) {
+            (None, true) => 0,
+            (None, false) => n - 1,
+            (Some(i), true) => (i + 1) % n,
+            (Some(i), false) => (i + n - 1) % n,
+        };
+        self.focus_link(Some(stops[next]))?;
+        self.scroll_into_view(stops[next])
+    }
+
+    /// Rings the link starting at `start` in the body's links, or none.
+    fn focus_link(&mut self, start: Option<usize>) -> Result<()> {
+        let content = &mut self.content;
+        content.focused = start;
+        let shapes = content.focus.Shapes()?;
+        shapes.Clear()?;
+        let Some(start) = start else {
+            return Ok(());
+        };
+        let (c, s) = (&self.anim.compositor, self.scale);
+        for l in content.rects(start) {
+            let geometry = c.CreateRoundedRectangleGeometry()?;
+            geometry.SetOffset(v2((l.x * s).round(), (l.y * s).round()))?;
+            geometry.SetSize(v2((l.width * s).round(), (l.height * s).round()))?;
+            geometry.SetCornerRadius(v2(FOCUS_RADIUS * s, FOCUS_RADIUS * s))?;
+            let shape = c.CreateSpriteShapeWithGeometry(&geometry)?;
+            shape.SetStrokeBrush(&content.focus_brush)?;
+            shape.SetStrokeThickness((FOCUS_STROKE * s).round())?;
+            shapes.Append(&shape)?;
+        }
+        Ok(())
+    }
+
+    /// Scrolls the body just enough to show the link starting at `start`.
+    fn scroll_into_view(&mut self, start: usize) -> Result<()> {
+        let max = self.max_scroll();
+        if max <= 0.0 {
+            return Ok(());
+        }
+        let (mut top, mut bottom) = (f32::MAX, f32::MIN);
+        for l in self.content.rects(start) {
+            top = top.min(l.y);
+            bottom = bottom.max(l.y + l.height);
+        }
+        let s = self.scale;
+        let (top, bottom) = ((top - FOCUS_MARGIN) * s, (bottom + FOCUS_MARGIN) * s);
+        let view = self.card_h - self.header_h;
+        let to = if top < self.scroll {
+            top
+        } else if bottom > self.scroll + view {
+            bottom - view
+        } else {
+            return Ok(());
+        };
+        self.scroll_to(to.clamp(0.0, max))
     }
 
     /// The card's bounds in screen pixels.
@@ -1473,6 +1597,7 @@ impl Popup {
     /// showed first and resizes it smoothly; otherwise it's about to appear.
     fn enter_search(&mut self, title: &str, placeholder: &str, in_place: bool) -> Result<()> {
         self.set_back(false)?;
+        self.focus_link(None)?;
         self.header_indent = 0.0;
         let anim = &self.anim;
         let shown: [Visual; 4] = [
@@ -1543,6 +1668,7 @@ impl Popup {
         let t = self.theme;
         self.frame.apply_theme(&self.renderer, &t, self.scale)?;
         self.loader.brush.SetColor(t.accent)?;
+        self.content.focus_brush.SetColor(t.focus())?;
         self.back.apply_theme(&self.renderer, &t, self.scale)?;
         self.scroll_chrome.apply_theme(&t)
     }

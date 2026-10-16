@@ -71,6 +71,15 @@ impl Theme {
         }
     }
 
+    /// The ring around what the keyboard is on, as on Windows 11 controls.
+    pub fn focus(&self) -> Color {
+        if self.dark {
+            rgb(0xFF, 0xFF, 0xFF)
+        } else {
+            argb(0xE4, 0x00, 0x00, 0x00)
+        }
+    }
+
     /// The search field's background, as on a focused Windows 11 text box.
     pub fn field(&self) -> Color {
         if self.dark {
