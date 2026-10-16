@@ -24,6 +24,15 @@ pub enum Ink {
     Secondary,
     Tertiary,
     Accent,
+    /// Says something went wrong.
+    Critical,
+}
+
+/// Where a line of text sits in the width it's given.
+#[derive(Clone, Copy)]
+pub enum Align {
+    Center,
+    Right,
 }
 
 enum Item {
@@ -150,6 +159,14 @@ pub enum Face {
     Title,
     /// What's typed in the search box.
     Query,
+    /// The settings window's heading.
+    Heading,
+    /// A setting's name.
+    Setting,
+    /// A number shown by a setting.
+    Value,
+    /// A small symbol, such as the close button's cross.
+    Chrome,
 }
 
 /// What the body of the card shows.
@@ -185,6 +202,10 @@ struct Formats {
     /// [`EXTERNAL_ICON`], sized for the footer.
     external: IDWriteTextFormat,
     button: IDWriteTextFormat,
+    heading: IDWriteTextFormat,
+    setting: IDWriteTextFormat,
+    value: IDWriteTextFormat,
+    chrome: IDWriteTextFormat,
 }
 
 pub struct Renderer {
@@ -392,6 +413,10 @@ impl Renderer {
             Face::Button => &self.formats.button,
             Face::Title => &self.formats.title,
             Face::Query => &self.formats.query,
+            Face::Heading => &self.formats.heading,
+            Face::Setting => &self.formats.setting,
+            Face::Value => &self.formats.value,
+            Face::Chrome => &self.formats.chrome,
         };
         let mut out = Stack::default();
         let (_, height) = out.text(self.text(text, format, width)?, 0.0, ink);
@@ -401,6 +426,125 @@ impl Renderer {
             height,
             links: Vec::new(),
         })
+    }
+
+    /// Like [`Renderer::layout_line`], `align`ed in `width`.
+    pub fn layout_aligned(
+        &self,
+        text: &str,
+        face: Face,
+        ink: Ink,
+        width: f32,
+        align: Align,
+    ) -> Result<Layout> {
+        let layout = self.layout_line(text, face, ink, width)?;
+        if let Some(Item::Text { layout: line, .. }) = layout.items.first() {
+            let align = match align {
+                Align::Center => DWRITE_TEXT_ALIGNMENT_CENTER,
+                Align::Right => DWRITE_TEXT_ALIGNMENT_TRAILING,
+            };
+            unsafe { line.SetTextAlignment(align)? };
+        }
+        Ok(layout)
+    }
+
+    /// A small heading in spaced capitals, like a part of speech.
+    pub fn layout_label(&self, text: &str, ink: Ink, width: f32) -> Result<Layout> {
+        let mut out = Stack::default();
+        let (_, height) = out.text(self.spaced_caps(text, width)?, 0.0, ink);
+        Ok(Layout {
+            items: out.items,
+            width,
+            height,
+            links: Vec::new(),
+        })
+    }
+
+    /// The keys of a shortcut, each on its own cap: "[Ctrl] [Alt] [D]".
+    pub fn layout_caps(&self, keys: &[&str]) -> Result<Layout> {
+        let (pad_x, pad_y, gap) = (8.0, 3.0, 4.0);
+        let mut out = Stack {
+            y: pad_y,
+            ..Default::default()
+        };
+        let (mut x, mut height) = (0.0, 0.0f32);
+        for (i, key) in keys.iter().enumerate() {
+            if i > 0 {
+                x += gap;
+            }
+            let name = self.text(key, &self.formats.menu, 200.0)?;
+            let (w, h, _) = metrics(&name);
+            // At least square, so one-letter keys don't look pinched.
+            let cap_h = h + 2.0 * pad_y;
+            let cap_w = (w + 2.0 * pad_x).max(cap_h);
+            out.items.push(Item::Key {
+                x,
+                y: 0.0,
+                width: cap_w,
+                height: cap_h,
+            });
+            out.text(name, x + (cap_w - w) / 2.0, Ink::Primary);
+            x += cap_w;
+            height = height.max(cap_h);
+        }
+        Ok(Layout {
+            items: out.items,
+            width: x.max(1.0),
+            height,
+            links: Vec::new(),
+        })
+    }
+
+    /// A link that opens outside WinDict, as in the card's footer.
+    pub fn layout_link(&self, text: &str) -> Result<Layout> {
+        let mut out = Stack::default();
+        let (width, height) = self.external_link(&mut out, text, 0.0, 400.0)?;
+        Ok(Layout {
+            items: out.items,
+            width: width.ceil() + 1.0,
+            height,
+            links: Vec::new(),
+        })
+    }
+
+    /// `text` in the accent color, underlined, then the icon for links that
+    /// open the browser. Returns its width and height.
+    fn external_link(&self, out: &mut Stack, text: &str, x: f32, width: f32) -> Result<(f32, f32)> {
+        let label = self.text(text, &self.formats.footer, width)?;
+        let all = DWRITE_TEXT_RANGE {
+            startPosition: 0,
+            length: u32::MAX,
+        };
+        unsafe {
+            let _ = label.SetUnderline(true, all);
+        }
+        let (w, h) = out.text(label, x, Ink::Accent);
+        let gap = 3.0;
+        let icon = self.text(EXTERNAL_ICON, &self.formats.external, width)?;
+        let (icon_w, icon_h, _) = metrics(&icon);
+        out.items.push(Item::Text {
+            layout: icon,
+            x: x + w + gap,
+            y: out.y + (h - icon_h) / 2.0,
+            ink: Ink::Accent,
+            accents: Vec::new(),
+        });
+        Ok((w + gap + icon_w, h))
+    }
+
+    /// `text` in the small spaced capitals of a part of speech.
+    fn spaced_caps(&self, text: &str, width: f32) -> Result<IDWriteTextLayout> {
+        let caps = self.text(&text.to_uppercase(), &self.formats.part_of_speech, width)?;
+        if let Ok(caps1) = caps.cast::<IDWriteTextLayout1>() {
+            let range = DWRITE_TEXT_RANGE {
+                startPosition: 0,
+                length: u32::MAX,
+            };
+            unsafe {
+                let _ = caps1.SetCharacterSpacing(0.0, 0.9, 0.0, range);
+            }
+        }
+        Ok(caps)
     }
 
     pub fn layout_body(&self, body: &Body, width: f32, bottom_padding: f32) -> Result<Layout> {
@@ -457,20 +601,7 @@ impl Renderer {
                 });
                 out.y += 14.0;
             }
-            let pos = self.text(
-                &meaning.part_of_speech.to_uppercase(),
-                &self.formats.part_of_speech,
-                width,
-            )?;
-            if let Ok(pos1) = pos.cast::<IDWriteTextLayout1>() {
-                let range = DWRITE_TEXT_RANGE {
-                    startPosition: 0,
-                    length: u32::MAX,
-                };
-                unsafe {
-                    let _ = pos1.SetCharacterSpacing(0.0, 0.9, 0.0, range);
-                }
-            }
+            let pos = self.spaced_caps(&meaning.part_of_speech, width)?;
             let (_, h) = out.text(pos, 0.0, Ink::Accent);
             out.y += h + 6.0;
 
@@ -563,39 +694,24 @@ impl Renderer {
                 x += w;
                 line_h = line_h.max(h);
             }
-            let label = self.text(source, &self.formats.footer, width)?;
-            let url = dictionary::source_url(source, &def.word);
-            if url.is_some() {
-                let all = DWRITE_TEXT_RANGE {
-                    startPosition: 0,
-                    length: u32::MAX,
-                };
-                unsafe {
-                    let _ = label.SetUnderline(true, all);
+            let (w, h) = match dictionary::source_url(source, &def.word) {
+                None => {
+                    let label = self.text(source, &self.formats.footer, width)?;
+                    out.text(label, x, Ink::Accent)
                 }
-            }
-            let (mut w, h) = out.text(label, x, Ink::Accent);
-            if let Some(url) = url {
-                let gap = 3.0;
-                let icon = self.text(EXTERNAL_ICON, &self.formats.external, width)?;
-                let (icon_w, icon_h, _) = metrics(&icon);
-                out.items.push(Item::Text {
-                    layout: icon,
-                    x: x + w + gap,
-                    y: out.y + (h - icon_h) / 2.0,
-                    ink: Ink::Accent,
-                    accents: Vec::new(),
-                });
-                w += gap + icon_w;
-                // A little slack around small text makes it easier to hit.
-                out.links.push(Link {
-                    x: x - 4.0,
-                    y: out.y - 4.0,
-                    width: w + 8.0,
-                    height: h + 8.0,
-                    target: Target::Url(url),
-                });
-            }
+                Some(url) => {
+                    let (w, h) = self.external_link(out, source, x, width)?;
+                    // A little slack around small text makes it easier to hit.
+                    out.links.push(Link {
+                        x: x - 4.0,
+                        y: out.y - 4.0,
+                        width: w + 8.0,
+                        height: h + 8.0,
+                        target: Target::Url(url),
+                    });
+                    (w, h)
+                }
+            };
             x += w;
             line_h = line_h.max(h);
         }
@@ -619,6 +735,7 @@ impl Renderer {
             let secondary = brush(theme.text_secondary())?;
             let tertiary = brush(theme.text_tertiary())?;
             let accent = brush(theme.accent_d2d())?;
+            let critical = brush(theme.critical())?;
             let divider = brush(theme.divider())?;
             let key = brush(theme.key())?;
             for item in &layout.items {
@@ -638,6 +755,7 @@ impl Renderer {
                             Ink::Secondary => &secondary,
                             Ink::Tertiary => &tertiary,
                             Ink::Accent => &accent,
+                            Ink::Critical => &critical,
                         };
                         dc.DrawTextLayout(
                             Vector2 { X: *x, Y: *y },
@@ -885,6 +1003,12 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
         0.0,
     )?;
     unsafe { suggestion.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)? };
+    let setting = make(&text, 14.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
+    unsafe { setting.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)? };
+    let value = make(&text, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?;
+    unsafe { value.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)? };
+    let chrome = make(&symbols, 10.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
+    unsafe { chrome.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)? };
     Ok(Formats {
         word: make(
             &display,
@@ -913,6 +1037,10 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
         icon,
         external,
         button,
+        heading: make(&display, 20.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?,
+        setting,
+        value,
+        chrome,
     })
 }
 

@@ -89,6 +89,86 @@ impl Theme {
         }
     }
 
+    /// A group of settings, a step up from the card it's on.
+    pub fn group(&self) -> Color {
+        if self.dark {
+            argb(0x0D, 0xFF, 0xFF, 0xFF)
+        } else {
+            argb(0xB3, 0xFF, 0xFF, 0xFF)
+        }
+    }
+
+    pub fn group_stroke(&self) -> Color {
+        if self.dark {
+            argb(0x33, 0x00, 0x00, 0x00)
+        } else {
+            argb(0x12, 0x00, 0x00, 0x00)
+        }
+    }
+
+    /// The line between two settings in a group.
+    pub fn separator(&self) -> Color {
+        if self.dark {
+            argb(0x15, 0xFF, 0xFF, 0xFF)
+        } else {
+            argb(0x0F, 0x00, 0x00, 0x00)
+        }
+    }
+
+    /// A button's face, as on Windows 11 controls.
+    pub fn control(&self) -> Color {
+        if self.dark {
+            argb(0x0F, 0xFF, 0xFF, 0xFF)
+        } else {
+            argb(0xB3, 0xFF, 0xFF, 0xFF)
+        }
+    }
+
+    pub fn control_stroke(&self) -> Color {
+        if self.dark {
+            argb(0x12, 0xFF, 0xFF, 0xFF)
+        } else {
+            argb(0x17, 0x00, 0x00, 0x00)
+        }
+    }
+
+    /// The groove behind a switch that's off, or a choice of options.
+    pub fn sunken(&self) -> Color {
+        if self.dark {
+            argb(0x1F, 0x00, 0x00, 0x00)
+        } else {
+            argb(0x0A, 0x00, 0x00, 0x00)
+        }
+    }
+
+    /// The chosen one of a choice of options, raised out of the groove.
+    pub fn raised(&self) -> Color {
+        if self.dark {
+            argb(0x1F, 0xFF, 0xFF, 0xFF)
+        } else {
+            rgb(0xFF, 0xFF, 0xFF)
+        }
+    }
+
+    /// The outline of a switch that's off.
+    pub fn strong_stroke(&self) -> Color {
+        if self.dark {
+            argb(0x8B, 0xFF, 0xFF, 0xFF)
+        } else {
+            argb(0x72, 0x00, 0x00, 0x00)
+        }
+    }
+
+    /// A switch's knob, off and on.
+    pub fn knob(&self, on: bool) -> Color {
+        match (on, self.dark) {
+            (false, true) => argb(0xC5, 0xFF, 0xFF, 0xFF),
+            (false, false) => argb(0x9E, 0x00, 0x00, 0x00),
+            (true, true) => rgb(0x00, 0x00, 0x00),
+            (true, false) => rgb(0xFF, 0xFF, 0xFF),
+        }
+    }
+
     pub fn shadow_opacity(&self) -> f32 {
         if self.dark {
             0.55
@@ -120,6 +200,15 @@ impl Theme {
 
     pub fn accent_d2d(&self) -> D2D1_COLOR_F {
         to_d2d(self.accent)
+    }
+
+    /// Text that says something went wrong.
+    pub fn critical(&self) -> D2D1_COLOR_F {
+        to_d2d(if self.dark {
+            rgb(0xFF, 0x99, 0xA4)
+        } else {
+            rgb(0xC4, 0x2B, 0x1C)
+        })
     }
 
     fn ink(&self, a: f32) -> D2D1_COLOR_F {

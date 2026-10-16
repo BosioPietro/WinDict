@@ -83,7 +83,7 @@ fn entries(hotkey: &str, autostart: bool) -> Vec<Entry> {
         },
         Entry::separator(),
         Entry::command(tray::ID_AUTOSTART, "Start with Windows", autostart),
-        Entry::command(tray::ID_SETTINGS, "Edit settings\u{2026}", false),
+        Entry::command(tray::ID_SETTINGS, "Settings\u{2026}", false),
         Entry::command(tray::ID_RELOAD, "Reload settings", false),
         Entry::separator(),
         Entry::command(tray::ID_QUIT, "Quit", false),

@@ -18,7 +18,7 @@ use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
-use crate::render::{Body, Face, Ink, Link, Renderer, Target, WORD_SIZE};
+use crate::render::{Body, Face, Ink, Layout, Link, Renderer, Target, WORD_SIZE};
 use crate::searchbox::SearchBox;
 use crate::theme::Theme;
 
@@ -63,6 +63,9 @@ const SCROLL_MS: u64 = 140;
 const MAKE_WAY_MS: u64 = 120;
 /// Ease-out curve for scrolling: quick to respond, soft to settle.
 const SCROLL_EASE: (f32, f32, f32, f32) = (0.25, 0.8, 0.4, 1.0);
+/// Ease-out that runs a touch past the end and settles back, like a spring.
+const OVERSHOOT_EASE: (f32, f32, f32, f32) = (0.3, 1.35, 0.55, 1.0);
+const SHAKE_MS: u64 = 400;
 
 struct ScrollAnim {
     from: f32,
@@ -255,6 +258,38 @@ pub(crate) fn text_sprite(c: &Compositor) -> Result<(SpriteVisual, CompositionSu
     Ok((sprite, brush))
 }
 
+/// A line of text and the brush that shows it.
+pub(crate) struct Text {
+    pub(crate) visual: SpriteVisual,
+    pub(crate) brush: CompositionSurfaceBrush,
+}
+
+impl Text {
+    pub(crate) fn new(c: &Compositor, parent: &ContainerVisual) -> Result<Text> {
+        let (visual, brush) = text_sprite(c)?;
+        parent.Children()?.InsertAtTop(&visual)?;
+        Ok(Text { visual, brush })
+    }
+
+    /// Shows `layout` drawn at `s` pixels per DIP; returns its size in pixels.
+    pub(crate) fn show(
+        &self,
+        renderer: &Renderer,
+        layout: &Layout,
+        s: f32,
+        theme: &Theme,
+    ) -> Result<Vector2> {
+        self.brush.SetSurface(&renderer.draw(layout, s, theme)?)?;
+        let size = v2((layout.width * s).ceil(), (layout.height * s).ceil());
+        self.visual.SetSize(size)?;
+        Ok(size)
+    }
+
+    pub(crate) fn clear(&self) {
+        let _ = self.brush.SetSurface(None::<&ICompositionSurface>);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Parts of the card
 
@@ -265,13 +300,15 @@ pub(crate) struct Animator {
     pub(crate) accelerate: CompositionEasingFunction,
     scroll_ease: CompositionEasingFunction,
     /// Ease-in-out, for fades that should be seen happening.
-    fade: CompositionEasingFunction,
+    pub(crate) fade: CompositionEasingFunction,
+    /// For things that move into place with a little bounce.
+    pub(crate) overshoot: CompositionEasingFunction,
 }
 
 impl Animator {
     pub(crate) fn new(compositor: Compositor) -> Result<Animator> {
         let c = &compositor;
-        let decelerate = c
+        let decelerate: CompositionEasingFunction = c
             .CreateCubicBezierEasingFunction(v2(0.1, 0.9), v2(0.2, 1.0))?
             .cast()?;
         let (x1, y1, x2, y2) = SCROLL_EASE;
@@ -284,12 +321,20 @@ impl Animator {
         let fade = c
             .CreateCubicBezierEasingFunction(v2(0.4, 0.0), v2(0.6, 1.0))?
             .cast()?;
+        let (x1, y1, x2, y2) = OVERSHOOT_EASE;
+        // Should the system refuse a curve that leaves 0..1, settle softly instead.
+        let overshoot: CompositionEasingFunction =
+            match c.CreateCubicBezierEasingFunction(v2(x1, y1), v2(x2, y2)) {
+                Ok(curve) => curve.cast()?,
+                Err(_) => decelerate.clone(),
+            };
         Ok(Animator {
             compositor,
             decelerate,
             accelerate,
             scroll_ease,
             fade,
+            overshoot,
         })
     }
 
@@ -313,7 +358,13 @@ impl Animator {
             .StartAnimation(&HSTRING::from(property), &anim)
     }
 
-    fn vector2(&self, target: &impl Interface, property: &str, to: Vector2, ms: u64) -> Result<()> {
+    pub(crate) fn vector2(
+        &self,
+        target: &impl Interface,
+        property: &str,
+        to: Vector2,
+        ms: u64,
+    ) -> Result<()> {
         let anim = self.compositor.CreateVector2KeyFrameAnimation()?;
         anim.InsertKeyFrameWithEasingFunction(1.0, to, &self.decelerate)?;
         anim.SetDuration(ts(ms))?;
@@ -340,6 +391,45 @@ impl Animator {
         target
             .cast::<CompositionObject>()?
             .StartAnimation(&HSTRING::from(property), &anim)
+    }
+
+    /// Fades a brush from `from` to `to`.
+    pub(crate) fn color(
+        &self,
+        brush: &CompositionColorBrush,
+        from: windows::UI::Color,
+        to: windows::UI::Color,
+        ms: u64,
+    ) -> Result<()> {
+        let anim = self.compositor.CreateColorKeyFrameAnimation()?;
+        anim.SetInterpolationColorSpace(CompositionColorSpace::Rgb)?;
+        anim.InsertKeyFrame(0.0, from)?;
+        anim.InsertKeyFrameWithEasingFunction(1.0, to, &self.fade)?;
+        anim.SetDuration(ts(ms))?;
+        brush.SetColor(to)?;
+        brush.StartAnimation(&HSTRING::from("Color"), &anim)
+    }
+
+    /// Shakes `visual`, which rests at `at`, from side to side: a sign that
+    /// what was asked for can't be done. `s` is pixels per DIP.
+    pub(crate) fn shake(&self, visual: &impl Interface, at: Vector3, s: f32) -> Result<()> {
+        let a = self.compositor.CreateVector3KeyFrameAnimation()?;
+        let swings = [
+            (0.0, 0.0),
+            (0.12, -8.0),
+            (0.28, 7.0),
+            (0.44, -5.0),
+            (0.6, 3.0),
+            (0.78, -1.0),
+            (1.0, 0.0),
+        ];
+        for (t, dx) in swings {
+            a.InsertKeyFrame(t, v3(at.X + dx * s, at.Y))?;
+        }
+        a.SetDuration(ts(SHAKE_MS))?;
+        visual
+            .cast::<CompositionObject>()?
+            .StartAnimation(&HSTRING::from("Offset"), &a)
     }
 
     pub(crate) fn stop(target: &impl Interface, properties: &[&str]) {
@@ -441,6 +531,21 @@ impl Frame {
             .SetCornerRadius(v2(RADIUS * s - 0.5, RADIUS * s - 0.5))?;
         self.border_geometry.SetOffset(v2(0.5, 0.5))?;
         Ok(())
+    }
+
+    /// Like [`Frame::apply_theme`], with the card's colors fading over `ms`.
+    pub(crate) fn fade_theme(
+        &mut self,
+        anim: &Animator,
+        renderer: &Renderer,
+        t: &Theme,
+        s: f32,
+        ms: u64,
+    ) -> Result<()> {
+        let (tint, border) = (self.tint.Color()?, self.border_brush.Color()?);
+        self.apply_theme(renderer, t, s)?;
+        anim.color(&self.tint, tint, t.tint(), ms)?;
+        anim.color(&self.border_brush, border, t.border(), ms)
     }
 
     /// Sizes the card to `w` × `h` pixels with its top left at `offset`.

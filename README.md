@@ -43,8 +43,12 @@ isn't commercially signed: choose **More info**, then **Run anyway**.
 
 ## Settings
 
-Stored in `%APPDATA%\WinDict\config.json`; use **Reload settings** in the tray
-menu after editing.
+Click the tray icon, then **Settings…**. Changes apply as you make them. To
+change the shortcut, click it and press the new one; Esc keeps the old one.
+
+The settings are stored in `%APPDATA%\WinDict\config.json`. To edit the file
+by hand, use **Open config.json** at the bottom of the settings window, then
+**Reload settings** in the tray menu.
 
 | Setting | Default | |
 | --- | --- | --- |

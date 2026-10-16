@@ -14,6 +14,7 @@ mod popup;
 mod render;
 mod searchbox;
 mod selection;
+mod settings;
 mod theme;
 mod tray;
 

@@ -8,8 +8,8 @@ use windows::core::{Interface, Result, HSTRING};
 use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
-use crate::popup::{text_sprite, ts, v2, v3, Animator, CARD_W, PAD_TOP, PAD_X, RESIZE_MS};
-use crate::render::{Face, Ink, Layout, Renderer, QUERY_SIZE, SUGGESTION_SIZE};
+use crate::popup::{ts, v2, v3, Animator, Text, CARD_W, PAD_TOP, PAD_X, RESIZE_MS};
+use crate::render::{Face, Ink, Renderer, QUERY_SIZE, SUGGESTION_SIZE};
 use crate::theme::Theme;
 
 // Geometry, in DIPs.
@@ -44,37 +44,10 @@ const CARET_BLINK_MS: u64 = 1060;
 const CARET_GLIDE_MS: u64 = 90;
 const PLACEHOLDER_MS: u64 = 120;
 const TITLE_MS: u64 = 200;
-const SHAKE_MS: u64 = 400;
 const LEAVE_MS: u64 = 120;
 const ROW_MS: u64 = 220;
 const ROW_STAGGER_MS: u64 = 25;
 const HIGHLIGHT_MOVE_MS: u64 = 150;
-
-/// A line of text and the brush that shows it.
-struct Text {
-    visual: SpriteVisual,
-    brush: CompositionSurfaceBrush,
-}
-
-impl Text {
-    fn new(c: &Compositor, parent: &ContainerVisual) -> Result<Text> {
-        let (visual, brush) = text_sprite(c)?;
-        parent.Children()?.InsertAtTop(&visual)?;
-        Ok(Text { visual, brush })
-    }
-
-    /// Shows `layout` drawn at `s` pixels per DIP; returns its size in pixels.
-    fn show(&self, renderer: &Renderer, layout: &Layout, s: f32, theme: &Theme) -> Result<Vector2> {
-        self.brush.SetSurface(&renderer.draw(layout, s, theme)?)?;
-        let size = v2((layout.width * s).ceil(), (layout.height * s).ceil());
-        self.visual.SetSize(size)?;
-        Ok(size)
-    }
-
-    fn clear(&self) {
-        let _ = self.brush.SetSurface(None::<&ICompositionSurface>);
-    }
-}
 
 pub(crate) struct SearchBox {
     /// Holds everything; hidden while the card shows a definition.
@@ -537,22 +510,7 @@ impl SearchBox {
 
     /// Shakes the field, as a sign that what's typed can't be looked up.
     pub(crate) fn shake(&self, anim: &Animator) -> Result<()> {
-        let (s, at) = (self.scale, self.field_at);
-        let a = anim.compositor.CreateVector3KeyFrameAnimation()?;
-        let swings = [
-            (0.0, 0.0),
-            (0.12, -8.0),
-            (0.28, 7.0),
-            (0.44, -5.0),
-            (0.6, 3.0),
-            (0.78, -1.0),
-            (1.0, 0.0),
-        ];
-        for (t, dx) in swings {
-            a.InsertKeyFrame(t, v3(at.X + dx * s, at.Y))?;
-        }
-        a.SetDuration(ts(SHAKE_MS))?;
-        self.field.StartAnimation(&HSTRING::from("Offset"), &a)
+        anim.shake(&self.field, self.field_at, self.scale)
     }
 
     /// Fades the box away. Returns where the word being looked up sits in

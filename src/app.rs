@@ -27,6 +27,7 @@ use crate::popup::{self, Popup, Transition};
 use crate::render::{Body, Target};
 use crate::searchbox::MAX_SUGGESTIONS;
 use crate::selection::{self, Capturer, Selection};
+use crate::settings::{self, Change, Settings, Values};
 use crate::theme::Theme;
 use crate::tray::{self, Tray};
 
@@ -38,6 +39,7 @@ const WM_APP_WHEEL: u32 = WM_APP + 5;
 const WM_APP_CAPTURE: u32 = WM_APP + 6;
 const WM_APP_CLICK: u32 = WM_APP + 7;
 const WM_APP_BACK: u32 = WM_APP + 8;
+const WM_APP_CLOSE_SETTINGS: u32 = WM_APP + 9;
 /// Not in the windows crate's message set (it lives with the common controls).
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
@@ -56,6 +58,7 @@ const TIMER_TEARDOWN: usize = 4;
 const TIMER_COVERED: usize = 5;
 const TIMER_MENU_HIDE: usize = 6;
 const TIMER_MENU_TEARDOWN: usize = 7;
+const TIMER_SETTINGS_HIDE: usize = 8;
 
 /// Free the GPU resources after this long without a lookup.
 const IDLE_TEARDOWN_MS: u32 = 3 * 60 * 1000;
@@ -138,6 +141,8 @@ pub struct App {
     compositor: Compositor,
     popup: Option<Popup>,
     menu: Option<Menu>,
+    /// The settings window, while it's open.
+    settings: Option<Settings>,
     /// When the tray menu last started closing (GetTickCount64).
     menu_closed_at: u64,
     /// The press on the tray icon that closed the menu; its release mustn't reopen it.
@@ -199,6 +204,16 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             ..Default::default()
         };
         RegisterClassW(&menu_class);
+        let settings_class = WNDCLASSW {
+            lpfnWndProc: Some(settings_proc),
+            hInstance: instance,
+            hIcon: LoadIconW(Some(instance), PCWSTR(tray::ICON_ID as usize as *const u16))
+                .unwrap_or_default(),
+            hCursor: LoadCursorW(None, IDC_ARROW)?,
+            lpszClassName: w!("WinDict.Settings"),
+            ..Default::default()
+        };
+        RegisterClassW(&settings_class);
 
         // A hidden top-level window (not message-only: it must receive the
         // TaskbarCreated broadcast).
@@ -257,6 +272,7 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             compositor,
             popup: None,
             menu: None,
+            settings: None,
             menu_closed_at: 0,
             swallow_tray_release: false,
             tray,
@@ -322,39 +338,34 @@ fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
 }
 
 impl App {
+    /// Registers the shortcut, saying in a notification if it can't be.
     fn register_hotkey(&mut self) {
+        match self.bind_hotkey() {
+            Ok(()) => {}
+            Err(Unbound::Taken) => self.tray.notify(
+                "Shortcut unavailable",
+                &format!(
+                    "{} is already used by another app. Choose another one in Settings.",
+                    self.config.hotkey
+                ),
+            ),
+            Err(Unbound::Invalid(e)) => self.tray.notify("Invalid shortcut", &e),
+        }
+    }
+
+    fn bind_hotkey(&mut self) -> Result<(), Unbound> {
         unsafe {
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_LOOKUP);
         }
-        match hotkey::parse(&self.config.hotkey) {
-            Ok(hk) => {
-                self.hotkey_ok = unsafe {
-                    RegisterHotKey(
-                        Some(self.hwnd),
-                        HOTKEY_LOOKUP,
-                        hk.modifiers | MOD_NOREPEAT,
-                        hk.vk,
-                    )
-                }
-                .is_ok();
-                if self.hotkey_ok {
-                    self.tray
-                        .set_tip(&format!("WinDict - {}", self.config.hotkey));
-                } else {
-                    self.tray.notify(
-                        "Shortcut unavailable",
-                        &format!(
-                            "{} is already used by another app. Choose another one in Settings.",
-                            self.config.hotkey
-                        ),
-                    );
-                }
-            }
-            Err(e) => {
-                self.hotkey_ok = false;
-                self.tray.notify("Invalid shortcut", &e);
-            }
-        }
+        self.hotkey_ok = false;
+        let hk = hotkey::parse(&self.config.hotkey).map_err(Unbound::Invalid)?;
+        let modifiers = hk.modifiers | MOD_NOREPEAT;
+        unsafe { RegisterHotKey(Some(self.hwnd), HOTKEY_LOOKUP, modifiers, hk.vk) }
+            .map_err(|_| Unbound::Taken)?;
+        self.hotkey_ok = true;
+        self.tray
+            .set_tip(&format!("WinDict - {}", self.config.hotkey));
+        Ok(())
     }
 
     fn theme(&self) -> Theme {
@@ -429,6 +440,40 @@ impl App {
             }
         }
         self.menu.as_mut()
+    }
+
+    fn ensure_settings(&mut self, theme: Theme, values: Values) -> Option<&mut Settings> {
+        if self.settings.is_none() {
+            let created = unsafe {
+                CreateWindowExW(
+                    WS_EX_NOREDIRECTIONBITMAP | WS_EX_APPWINDOW,
+                    w!("WinDict.Settings"),
+                    w!("WinDict Settings"),
+                    WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX,
+                    0,
+                    0,
+                    0,
+                    0,
+                    None,
+                    None,
+                    GetModuleHandleW(None).ok().map(|m| HINSTANCE(m.0)),
+                    None,
+                )
+            };
+            let hwnd = created.ok()?;
+            match Settings::new(hwnd, self.compositor.clone(), theme, values) {
+                Ok(s) => self.settings = Some(s),
+                Err(e) => {
+                    unsafe {
+                        let _ = DestroyWindow(hwnd);
+                    }
+                    self.tray
+                        .notify("WinDict couldn't draw its settings", &e.message());
+                    return None;
+                }
+            }
+        }
+        self.settings.as_mut()
     }
 
     // -----------------------------------------------------------------------
@@ -1100,6 +1145,18 @@ impl App {
                     SetTimer(Some(self.hwnd), TIMER_TEARDOWN, IDLE_TEARDOWN_MS, None);
                 }
             }
+            // Settings are rarely open: the window goes as soon as it's hidden.
+            TIMER_SETTINGS_HIDE if self.settings.as_ref().is_some_and(|s| !s.visible) => {
+                if let Some(mut s) = self.settings.take() {
+                    s.finish_hide();
+                    let hwnd = s.hwnd;
+                    drop(s);
+                    unsafe {
+                        let _ = DestroyWindow(hwnd);
+                    }
+                }
+                trim_working_set();
+            }
             TIMER_TEARDOWN if self.popup.as_ref().is_some_and(|p| !p.visible) => {
                 if let Some(p) = self.popup.take() {
                     let hwnd = p.hwnd;
@@ -1271,8 +1328,11 @@ impl App {
 
     fn on_command(&mut self, command: u32) {
         match command {
-            tray::ID_AUTOSTART => autostart::set(!autostart::is_enabled()),
-            tray::ID_SETTINGS => open_settings(),
+            tray::ID_AUTOSTART => {
+                autostart::set(!autostart::is_enabled());
+                self.refresh_settings();
+            }
+            tray::ID_SETTINGS => self.open_settings(),
             tray::ID_RELOAD => {
                 match config::load() {
                     Ok((config, _)) => self.config = config,
@@ -1284,6 +1344,7 @@ impl App {
                 }
                 self.cache.clear();
                 self.register_hotkey();
+                self.refresh_settings();
                 if self.hotkey_ok {
                     self.tray.notify(
                         "Settings reloaded",
@@ -1298,6 +1359,149 @@ impl App {
             _ => {}
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Settings window
+
+    fn settings_values(&self) -> Values {
+        let c = &self.config;
+        Values {
+            hotkey: c.hotkey.clone(),
+            theme: c.theme,
+            max_definitions: c.max_definitions,
+            max_synonyms: c.max_synonyms,
+            online_lookup: c.online_lookup,
+            use_ui_automation: c.use_ui_automation,
+            autostart: autostart::is_enabled(),
+        }
+    }
+
+    /// Opens the settings window, or brings it back to the front.
+    fn open_settings(&mut self) {
+        if let Some(hwnd) = self.settings.as_ref().filter(|s| s.visible).map(|s| s.hwnd) {
+            unsafe {
+                if IsIconic(hwnd).as_bool() {
+                    let _ = ShowWindow(hwnd, SW_RESTORE);
+                }
+            }
+            selection::take_foreground(hwnd);
+            return;
+        }
+        self.dismiss();
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_SETTINGS_HIDE);
+        }
+        let (theme, values) = (self.theme(), self.settings_values());
+        let Some(settings) = self.ensure_settings(theme, values.clone()) else {
+            return;
+        };
+        if let Err(e) = settings.show(cursor_pos(), theme, values) {
+            self.tray
+                .notify("WinDict couldn't draw its settings", &e.message());
+            return;
+        }
+        selection::take_foreground(settings.hwnd);
+    }
+
+    fn close_settings(&mut self) {
+        let Some(settings) = self.settings.as_mut().filter(|s| s.visible) else {
+            return;
+        };
+        let recording = settings.recording();
+        let _ = settings.begin_hide();
+        // Recording had put the shortcut aside.
+        if recording {
+            self.register_hotkey();
+        }
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_SETTINGS_HIDE, HIDE_DONE_MS, None);
+        }
+    }
+
+    /// The settings changed from elsewhere (the tray menu, or the file): the
+    /// window shows them as they are now.
+    fn refresh_settings(&mut self) {
+        let (theme, values) = (self.theme(), self.settings_values());
+        if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
+            let _ = settings.refresh(theme, values);
+        }
+    }
+
+    /// Runs `f` on the open settings window, and carries out what it asks for.
+    fn in_settings(
+        &mut self,
+        f: impl FnOnce(&mut Settings) -> windows::core::Result<Option<Change>>,
+    ) {
+        let change = self
+            .settings
+            .as_mut()
+            .filter(|s| s.visible)
+            .and_then(|s| f(s).ok().flatten());
+        if let Some(change) = change {
+            self.on_setting(change);
+        }
+    }
+
+    /// Carries out a change made in the settings window, and saves it.
+    fn on_setting(&mut self, change: Change) {
+        match change {
+            Change::Close => return self.close_settings(),
+            Change::OpenConfig => return open_config_file(),
+            Change::Autostart(on) => return autostart::set(on),
+            // The shortcut being replaced mustn't fire as it's pressed to keep it.
+            Change::Recording(true) => unsafe {
+                let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_LOOKUP);
+                return;
+            },
+            Change::Recording(false) => return self.register_hotkey(),
+            Change::Hotkey(hotkey) => {
+                let previous = std::mem::replace(&mut self.config.hotkey, hotkey);
+                if let Err(unbound) = self.bind_hotkey() {
+                    self.config.hotkey = previous;
+                    self.register_hotkey();
+                    let why = match &unbound {
+                        Unbound::Taken => settings::SHORTCUT_TAKEN,
+                        Unbound::Invalid(e) => e,
+                    };
+                    if let Some(settings) = self.settings.as_mut() {
+                        let _ = settings.reject_hotkey(&self.config.hotkey, why);
+                    }
+                    return;
+                }
+            }
+            Change::Theme(mode) => {
+                self.config.theme = mode;
+                let theme = self.theme();
+                if let Some(settings) = self.settings.as_mut() {
+                    let _ = settings.retheme(theme);
+                }
+            }
+            Change::MaxDefinitions(n) => self.config.max_definitions = n,
+            Change::MaxSynonyms(n) => self.config.max_synonyms = n,
+            Change::OnlineLookup(on) => self.config.online_lookup = on,
+            Change::UiAutomation(on) => self.config.use_ui_automation = on,
+        }
+        // Online answers were cut down to the old limits.
+        self.cache.clear();
+        if let Err(e) = config::save(&self.config) {
+            self.tray.notify("Settings not saved", &e);
+        }
+    }
+
+    /// The system's colors changed: the settings window follows them.
+    fn on_colors_changed(&mut self) {
+        let theme = self.theme();
+        if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
+            let _ = settings.retheme(theme);
+        }
+    }
+}
+
+/// Why the shortcut couldn't be registered.
+enum Unbound {
+    Invalid(String),
+    /// Another app has it.
+    Taken,
 }
 
 /// `anchor`, if a card can open next to it: about a line tall, on a screen.
@@ -1347,7 +1551,7 @@ fn anchor_or_centre(anchor: Option<RECT>, window: HWND) -> RECT {
     })
 }
 
-fn open_settings() {
+fn open_config_file() {
     let path = HSTRING::from(config::path().as_os_str());
     unsafe {
         let result = ShellExecuteW(
@@ -1428,6 +1632,10 @@ unsafe extern "system" fn main_proc(
         }
         WM_APP_BACK => {
             with_app(|app| app.back());
+            LRESULT(0)
+        }
+        WM_APP_CLOSE_SETTINGS => {
+            with_app(|app| app.close_settings());
             LRESULT(0)
         }
         WM_TIMER => {
@@ -1607,6 +1815,146 @@ unsafe extern "system" fn menu_proc(
         // We size ourselves for the target monitor's DPI already.
         WM_DPICHANGED => LRESULT(0),
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+unsafe extern "system" fn settings_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    // Mouse messages carry client coordinates (screen ones for WM_NCHITTEST).
+    let (x, y) = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
+    let recording =
+        || with_app(|app| app.settings.as_ref().is_some_and(|s| s.recording())).unwrap_or(false);
+    let default = || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    match msg {
+        // The header drags the window.
+        WM_NCHITTEST => {
+            let hit = default();
+            let mut pt = POINT { x, y };
+            let caption = hit.0 == HTCLIENT as isize
+                && unsafe { ScreenToClient(hwnd, &mut pt).as_bool() }
+                && with_app(|app| {
+                    app.settings
+                        .as_ref()
+                        .is_some_and(|s| s.caption_at(pt.x, pt.y))
+                })
+                .unwrap_or(false);
+            if caption {
+                LRESULT(HTCAPTION as isize)
+            } else {
+                hit
+            }
+        }
+        WM_MOUSEMOVE => {
+            // Ask for WM_MOUSELEAVE, to put out the hover when the pointer goes.
+            let mut track = TRACKMOUSEEVENT {
+                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            };
+            unsafe {
+                let _ = TrackMouseEvent(&mut track);
+            }
+            with_app(|app| app.in_settings(|s| s.hover(Some((x, y))).map(|_| None)));
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            with_app(|app| app.in_settings(|s| s.hover(None).map(|_| None)));
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            unsafe { SetCapture(hwnd) };
+            with_app(|app| app.in_settings(|s| s.press(x, y)));
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            unsafe {
+                let _ = ReleaseCapture();
+            }
+            with_app(|app| app.in_settings(|s| s.release(x, y)));
+            LRESULT(0)
+        }
+        WM_MOUSEWHEEL => {
+            let delta = (wparam.0 >> 16) as u16 as i16 as i32;
+            with_app(|app| app.in_settings(|s| s.wheel(delta).map(|_| None)));
+            LRESULT(0)
+        }
+        // A hand over the link.
+        WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
+            let mut pt = POINT::default();
+            let located =
+                unsafe { GetCursorPos(&mut pt).is_ok() && ScreenToClient(hwnd, &mut pt).as_bool() };
+            let link = located
+                && with_app(|app| app.settings.as_ref().is_some_and(|s| s.link_at(pt.x, pt.y)))
+                    .unwrap_or(false);
+            if !link {
+                return default();
+            }
+            unsafe {
+                if let Ok(cursor) = LoadCursorW(None, IDC_HAND) {
+                    SetCursor(Some(cursor));
+                }
+            }
+            LRESULT(1)
+        }
+        // While a shortcut is recorded every key is for it, Alt ones too;
+        // otherwise Alt+F4 and Alt+Space work as they do everywhere.
+        WM_KEYDOWN | WM_SYSKEYDOWN if msg == WM_KEYDOWN || recording() => {
+            let key = VIRTUAL_KEY(wparam.0 as u16);
+            with_app(|app| app.in_settings(|s| s.key(key)));
+            LRESULT(0)
+        }
+        WM_KEYUP | WM_SYSKEYUP if recording() => {
+            let key = VIRTUAL_KEY(wparam.0 as u16);
+            with_app(|app| app.in_settings(|s| s.key_up(key).map(|_| None)));
+            LRESULT(0)
+        }
+        WM_CHAR => LRESULT(0),
+        WM_SYSCHAR if recording() => LRESULT(0),
+        // Alt on its own: there's no menu bar to go to.
+        WM_SYSCOMMAND if (wparam.0 & 0xFFF0) as u32 == SC_KEYMENU && lparam.0 == 0 => LRESULT(0),
+        WM_ACTIVATE => {
+            if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE {
+                with_app(|app| app.in_settings(|s| s.deactivate()));
+            }
+            default()
+        }
+        // Alt+F4, or Close on the taskbar: the window fades out, and only
+        // then goes.
+        WM_CLOSE => {
+            unsafe {
+                let _ = PostMessageW(
+                    Some(MSG_HWND.get()),
+                    WM_APP_CLOSE_SETTINGS,
+                    WPARAM(0),
+                    LPARAM(0),
+                );
+            }
+            LRESULT(0)
+        }
+        // Dragged to a monitor with another scale: redrawn for it.
+        WM_DPICHANGED => {
+            let suggested = unsafe { *(lparam.0 as *const RECT) };
+            let dpi = (wparam.0 & 0xFFFF) as u32;
+            with_app(|app| app.in_settings(|s| s.rescale(dpi, suggested).map(|_| None)));
+            LRESULT(0)
+        }
+        // Light or dark mode, or the accent color, changed.
+        WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED => {
+            let colors = msg == WM_DWMCOLORIZATIONCOLORCHANGED
+                || (lparam.0 != 0
+                    && unsafe { PCWSTR(lparam.0 as *const u16).to_string() }
+                        .is_ok_and(|area| area == "ImmersiveColorSet"));
+            if colors {
+                with_app(|app| app.on_colors_changed());
+            }
+            default()
+        }
+        _ => default(),
     }
 }
 

@@ -11,7 +11,7 @@ pub const ID_SETTINGS: u32 = 11;
 pub const ID_RELOAD: u32 = 12;
 pub const ID_QUIT: u32 = 13;
 
-const ICON_ID: u32 = 1;
+pub const ICON_ID: u32 = 1;
 
 pub struct Tray {
     hwnd: HWND,

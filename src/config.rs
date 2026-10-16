@@ -62,13 +62,18 @@ pub fn load() -> Result<(Config, bool), String> {
         Ok(bytes) => parse(&bytes).map(|config| (config, false)),
         Err(_) => {
             let config = Config::default();
-            let _ = std::fs::create_dir_all(dir());
-            if let Ok(json) = serde_json::to_string_pretty(&config) {
-                let _ = std::fs::write(&path, json);
-            }
+            let _ = save(&config);
             Ok((config, true))
         }
     }
+}
+
+/// Writes the settings where [`load`] reads them.
+pub fn save(config: &Config) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(config).map_err(|e| format!("config.json: {e}"))?;
+    std::fs::create_dir_all(dir())
+        .and_then(|_| std::fs::write(path(), json))
+        .map_err(|e| format!("config.json: {e}"))
 }
 
 fn parse(bytes: &[u8]) -> Result<Config, String> {
