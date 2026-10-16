@@ -40,6 +40,13 @@ enum Item {
         x: f32,
         width: f32,
     },
+    /// The rounded cap behind a key's name.
+    Key {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
 }
 
 /// Laid-out content, in DIPs.
@@ -58,7 +65,7 @@ impl Layout {
             .iter()
             .find_map(|item| match item {
                 Item::Text { layout, y, .. } => Some(y + first_line_height(layout)),
-                Item::Rule { .. } => None,
+                Item::Rule { .. } | Item::Key { .. } => None,
             })
             .unwrap_or(0.0)
     }
@@ -81,6 +88,12 @@ pub enum Target {
     /// Looks the word up in the same card.
     Word(String),
 }
+
+/// The word's size in the heading, and the search box's text size, in DIPs.
+pub const WORD_SIZE: f32 = 26.0;
+pub const QUERY_SIZE: f32 = 17.0;
+/// The size of a suggestion under the search box, in DIPs.
+pub const SUGGESTION_SIZE: f32 = 14.0;
 
 /// Room for the sense numbers, in DIPs.
 const SENSE_INDENT: f32 = 22.0;
@@ -133,6 +146,10 @@ pub enum Face {
     Icon,
     /// A larger symbol, centred in its width, for a button.
     Button,
+    /// The search box's heading.
+    Title,
+    /// What's typed in the search box.
+    Query,
 }
 
 /// What the body of the card shows.
@@ -142,8 +159,19 @@ pub enum Body<'a> {
     Message { title: &'a str, detail: &'a str },
 }
 
+/// Where the caret goes in a laid-out text box, in DIPs.
+pub struct Caret {
+    pub x: f32,
+    pub top: f32,
+    pub height: f32,
+}
+
 struct Formats {
     word: IDWriteTextFormat,
+    /// The search box's text, on a single line.
+    query: IDWriteTextFormat,
+    /// A suggestion under the search box, on a single line.
+    suggestion: IDWriteTextFormat,
     phonetic: IDWriteTextFormat,
     part_of_speech: IDWriteTextFormat,
     number: IDWriteTextFormat,
@@ -264,6 +292,97 @@ impl Renderer {
         })
     }
 
+    /// What's typed in the search box, on one line at least `width` wide,
+    /// and where the caret goes after it.
+    pub fn layout_query(&self, text: &str, width: f32) -> Result<(Layout, Caret)> {
+        let line = self.text(text, &self.formats.query, width)?;
+        let (w, height, baseline) = metrics(&line);
+        let caret = Caret {
+            x: w,
+            top: baseline - QUERY_SIZE * 0.86,
+            height: QUERY_SIZE * 1.1,
+        };
+        let mut out = Stack::default();
+        out.text(line, 0.0, Ink::Primary);
+        let layout = Layout {
+            items: out.items,
+            width: width.max(w + 4.0),
+            height,
+            links: Vec::new(),
+        };
+        Ok((layout, caret))
+    }
+
+    /// A suggested word, its first `typed` characters (what was typed) in
+    /// bold, and the word it's a form of after an arrow.
+    pub fn layout_suggestion(
+        &self,
+        word: &str,
+        typed: usize,
+        base: Option<&str>,
+        width: f32,
+    ) -> Result<Layout> {
+        let line = self.text(word, &self.formats.suggestion, width)?;
+        // DirectWrite counts UTF-16 code units.
+        let bold = word.chars().take(typed).map(char::len_utf16).sum::<usize>();
+        let range = DWRITE_TEXT_RANGE {
+            startPosition: 0,
+            length: bold as u32,
+        };
+        unsafe {
+            let _ = line.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, range);
+        }
+        let mut out = Stack::default();
+        let (w, height) = out.text(line, 0.0, Ink::Primary);
+        if let Some(base) = base {
+            let form_of =
+                self.text(&format!("\u{2192} {base}"), &self.formats.suggestion, width)?;
+            out.text(form_of, w + 8.0, Ink::Tertiary);
+        }
+        Ok(Layout {
+            items: out.items,
+            width,
+            height,
+            links: Vec::new(),
+        })
+    }
+
+    /// Keys and what they do, on one line: "[Enter] Look up  [Esc] Close".
+    pub fn layout_keys(&self, keys: &[(&str, &str)]) -> Result<Layout> {
+        let (pad_x, pad_y, gap, spacing) = (6.0, 2.0, 6.0, 14.0);
+        let mut out = Stack {
+            y: pad_y,
+            ..Default::default()
+        };
+        let (mut x, mut height) = (0.0, 0.0f32);
+        for (i, (key, action)) in keys.iter().enumerate() {
+            if i > 0 {
+                x += spacing;
+            }
+            let name = self.text(key, &self.formats.footer, 200.0)?;
+            let (w, h, _) = metrics(&name);
+            let (cap_w, cap_h) = (w + 2.0 * pad_x, h + 2.0 * pad_y);
+            out.items.push(Item::Key {
+                x,
+                y: 0.0,
+                width: cap_w,
+                height: cap_h,
+            });
+            out.text(name, x + pad_x, Ink::Secondary);
+            x += cap_w + gap;
+            let action = self.text(action, &self.formats.footer, 200.0)?;
+            let (w, _) = out.text(action, x, Ink::Tertiary);
+            x += w;
+            height = height.max(cap_h);
+        }
+        Ok(Layout {
+            items: out.items,
+            width: x.max(1.0),
+            height,
+            links: Vec::new(),
+        })
+    }
+
     /// One unwrapped line of menu text.
     pub fn layout_line(&self, text: &str, face: Face, ink: Ink, width: f32) -> Result<Layout> {
         let format = match face {
@@ -271,6 +390,8 @@ impl Renderer {
             Face::Small => &self.formats.footer,
             Face::Icon => &self.formats.icon,
             Face::Button => &self.formats.button,
+            Face::Title => &self.formats.title,
+            Face::Query => &self.formats.query,
         };
         let mut out = Stack::default();
         let (_, height) = out.text(self.text(text, format, width)?, 0.0, ink);
@@ -499,6 +620,7 @@ impl Renderer {
             let tertiary = brush(theme.text_tertiary())?;
             let accent = brush(theme.accent_d2d())?;
             let divider = brush(theme.divider())?;
+            let key = brush(theme.key())?;
             for item in &layout.items {
                 match item {
                     Item::Text {
@@ -532,6 +654,27 @@ impl Renderer {
                             bottom: y + 1.0 / scale,
                         };
                         dc.FillRectangle(&rect, &divider);
+                    }
+                    Item::Key {
+                        x,
+                        y,
+                        width,
+                        height,
+                    } => {
+                        // Inset by half the hairline, so it lands on whole pixels.
+                        let half = 0.5 / scale;
+                        let cap = D2D1_ROUNDED_RECT {
+                            rect: D2D_RECT_F {
+                                left: x + half,
+                                top: y + half,
+                                right: x + width - half,
+                                bottom: y + height - half,
+                            },
+                            radiusX: 4.0,
+                            radiusY: 4.0,
+                        };
+                        dc.FillRoundedRectangle(&cap, &key);
+                        dc.DrawRoundedRectangle(&cap, &divider, 1.0 / scale, None);
                     }
                 }
             }
@@ -732,8 +875,26 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
     let external = make(&symbols, 9.5, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
     let button = make(&symbols, 14.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
     unsafe { button.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)? };
+    let query = make(&text, QUERY_SIZE, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
+    unsafe { query.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)? };
+    let suggestion = make(
+        &text,
+        SUGGESTION_SIZE,
+        DWRITE_FONT_WEIGHT_NORMAL,
+        normal,
+        0.0,
+    )?;
+    unsafe { suggestion.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)? };
     Ok(Formats {
-        word: make(&display, 26.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?,
+        word: make(
+            &display,
+            WORD_SIZE,
+            DWRITE_FONT_WEIGHT_SEMI_BOLD,
+            normal,
+            0.0,
+        )?,
+        query,
+        suggestion,
         phonetic: make(&text, 15.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?,
         part_of_speech: make(&small, 11.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?,
         number: make(&text, 13.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 1.45)?,

@@ -14,6 +14,29 @@ pub fn lookup(word: &str, max_senses: usize, max_synonyms: usize) -> Option<Defi
     Dict::open(DATA)?.lookup(word, max_senses, max_synonyms)
 }
 
+/// A word offered for what's been typed in the search box.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Suggestion {
+    /// As it's written ("Paris", "ice cream").
+    pub word: String,
+    /// What an inflected form is a form of ("geese" → "goose").
+    pub base: Option<String>,
+}
+
+/// How many blocks of entries a search for suggestions reads at most, so
+/// that a short, common prefix stays quick.
+const SUGGEST_BLOCKS: usize = 256;
+
+/// Up to `limit` words starting with `prefix` (lowercase), the likeliest
+/// first: the word itself, then single words before phrases, then the ones
+/// with the most meanings, which tend to be the common ones.
+pub fn suggest(prefix: &str, limit: usize) -> Vec<Suggestion> {
+    match Dict::open(DATA) {
+        Some(dict) if !prefix.is_empty() => dict.suggest(prefix, limit),
+        _ => Vec::new(),
+    }
+}
+
 struct Dict<'a> {
     data: &'a [u8],
     entry_blocks: usize,
@@ -97,8 +120,8 @@ impl<'a> Dict<'a> {
         &rest[..rest.iter().position(|&b| b == 0).unwrap_or(rest.len())]
     }
 
-    fn entry(&self, key: &str) -> Option<Entry> {
-        // Last block whose first key is <= key.
+    /// The last block whose first key is <= `key`.
+    fn block_of(&self, key: &str) -> Option<usize> {
         let (mut lo, mut hi) = (0, self.entry_blocks);
         while lo < hi {
             let mid = (lo + hi) / 2;
@@ -108,13 +131,67 @@ impl<'a> Dict<'a> {
                 hi = mid;
             }
         }
-        let block = lo.checked_sub(1)?;
+        lo.checked_sub(1)
+    }
+
+    fn entry_block(&self, block: usize) -> Option<String> {
         let row = HEADER + 12 * block;
-        let text = self.inflate(self.u32(row + 4), self.u32(row + 8))?;
+        self.inflate(self.u32(row + 4), self.u32(row + 8))
+    }
+
+    fn entry(&self, key: &str) -> Option<Entry> {
+        let text = self.entry_block(self.block_of(key)?)?;
         let record = text
             .split('\x1e')
             .find(|r| r.split('\n').next() == Some(key))?;
+        Some(Entry::parse(record))
+    }
 
+    fn suggest(&self, prefix: &str, limit: usize) -> Vec<Suggestion> {
+        // Entries are sorted, so the matches are consecutive.
+        let first = self.block_of(prefix).unwrap_or(0);
+        let last = self.entry_blocks.min(first + SUGGEST_BLOCKS);
+        let mut found = Vec::new();
+        'blocks: for block in first..last {
+            let Some(text) = self.entry_block(block) else {
+                break;
+            };
+            for record in text.split('\x1e') {
+                let key = record.split('\n').next().unwrap_or_default();
+                if !key.starts_with(prefix) {
+                    if key > prefix {
+                        break 'blocks;
+                    }
+                    continue;
+                }
+                let entry = Entry::parse(record);
+                let senses: usize = entry.senses.iter().map(|(_, ids)| ids.len()).sum();
+                let exact = key == prefix;
+                // An inflected form ("geese") only when it's what was typed.
+                let base = match (senses, entry.redirects.first()) {
+                    (0, Some(base)) if exact => Some(base.clone()),
+                    (0, _) => continue,
+                    _ => None,
+                };
+                let word = entry.display.unwrap_or_else(|| key.to_string());
+                let rank = (
+                    !exact,
+                    key.contains(' '),
+                    std::cmp::Reverse(senses),
+                    key.len(),
+                );
+                found.push((rank, Suggestion { word, base }));
+            }
+        }
+        // Stable: equal ranks stay in alphabetical order.
+        found.sort_by_key(|(rank, _)| *rank);
+        found.into_iter().take(limit).map(|(_, s)| s).collect()
+    }
+}
+
+impl Entry {
+    /// An entry's record, as stored: its key, then one line per field.
+    fn parse(record: &str) -> Entry {
         let mut entry = Entry::default();
         for line in record.split('\n').skip(1) {
             let mut chars = line.chars();
@@ -133,9 +210,11 @@ impl<'a> Dict<'a> {
                 _ => {}
             }
         }
-        Some(entry)
+        entry
     }
+}
 
+impl Dict<'_> {
     fn synset(&self, id: usize) -> Option<Synset> {
         let block = id / self.synsets_per_block;
         if block >= self.synset_blocks {
@@ -375,6 +454,43 @@ mod tests {
         assert_eq!(spellings("e-mail"), ["e-mail", "e mail", "email"]);
         assert_eq!(spellings("ice cream"), ["ice cream", "ice-cream"]);
         assert_eq!(spellings("dog"), ["dog"]);
+    }
+
+    fn words(prefix: &str) -> Vec<String> {
+        suggest(prefix, 5).into_iter().map(|s| s.word).collect()
+    }
+
+    #[test]
+    fn suggests_words() {
+        // The word itself first, then the likeliest completions.
+        let dog = words("dog");
+        assert_eq!(dog[0], "dog");
+        assert!(
+            dog.iter().all(|w| w.to_lowercase().starts_with("dog")),
+            "{dog:?}"
+        );
+        assert!(words("serendip").contains(&"serendipity".to_string()));
+        // Single words come before phrases.
+        assert!(!words("ice")[0].contains(' '));
+        assert_eq!(words("ice cr")[0], "ice cream");
+        // Shown as written.
+        assert!(words("pari").contains(&"Paris".to_string()));
+        assert!(words("qwzx").is_empty());
+        assert!(words("").is_empty());
+        // Inflected forms only when typed in full.
+        let geese = suggest("geese", 5);
+        assert_eq!(geese[0].base.as_deref(), Some("goose"));
+        assert!(suggest("gees", 5).iter().all(|s| s.base.is_none()));
+    }
+
+    #[test]
+    fn suggests_quickly() {
+        let start = std::time::Instant::now();
+        for prefix in ["co", "re", "st", "pr", "ma"] {
+            assert_eq!(suggest(prefix, 5).len(), 5);
+        }
+        let each = start.elapsed() / 5;
+        eprintln!("suggest: {each:?} per prefix");
     }
 
     #[test]

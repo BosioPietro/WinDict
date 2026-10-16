@@ -9,7 +9,7 @@ use windows::Win32::Graphics::Gdi::{MonitorFromRect, ScreenToClient, MONITOR_DEF
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentThreadId, SetProcessWorkingSetSize,
+    GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId, SetProcessWorkingSetSize,
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -25,6 +25,7 @@ use crate::menu::Menu;
 use crate::offline;
 use crate::popup::{self, Popup, Transition};
 use crate::render::{Body, Target};
+use crate::searchbox::MAX_SUGGESTIONS;
 use crate::selection::{self, Capturer, Selection};
 use crate::theme::Theme;
 use crate::tray::{self, Tray};
@@ -55,7 +56,7 @@ const TIMER_MENU_TEARDOWN: usize = 7;
 
 /// Free the GPU resources after this long without a lookup.
 const IDLE_TEARDOWN_MS: u32 = 3 * 60 * 1000;
-/// Messages ("Nothing selected") close on their own after this long.
+/// Messages ("That’s a lot of text") close on their own after this long.
 const AUTOHIDE_MS: u32 = 3500;
 /// How soon after showing to check whether Start/Search covers the card.
 const COVERED_CHECK_MS: u32 = 150;
@@ -68,6 +69,15 @@ const SETTLE_MS: u32 = popup::RESIZE_MS as u32 + 60;
 const CACHE_SIZE: usize = 64;
 /// How many words "back" remembers.
 const HISTORY_SIZE: usize = 50;
+/// The most the search box holds, as many as a lookup accepts.
+const SEARCH_MAX_CHARS: usize = 60;
+const SEARCH_PLACEHOLDER: &str = "Type a word to look it up";
+const SEARCH_TITLE: &str = "No text selected";
+/// Opened again from the card itself, where nothing was meant to be selected.
+const SEARCH_AGAIN_TITLE: &str = "Look up another word";
+const SEARCH_TOO_LONG: &str = "Try a single word or a short phrase";
+/// Suggestions start with this many letters typed: fewer match too much.
+const SUGGEST_AFTER: usize = 2;
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -87,6 +97,27 @@ struct Looked {
     id: u64,
     word: String,
     result: Lookup,
+}
+
+/// What's typed in the search box.
+#[derive(Default)]
+struct Search {
+    text: String,
+    title: &'static str,
+    /// Whether the heading says why the last Enter did nothing.
+    error: bool,
+    /// The first half of a character outside the BMP, waiting for the second.
+    high_surrogate: Option<u16>,
+    /// The words offered under the field.
+    suggestions: Vec<offline::Suggestion>,
+}
+
+impl Search {
+    fn push(&mut self, c: char) {
+        if !c.is_control() && self.text.chars().count() < SEARCH_MAX_CHARS {
+            self.text.push(c);
+        }
+    }
 }
 
 /// Where a lookup's answer goes.
@@ -122,6 +153,10 @@ pub struct App {
     history: Vec<String>,
     /// Whether Backspace and Alt+Left are registered.
     back_keys: bool,
+    /// The search box, while the card shows one.
+    search: Option<Search>,
+    /// The window the search box took the keyboard from.
+    return_focus: Option<HWND>,
     hotkey_ok: bool,
     mouse_hook: Option<HHOOK>,
     focus_hook: Option<HWINEVENTHOOK>,
@@ -226,6 +261,8 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             current: None,
             history: Vec::new(),
             back_keys: false,
+            search: None,
+            return_focus: None,
             hotkey_ok: false,
             mouse_hook: None,
             focus_hook: None,
@@ -390,6 +427,19 @@ impl App {
 
     fn on_hotkey(&mut self) {
         self.request += 1;
+        // The card has the keyboard (a search): there's no selection to
+        // read, so open a fresh search box, or close the one that's open.
+        let focused = self
+            .popup
+            .as_ref()
+            .is_some_and(|p| p.visible && unsafe { GetForegroundWindow() } == p.hwnd);
+        if focused {
+            return if self.search.is_some() {
+                self.dismiss()
+            } else {
+                self.open_search(SEARCH_AGAIN_TITLE, None)
+            };
+        }
         unsafe {
             let _ = PostThreadMessageW(
                 self.capture_thread,
@@ -406,9 +456,9 @@ impl App {
             return;
         }
         self.current = None;
+        self.search = None;
         self.history.clear();
         self.sync_back_keys();
-        let hotkey = self.config.hotkey.clone();
         let (text, anchor) = match captured.selection {
             Some(s) => (s.text, s.anchor),
             None => (String::new(), None),
@@ -419,12 +469,182 @@ impl App {
                 let detail = "Select a single word or a short phrase.";
                 return self.show_message(anchor, "That\u{2019}s a lot of text", detail, true);
             }
-            Err(NormalizeError::Empty) => {
-                let detail = format!("Select a word in any app, then press {hotkey}.");
-                return self.show_message(None, "Nothing selected", &detail, true);
-            }
+            Err(NormalizeError::Empty) => return self.open_search(SEARCH_TITLE, anchor),
         };
         self.lookup(word, Place::New(anchor_or_cursor(anchor)));
+    }
+
+    /// Nothing was selected: opens the card as a search box, for text that
+    /// can't be selected (in an image, a protected PDF, a game). It opens at
+    /// `anchor`, the text caret, when there is one.
+    fn open_search(&mut self, title: &'static str, anchor: Option<RECT>) {
+        self.current = None;
+        self.history.clear();
+        self.sync_back_keys();
+        let previous = unsafe { GetForegroundWindow() };
+        self.dismiss_menu();
+        let theme = self.theme();
+        let Some(popup) = self.ensure_popup() else {
+            return;
+        };
+        // With no caret to open at (an image, a game), the middle of the
+        // screen the app is on.
+        let anchor = anchor_or_centre(anchor, previous);
+        if let Err(e) = popup.show_search(anchor, theme, title, SEARCH_PLACEHOLDER) {
+            self.tray
+                .notify("WinDict couldn't draw its window", &e.message());
+            return;
+        }
+        let hwnd = popup.hwnd;
+        self.on_shown(false);
+        if !selection::take_foreground(hwnd) {
+            let detail = format!(
+                "Select a word in any app, then press {}.",
+                self.config.hotkey
+            );
+            return self.show_message(None, "Nothing selected", &detail, true);
+        }
+        // Opened again from the card itself, it keeps the original app.
+        if previous != hwnd {
+            self.return_focus = Some(previous);
+        }
+        self.search = Some(Search {
+            title,
+            ..Search::default()
+        });
+    }
+
+    /// A character typed into the card (WM_CHAR).
+    fn on_char(&mut self, unit: u16) {
+        let Some(hwnd) = self.popup.as_ref().filter(|p| p.visible).map(|p| p.hwnd) else {
+            return;
+        };
+        let Some(search) = self.search.as_mut() else {
+            return;
+        };
+        let high = search.high_surrogate.take();
+        match unit {
+            0x0D => {
+                let picked = self.popup.as_ref().and_then(|p| p.suggestion());
+                return self.submit_search(picked);
+            }
+            0x08 => {
+                search.text.pop();
+            }
+            // Ctrl+Backspace: the last word.
+            0x7F => {
+                let trimmed = search.text.trim_end();
+                let kept = trimmed.rfind(char::is_whitespace).map_or(0, |i| i + 1);
+                search.text.truncate(kept);
+            }
+            // Ctrl+V: the first line on the clipboard.
+            0x16 => {
+                let pasted = selection::clipboard_text(hwnd).unwrap_or_default();
+                let line = pasted.lines().map(str::trim).find(|l| !l.is_empty());
+                for c in line.unwrap_or_default().chars() {
+                    search.push(if c.is_whitespace() { ' ' } else { c });
+                }
+            }
+            0xD800..=0xDBFF => {
+                search.high_surrogate = Some(unit);
+                return;
+            }
+            0xDC00..=0xDFFF => {
+                let Some(high) = high else {
+                    return;
+                };
+                if let Some(Ok(c)) = char::decode_utf16([high, unit]).next() {
+                    search.push(c);
+                }
+            }
+            _ => match char::from_u32(unit as u32) {
+                Some(c) if !c.is_control() => search.push(c),
+                _ => return,
+            },
+        }
+        self.refresh_search();
+    }
+
+    /// A key pressed in the card (WM_KEYDOWN): the arrows pick a
+    /// suggestion, Tab copies it into the field.
+    fn on_key(&mut self, key: VIRTUAL_KEY) {
+        let (Some(search), Some(popup)) = (self.search.as_mut(), self.popup.as_mut()) else {
+            return;
+        };
+        match key {
+            VK_DOWN | VK_UP => {
+                let _ = popup.step_suggestion(key == VK_DOWN);
+            }
+            VK_TAB => {
+                let pick = popup.suggestion().unwrap_or(0);
+                let Some(suggestion) = search.suggestions.get(pick) else {
+                    return;
+                };
+                search.text = suggestion.word.clone();
+                self.refresh_search();
+            }
+            _ => {}
+        }
+    }
+
+    /// Shows what's typed in the search box, and the words it could be the
+    /// start of.
+    fn refresh_search(&mut self) {
+        let (Some(search), Some(popup)) = (self.search.as_mut(), self.popup.as_mut()) else {
+            return;
+        };
+        // Typing again answers the complaint: the heading goes back.
+        if std::mem::take(&mut search.error) {
+            let _ = popup.set_search_title(search.title);
+        }
+        let _ = popup.set_query(&search.text);
+        let typed = search.text.trim_start().to_lowercase();
+        let typed_chars = typed.chars().count();
+        search.suggestions = if typed_chars >= SUGGEST_AFTER {
+            offline::suggest(&typed, MAX_SUGGESTIONS)
+        } else {
+            Vec::new()
+        };
+        let items: Vec<(&str, Option<&str>)> = search
+            .suggestions
+            .iter()
+            .map(|s| (s.word.as_str(), s.base.as_deref()))
+            .collect();
+        let _ = popup.set_suggestions(&items, typed_chars);
+        self.on_resized();
+    }
+
+    /// Enter in the search box, or a click on a suggestion: the card turns
+    /// into the definition of the `picked` suggestion, or of what's typed.
+    fn submit_search(&mut self, picked: Option<usize>) {
+        let Some(search) = self.search.as_mut() else {
+            return;
+        };
+        let picked_row = picked.filter(|&i| i < search.suggestions.len());
+        let picked = picked_row.map(|i| &search.suggestions[i]);
+        let text = picked.map_or(&search.text, |s| &s.word);
+        let complaint = match dictionary::normalize(text) {
+            Ok(word) => {
+                self.search = None;
+                // The heading grows out of the word that was picked.
+                if let Some(popup) = self.popup.as_mut() {
+                    let _ = popup.pick_suggestion(picked_row);
+                }
+                return self.lookup(word, Place::Same);
+            }
+            Err(NormalizeError::Empty) => None,
+            Err(NormalizeError::TooLong) if !search.error => {
+                search.error = true;
+                Some(SEARCH_TOO_LONG)
+            }
+            Err(NormalizeError::TooLong) => None,
+        };
+        if let Some(popup) = self.popup.as_mut() {
+            let _ = popup.shake_search();
+            if let Some(complaint) = complaint {
+                let _ = popup.set_search_title(complaint);
+            }
+        }
     }
 
     /// Looks `word` up and shows the answer at `place`. The bundled
@@ -601,7 +821,6 @@ impl App {
     ) {
         self.dismiss_menu();
         let theme = self.theme();
-        let hwnd = self.hwnd;
         let Some(popup) = self.ensure_popup() else {
             return;
         };
@@ -610,7 +829,13 @@ impl App {
                 .notify("WinDict couldn't draw its window", &e.message());
             return;
         }
-        CARD_RECT.set(popup.card_rect());
+        self.on_shown(auto_hide);
+    }
+
+    /// The card just appeared, or turned into something else in place.
+    fn on_shown(&mut self, auto_hide: bool) {
+        let hwnd = self.hwnd;
+        self.on_resized();
         unsafe {
             let _ = KillTimer(Some(hwnd), TIMER_HIDE);
             let _ = KillTimer(Some(hwnd), TIMER_TEARDOWN);
@@ -623,6 +848,18 @@ impl App {
         self.install_dismiss_hooks();
         unsafe {
             SetTimer(Some(hwnd), TIMER_COVERED, COVERED_CHECK_MS, None);
+        }
+    }
+
+    /// The card changed size: clicks outside it now are those outside the
+    /// new size, and its clickable area shrinks once the resize has played.
+    fn on_resized(&mut self) {
+        let Some(popup) = self.popup.as_ref() else {
+            return;
+        };
+        CARD_RECT.set(popup.card_rect());
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_SETTLE, SETTLE_MS, None);
         }
     }
 
@@ -709,6 +946,20 @@ impl App {
         self.sync_back_keys();
         self.remove_dismiss_hooks();
         self.dismiss_menu();
+        self.search = None;
+        // Hand the keyboard back to the app the search box took it from,
+        // unless the user has moved on to another one already.
+        if let Some(previous) = self.return_focus.take() {
+            let focused = self
+                .popup
+                .as_ref()
+                .is_some_and(|p| unsafe { GetForegroundWindow() } == p.hwnd);
+            if focused {
+                unsafe {
+                    let _ = SetForegroundWindow(previous);
+                }
+            }
+        }
         let Some(popup) = self.popup.as_mut() else {
             return;
         };
@@ -818,6 +1069,10 @@ impl App {
     }
 
     fn on_click(&mut self, x: i32, y: i32) {
+        let suggestion = self.popup.as_ref().and_then(|p| p.suggestion_at(x, y));
+        if self.search.is_some() && suggestion.is_some() {
+            return self.submit_search(suggestion);
+        }
         if self.popup.as_ref().is_some_and(|p| p.back_at(x, y)) {
             return self.back();
         }
@@ -974,18 +1229,27 @@ impl App {
     }
 }
 
-fn anchor_or_cursor(anchor: Option<RECT>) -> RECT {
-    let usable = anchor.filter(|r| unsafe {
+/// `anchor`, if a card can open next to it: about a line tall, on a screen.
+fn usable_anchor(anchor: Option<RECT>) -> Option<RECT> {
+    anchor.filter(|r| unsafe {
         r.right > r.left
             && r.bottom > r.top
             && r.bottom - r.top < 160
             && !MonitorFromRect(r, MONITOR_DEFAULTTONULL).is_invalid()
-    });
-    usable.unwrap_or_else(|| {
-        let mut pt = POINT::default();
-        unsafe {
-            let _ = GetCursorPos(&mut pt);
-        }
+    })
+}
+
+fn cursor_pos() -> POINT {
+    let mut pt = POINT::default();
+    unsafe {
+        let _ = GetCursorPos(&mut pt);
+    }
+    pt
+}
+
+fn anchor_or_cursor(anchor: Option<RECT>) -> RECT {
+    usable_anchor(anchor).unwrap_or_else(|| {
+        let pt = cursor_pos();
         // Leave room for the pointer itself.
         RECT {
             left: pt.x,
@@ -993,6 +1257,22 @@ fn anchor_or_cursor(anchor: Option<RECT>) -> RECT {
             right: pt.x + 1,
             bottom: pt.y + 18,
         }
+    })
+}
+
+/// `anchor`, or else the middle of the screen `window` is on.
+fn anchor_or_centre(anchor: Option<RECT>, window: HWND) -> RECT {
+    usable_anchor(anchor).unwrap_or_else(|| {
+        let mut r = RECT::default();
+        let near = if unsafe { GetWindowRect(window, &mut r) }.is_ok() {
+            POINT {
+                x: (r.left + r.right) / 2,
+                y: (r.top + r.bottom) / 2,
+            }
+        } else {
+            cursor_pos()
+        };
+        popup::centred_anchor(near)
     })
 }
 
@@ -1158,27 +1438,55 @@ unsafe extern "system" fn popup_proc(
             }
             LRESULT(1)
         }
-        // A hand over the links.
+        // A hand over the links, a text cursor over the search field.
         WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
             let mut pt = POINT::default();
-            let over_link =
-                unsafe { GetCursorPos(&mut pt).is_ok() && ScreenToClient(hwnd, &mut pt).as_bool() }
-                    && with_app(|app| {
-                        app.popup
-                            .as_ref()
-                            .is_some_and(|p| p.link_at(pt.x, pt.y).is_some())
+            let located =
+                unsafe { GetCursorPos(&mut pt).is_ok() && ScreenToClient(hwnd, &mut pt).as_bool() };
+            let cursor = located
+                .then(|| {
+                    with_app(|app| {
+                        let popup = app.popup.as_ref()?;
+                        if popup.link_at(pt.x, pt.y).is_some() {
+                            Some(IDC_HAND)
+                        } else if popup.search_at(pt.x, pt.y) {
+                            Some(IDC_IBEAM)
+                        } else {
+                            None
+                        }
                     })
-                    .unwrap_or(false);
-            if over_link {
-                unsafe {
-                    if let Ok(hand) = LoadCursorW(None, IDC_HAND) {
-                        SetCursor(Some(hand));
+                    .flatten()
+                })
+                .flatten();
+            match cursor {
+                Some(cursor) => {
+                    unsafe {
+                        if let Ok(cursor) = LoadCursorW(None, cursor) {
+                            SetCursor(Some(cursor));
+                        }
                     }
+                    LRESULT(1)
                 }
-                LRESULT(1)
-            } else {
-                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+                None => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
             }
+        }
+        // Picking a suggestion in the search box.
+        WM_KEYDOWN => {
+            with_app(|app| app.on_key(VIRTUAL_KEY(wparam.0 as u16)));
+            LRESULT(0)
+        }
+        // Typing in the search box.
+        WM_CHAR => {
+            with_app(|app| app.on_char(wparam.0 as u16));
+            LRESULT(0)
+        }
+        // Alt+F4 while the search box has the keyboard: close the card, but
+        // keep the window for next time.
+        WM_CLOSE => {
+            unsafe {
+                let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_DISMISS, WPARAM(0), LPARAM(0));
+            }
+            LRESULT(0)
         }
         // We size ourselves for the target monitor's DPI already.
         WM_DPICHANGED => LRESULT(0),
@@ -1255,7 +1563,7 @@ unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) 
 unsafe extern "system" fn focus_hook(
     _: HWINEVENTHOOK,
     _: u32,
-    _: HWND,
+    hwnd: HWND,
     _: i32,
     _: i32,
     _: u32,
@@ -1263,6 +1571,12 @@ unsafe extern "system" fn focus_hook(
 ) {
     // Ignore the foreground change from closing Start/Search just before showing.
     if unsafe { GetTickCount64() }.saturating_sub(SHOWN_AT.get()) < 500 {
+        return;
+    }
+    // Nor the card itself taking the keyboard for the search box.
+    let mut pid = 0;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    if pid == unsafe { GetCurrentProcessId() } {
         return;
     }
     unsafe {

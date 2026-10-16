@@ -18,16 +18,17 @@ use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
-use crate::render::{Body, Face, Ink, Link, Renderer, Target};
+use crate::render::{Body, Face, Ink, Link, Renderer, Target, WORD_SIZE};
+use crate::searchbox::SearchBox;
 use crate::theme::Theme;
 
 // Geometry, in DIPs.
-const CARD_W: f32 = 384.0;
+pub(crate) const CARD_W: f32 = 384.0;
 const MAX_CARD_H: f32 = 460.0;
 pub(crate) const MARGIN: f32 = 32.0; // room for the shadow
 const RADIUS: f32 = 12.0;
-const PAD_X: f32 = 22.0;
-const PAD_TOP: f32 = 18.0;
+pub(crate) const PAD_X: f32 = 22.0;
+pub(crate) const PAD_TOP: f32 = 18.0;
 const HEADER_GAP: f32 = 12.0;
 const PAD_BOTTOM: f32 = 18.0;
 const SHADOW_DY: f32 = 6.0;
@@ -53,6 +54,8 @@ pub const SHOW_MS: u64 = 340;
 pub const HIDE_MS: u64 = 120;
 pub const RESIZE_MS: u64 = 300;
 const SCROLL_MS: u64 = 140;
+/// How long what the card showed takes to fade out as the search box comes in.
+const MAKE_WAY_MS: u64 = 120;
 /// Ease-out curve for scrolling: quick to respond, soft to settle.
 const SCROLL_EASE: (f32, f32, f32, f32) = (0.25, 0.8, 0.4, 1.0);
 
@@ -82,11 +85,11 @@ fn cubic_bezier((x1, y1, x2, y2): (f32, f32, f32, f32), t: f32) -> f32 {
 /// Where the window goes for a card next to `anchor` inside the monitor's
 /// `work` area, both in screen pixels, at `scale` pixels per DIP. Returns the
 /// window rectangle and whether the card grows upwards from the anchor (when
-/// there's more room above it than below).
+/// there's more room above it than below, unless it must grow `downward`).
 ///
 /// The window always has room for the tallest card plus the shadow margin,
 /// so resizing never moves the window itself.
-fn placement(anchor: RECT, work: RECT, scale: f32) -> (RECT, bool) {
+fn placement(anchor: RECT, work: RECT, scale: f32, downward: bool) -> (RECT, bool) {
     let px = |dip: f32| (dip * scale).round() as i32;
     let (card_w, max_h, m) = (px(CARD_W), px(MAX_CARD_H), px(MARGIN));
     let (gap, edge) = (px(ANCHOR_GAP), px(SCREEN_GAP));
@@ -97,7 +100,7 @@ fn placement(anchor: RECT, work: RECT, scale: f32) -> (RECT, bool) {
     );
     let room_below = work.bottom - edge - (anchor.bottom + gap);
     let room_above = (anchor.top - gap) - (work.top + edge);
-    let grow_up = room_below < max_h && room_above > room_below;
+    let grow_up = !downward && room_below < max_h && room_above > room_below;
 
     let window_h = max_h + 2 * m;
     let window_y = if grow_up {
@@ -131,6 +134,31 @@ pub(crate) fn monitor_at(point: POINT) -> (RECT, f32) {
         let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
     }
     (info.rcWork, dpi_x as f32 / 96.0)
+}
+
+/// About half the empty search box's height, in DIPs: how far above the
+/// screen's middle a centred one starts, so that it sits in the middle.
+const CENTRED_RISE: f32 = 68.0;
+
+/// An anchor that opens a search box in the middle of the screen `near`
+/// (screen pixels) is on, for when there's no caret to open it at.
+pub fn centred_anchor(near: POINT) -> RECT {
+    let (work, scale) = monitor_at(near);
+    centred_in(work, scale)
+}
+
+fn centred_in(work: RECT, s: f32) -> RECT {
+    let px = |dip: f32| (dip * s).round() as i32;
+    // `placement` puts the card's text at the anchor's left, and its top
+    // just under the anchor.
+    let left = (work.left + work.right) / 2 - px(CARD_W) / 2 + px(PAD_X);
+    let bottom = (work.top + work.bottom) / 2 - px(CENTRED_RISE) - px(ANCHOR_GAP);
+    RECT {
+        left,
+        top: bottom - 1,
+        right: left + 1,
+        bottom,
+    }
 }
 
 /// Makes `hwnd` a composition surface: the host backdrop brush can sample
@@ -181,6 +209,7 @@ pub struct Popup {
     loader: Loader,
     scroll_chrome: ScrollChrome,
     back: BackButton,
+    search: SearchBox,
 
     theme: Theme,
     scale: f32,
@@ -198,7 +227,7 @@ pub struct Popup {
     pub visible: bool,
 }
 
-fn ts(ms: u64) -> TimeSpan {
+pub(crate) fn ts(ms: u64) -> TimeSpan {
     TimeSpan::from(Duration::from_millis(ms))
 }
 
@@ -812,6 +841,7 @@ impl Popup {
         let content = Content::new(c, &frame.card)?;
         let loader = Loader::new(c, &content.host, &theme)?;
         let scroll_chrome = ScrollChrome::new(c, &frame.card)?;
+        let search = SearchBox::new(c, &frame.card)?;
 
         Ok(Popup {
             hwnd,
@@ -825,6 +855,7 @@ impl Popup {
             loader,
             scroll_chrome,
             back,
+            search,
             theme,
             scale: 1.0,
             grow_up: false,
@@ -851,85 +882,85 @@ impl Popup {
         phonetic: Option<&str>,
         body: Body,
     ) -> Result<()> {
-        self.theme = theme;
-        self.place(anchor);
-        self.apply_theme()?;
-
-        // Reset everything to its resting state before animating in.
-        for v in [
-            &self.root.cast::<Visual>()?,
-            &self.frame.visual.cast()?,
-            &self.content.visual.cast()?,
-        ] {
-            Animator::stop(v, &["Opacity", "Offset", "Scale"]);
-        }
-        // A new card has nowhere to go back to.
-        let back = &mut self.back;
-        Animator::stop(&back.visual, &["Opacity"]);
-        Animator::stop(&back.hover, &["Opacity"]);
-        back.visual.SetOpacity(0.0)?;
-        back.hover.SetOpacity(0.0)?;
-        (back.shown, back.hovered) = (false, false);
-        self.card_h = 0.0;
+        self.prepare(anchor, theme, false)?;
         self.set_content(word, phonetic, body, Transition::Instant)?;
+        self.appear()
+    }
 
-        let s = self.scale;
-        let card_w = CARD_W * s;
-        let pivot_y = if self.grow_up {
-            self.frame_y() + self.card_h
-        } else {
-            self.frame_y()
-        };
-        self.root.SetCenterPoint(Vector3 {
-            X: MARGIN * s + card_w / 2.0,
-            Y: pivot_y,
-            Z: 0.0,
-        })?;
-        self.root.SetOpacity(0.0)?;
-        self.root.SetScale(Vector3 {
-            X: 0.96,
-            Y: 0.96,
-            Z: 1.0,
-        })?;
-        self.root
-            .SetOffset(v3(0.0, if self.grow_up { 10.0 } else { -10.0 } * s))?;
-
-        unsafe {
-            let _ = SetWindowPos(
-                self.hwnd,
-                Some(HWND_TOPMOST),
-                self.window.left,
-                self.window.top,
-                self.window.right - self.window.left,
-                self.window.bottom - self.window.top,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
+    /// Shows the search box under `title`. An open card turns into it in
+    /// place; otherwise a new one appears next to `anchor`.
+    pub fn show_search(
+        &mut self,
+        anchor: RECT,
+        theme: Theme,
+        title: &str,
+        placeholder: &str,
+    ) -> Result<()> {
+        if self.visible {
+            return self.enter_search(title, placeholder, true);
         }
-        self.visible = true;
+        // Its top stays put, so the field doesn't move as suggestions come and go.
+        self.prepare(anchor, theme, true)?;
+        self.enter_search(title, placeholder, false)?;
+        self.appear()
+    }
 
-        let anim = &self.anim;
-        anim.scalar(&self.root, "Opacity", 1.0, 160, 0, &anim.decelerate)?;
-        anim.vector3(
-            &self.root,
-            "Scale",
-            Vector3 {
-                X: 1.0,
-                Y: 1.0,
-                Z: 1.0,
-            },
-            SHOW_MS,
-            0,
-            &anim.decelerate,
-        )?;
-        anim.vector3(
-            &self.root,
-            "Offset",
-            v3(0.0, 0.0),
-            SHOW_MS,
-            0,
-            &anim.decelerate,
-        )?;
+    /// Shows `text` in the search box.
+    pub fn set_query(&mut self, text: &str) -> Result<()> {
+        self.search
+            .set_query(&self.renderer, &self.anim, &self.theme, text)
+    }
+
+    /// Changes the search box's heading.
+    pub fn set_search_title(&mut self, title: &str) -> Result<()> {
+        self.search
+            .set_title(&self.renderer, &self.anim, &self.theme, title)
+    }
+
+    /// Shakes the search field: what's typed can't be looked up.
+    pub fn shake_search(&self) -> Result<()> {
+        self.search.shake(&self.anim)
+    }
+
+    /// Whether a point in window pixels is on the search field.
+    pub fn search_at(&self, x: i32, y: i32) -> bool {
+        let (x, y) = self.card_point(x, y);
+        self.search.field_at(x, y)
+    }
+
+    /// Shows `items` (each a word and what it's a form of) under the search
+    /// field, the first `typed` characters in bold, resizing the card to fit.
+    pub fn set_suggestions(&mut self, items: &[(&str, Option<&str>)], typed: usize) -> Result<()> {
+        let (renderer, anim, theme) = (&self.renderer, &self.anim, &self.theme);
+        let h = self
+            .search
+            .set_suggestions(renderer, anim, theme, items, typed)?;
+        self.header_h = h;
+        if (h - self.card_h).abs() > 0.5 {
+            self.resize(h, true)?;
+        }
         Ok(())
+    }
+
+    /// Picks the next suggestion down, or up.
+    pub fn step_suggestion(&mut self, down: bool) -> Result<()> {
+        self.search.step(&self.anim, down)
+    }
+
+    /// Picks suggestion `row`, or none, as the one to look up.
+    pub fn pick_suggestion(&mut self, row: Option<usize>) -> Result<()> {
+        self.search.pick(&self.anim, row)
+    }
+
+    /// The picked suggestion, if any.
+    pub fn suggestion(&self) -> Option<usize> {
+        self.search.selected()
+    }
+
+    /// The suggestion under a point in window pixels.
+    pub fn suggestion_at(&self, x: i32, y: i32) -> Option<usize> {
+        let (x, y) = self.card_point(x, y);
+        self.search.row_at(x, y)
     }
 
     /// Fades the card out. The caller hides the window after [`HIDE_MS`].
@@ -983,6 +1014,7 @@ impl Popup {
             .SetSurface(None::<&ICompositionSurface>);
         self.header.surface = None;
         self.loader.stop();
+        self.search.reset();
         self.renderer.trim();
     }
 
@@ -994,6 +1026,14 @@ impl Popup {
         body: Body,
         transition: Transition,
     ) -> Result<()> {
+        let rise_from = match (self.search.active, transition) {
+            (false, _) => None,
+            (true, Transition::Instant) => {
+                self.search.reset();
+                None
+            }
+            (true, _) => Some(self.search.leave(&self.anim)?),
+        };
         let s = self.scale;
         let content_w = CARD_W - 2.0 * PAD_X;
         let indent = if self.back.shown { BACK_INDENT } else { 0.0 };
@@ -1043,8 +1083,24 @@ impl Popup {
             .visual
             .SetSize(v2(content_w * s, header_layout.height * s))?;
         let rest = v3(PAD_X * s, PAD_TOP * s);
-        Animator::stop(&header.visual, &["Offset"]);
-        if transition != Transition::Instant && previous_indent != indent {
+        let full = Vector3 {
+            X: 1.0,
+            Y: 1.0,
+            Z: 1.0,
+        };
+        Animator::stop(&header.visual, &["Offset", "Scale"]);
+        header.visual.SetScale(full)?;
+        if let Some((from, size)) = rise_from {
+            // The typed word grows into the heading from where it was typed.
+            let k = size / WORD_SIZE;
+            header.visual.SetScale(Vector3 { X: k, Y: k, Z: 1.0 })?;
+            header.visual.SetOffset(from)?;
+            header.visual.SetOpacity(0.0)?;
+            let ease = &anim.decelerate;
+            anim.vector3(&header.visual, "Offset", rest, RESIZE_MS, 0, ease)?;
+            anim.vector3(&header.visual, "Scale", full, RESIZE_MS, 0, ease)?;
+            anim.scalar(&header.visual, "Opacity", 1.0, 160, 0, ease)?;
+        } else if transition != Transition::Instant && previous_indent != indent {
             // The word glides over to make room for the back button, or
             // to take its place.
             // Moving left, it waits a moment for the arrow to fade first.
@@ -1169,6 +1225,10 @@ impl Popup {
 
     /// Highlights the back button while the pointer, in window pixels, is on it.
     pub fn hover(&mut self, point: Option<(i32, i32)>) -> Result<()> {
+        if self.search.active {
+            let point = point.map(|(x, y)| self.card_point(x, y));
+            return self.search.hover(&self.anim, point);
+        }
         let over = point.is_some_and(|(x, y)| self.back_at(x, y));
         self.set_back_hovered(over)
     }
@@ -1316,6 +1376,138 @@ impl Popup {
     // -----------------------------------------------------------------------
     // Internals
 
+    /// Places and themes a card that's about to appear, everything at rest.
+    fn prepare(&mut self, anchor: RECT, theme: Theme, downward: bool) -> Result<()> {
+        self.theme = theme;
+        self.place(anchor, downward);
+        self.apply_theme()?;
+
+        // Reset everything to its resting state before animating in.
+        for v in [
+            &self.root.cast::<Visual>()?,
+            &self.frame.visual.cast()?,
+            &self.content.visual.cast()?,
+            &self.header.visual.cast()?,
+        ] {
+            Animator::stop(v, &["Opacity", "Offset", "Scale"]);
+        }
+        self.header.visual.SetScale(Vector3 {
+            X: 1.0,
+            Y: 1.0,
+            Z: 1.0,
+        })?;
+        // A new card has nowhere to go back to.
+        let back = &mut self.back;
+        Animator::stop(&back.visual, &["Opacity"]);
+        Animator::stop(&back.hover, &["Opacity"]);
+        back.visual.SetOpacity(0.0)?;
+        back.hover.SetOpacity(0.0)?;
+        (back.shown, back.hovered) = (false, false);
+        self.search.reset();
+        self.card_h = 0.0;
+        Ok(())
+    }
+
+    /// Shows the prepared card's window and animates the card in.
+    fn appear(&mut self) -> Result<()> {
+        let s = self.scale;
+        let card_w = CARD_W * s;
+        let pivot_y = if self.grow_up {
+            self.frame_y() + self.card_h
+        } else {
+            self.frame_y()
+        };
+        self.root.SetCenterPoint(Vector3 {
+            X: MARGIN * s + card_w / 2.0,
+            Y: pivot_y,
+            Z: 0.0,
+        })?;
+        self.root.SetOpacity(0.0)?;
+        self.root.SetScale(Vector3 {
+            X: 0.96,
+            Y: 0.96,
+            Z: 1.0,
+        })?;
+        self.root
+            .SetOffset(v3(0.0, if self.grow_up { 10.0 } else { -10.0 } * s))?;
+
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                Some(HWND_TOPMOST),
+                self.window.left,
+                self.window.top,
+                self.window.right - self.window.left,
+                self.window.bottom - self.window.top,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+        }
+        self.visible = true;
+
+        let anim = &self.anim;
+        anim.scalar(&self.root, "Opacity", 1.0, 160, 0, &anim.decelerate)?;
+        anim.vector3(
+            &self.root,
+            "Scale",
+            Vector3 {
+                X: 1.0,
+                Y: 1.0,
+                Z: 1.0,
+            },
+            SHOW_MS,
+            0,
+            &anim.decelerate,
+        )?;
+        anim.vector3(
+            &self.root,
+            "Offset",
+            v3(0.0, 0.0),
+            SHOW_MS,
+            0,
+            &anim.decelerate,
+        )?;
+        Ok(())
+    }
+
+    /// Turns the card into the search box. `in_place` fades out what it
+    /// showed first and resizes it smoothly; otherwise it's about to appear.
+    fn enter_search(&mut self, title: &str, placeholder: &str, in_place: bool) -> Result<()> {
+        self.set_back(false)?;
+        self.header_indent = 0.0;
+        let anim = &self.anim;
+        let shown: [Visual; 4] = [
+            self.header.visual.cast()?,
+            self.header.back.cast()?,
+            self.content.visual.cast()?,
+            self.loader.visual.cast()?,
+        ];
+        for v in &shown {
+            if in_place {
+                anim.scalar(v, "Opacity", 0.0, MAKE_WAY_MS, 0, &anim.accelerate)?;
+            } else {
+                Animator::stop(v, &["Opacity"]);
+                v.SetOpacity(0.0)?;
+            }
+        }
+        self.loader.running = false;
+        self.content.links.clear();
+        let delay = if in_place { MAKE_WAY_MS } else { 0 };
+        let (renderer, theme, s) = (&self.renderer, &self.theme, self.scale);
+        let h = self
+            .search
+            .open(renderer, anim, theme, s, title, placeholder, delay)?;
+        // Nothing below the box: no body to scroll or click.
+        (self.header_h, self.body_h) = (h, 0.0);
+        (self.scroll, self.scroll_anim) = (0.0, None);
+        self.resize(h, in_place)?;
+        self.update_scroll_chrome(false)
+    }
+
+    /// A point in window pixels, relative to the card's top left.
+    fn card_point(&self, x: i32, y: i32) -> (f32, f32) {
+        (x as f32 - MARGIN * self.scale, y as f32 - self.frame_y())
+    }
+
     fn frame_y(&self) -> f32 {
         let m = MARGIN * self.scale;
         if self.grow_up {
@@ -1337,14 +1529,14 @@ impl Popup {
 
     /// Picks the window position and scale for a card next to `anchor`, on
     /// the monitor the anchor is on.
-    fn place(&mut self, anchor: RECT) {
+    fn place(&mut self, anchor: RECT, downward: bool) {
         let center = POINT {
             x: (anchor.left + anchor.right) / 2,
             y: (anchor.top + anchor.bottom) / 2,
         };
         let (work, scale) = monitor_at(center);
         self.scale = scale;
-        (self.window, self.grow_up) = placement(anchor, work, scale);
+        (self.window, self.grow_up) = placement(anchor, work, scale, downward);
     }
 
     fn apply_theme(&mut self) -> Result<()> {
@@ -1468,7 +1660,7 @@ mod tests {
     #[test]
     fn places_the_card_below_the_selection() {
         let anchor = word_at(500, 100);
-        let (window, grow_up) = placement(anchor, SCREEN, 1.0);
+        let (window, grow_up) = placement(anchor, SCREEN, 1.0, false);
         assert!(!grow_up);
         // The card starts ANCHOR_GAP below the selection, aligned with its text.
         assert_eq!(
@@ -1483,7 +1675,7 @@ mod tests {
     #[test]
     fn grows_up_near_the_bottom_of_the_screen() {
         let anchor = word_at(500, 950);
-        let (window, grow_up) = placement(anchor, SCREEN, 1.0);
+        let (window, grow_up) = placement(anchor, SCREEN, 1.0, false);
         assert!(grow_up);
         // The card's bottom edge sits ANCHOR_GAP above the selection.
         assert_eq!(
@@ -1493,10 +1685,43 @@ mod tests {
     }
 
     #[test]
+    fn centres_a_search_card() {
+        for scale in [1.0, 1.5, 2.0] {
+            let (window, grow_up) = placement(centred_in(SCREEN, scale), SCREEN, scale, true);
+            assert!(!grow_up);
+            let m = (MARGIN * scale).round() as i32;
+            let card_w = (CARD_W * scale).round() as i32;
+            let card_left = window.left + m;
+            let middle = (SCREEN.left + SCREEN.right) / 2;
+            assert!((card_left + card_w / 2 - middle).abs() <= 1, "@{scale}");
+            // The empty box (about twice CENTRED_RISE tall) straddles the
+            // middle, unless that leaves no room below for the tallest card.
+            let card_top = window.top + m;
+            let rise = (CENTRED_RISE * scale).round() as i32;
+            let tallest = (MAX_CARD_H * scale).round() as i32;
+            let lowest = SCREEN.bottom - (SCREEN_GAP * scale).round() as i32 - tallest;
+            let expected = ((SCREEN.top + SCREEN.bottom) / 2 - rise).min(lowest);
+            assert!((card_top - expected).abs() <= 1, "@{scale}");
+        }
+    }
+
+    #[test]
+    fn search_cards_grow_down() {
+        let anchor = word_at(500, 950);
+        let (window, grow_up) = placement(anchor, SCREEN, 1.0, true);
+        assert!(!grow_up);
+        // Still on screen, with room for the tallest card.
+        assert_eq!(
+            window.bottom - MARGIN as i32,
+            SCREEN.bottom - SCREEN_GAP as i32
+        );
+    }
+
+    #[test]
     fn stays_on_screen() {
         for scale in [1.0, 1.5, 2.0] {
             for (x, y) in [(-50, 10), (1900, 500), (0, 0), (1900, 1030)] {
-                let (window, _) = placement(word_at(x, y), SCREEN, scale);
+                let (window, _) = placement(word_at(x, y), SCREEN, scale, false);
                 let m = (MARGIN * scale).round() as i32;
                 let edge = (SCREEN_GAP * scale).round() as i32;
                 assert!(window.left + m >= SCREEN.left + edge, "{x},{y} @{scale}");

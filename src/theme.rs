@@ -71,6 +71,15 @@ impl Theme {
         }
     }
 
+    /// The search field's background, as on a focused Windows 11 text box.
+    pub fn field(&self) -> Color {
+        if self.dark {
+            argb(0xB3, 0x1E, 0x1E, 0x1E)
+        } else {
+            rgb(0xFF, 0xFF, 0xFF)
+        }
+    }
+
     pub fn shadow_opacity(&self) -> f32 {
         if self.dark {
             0.55
@@ -93,6 +102,11 @@ impl Theme {
 
     pub fn divider(&self) -> D2D1_COLOR_F {
         self.ink(if self.dark { 0.09 } else { 0.08 })
+    }
+
+    /// The cap behind a key's name.
+    pub fn key(&self) -> D2D1_COLOR_F {
+        self.ink(if self.dark { 0.08 } else { 0.05 })
     }
 
     pub fn accent_d2d(&self) -> D2D1_COLOR_F {

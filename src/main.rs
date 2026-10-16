@@ -12,6 +12,7 @@ mod menu;
 mod offline;
 mod popup;
 mod render;
+mod searchbox;
 mod selection;
 mod theme;
 mod tray;

@@ -4,6 +4,14 @@ A small Windows tray app for looking up words. Select a word in any app, press
 **Ctrl+Alt+D**, and its definition shows up in a card next to the selection.
 Press Esc or click elsewhere to close it.
 
+With nothing selected, the shortcut opens a small box to type a word into
+instead, for text that can't be selected: in an image, a protected PDF or a
+game. It opens at the text cursor if the app reports one, and in the middle
+of the screen otherwise. Words from the dictionary
+are suggested as you type; pick one with the arrow keys or the mouse, or
+press Tab to complete it. Press Enter to look it up; Esc or the shortcut
+again closes it.
+
 Click a synonym to open its definition in the same card; the arrow next to
 the word, Backspace, Alt+← or the mouse's back button returns to the
 previous one.

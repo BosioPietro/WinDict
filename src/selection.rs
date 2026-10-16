@@ -7,8 +7,9 @@
 use std::cell::OnceCell;
 use std::time::{Duration, Instant};
 
-use windows::core::{w, Interface, PWSTR};
+use windows::core::{w, Interface, BOOL, PWSTR};
 use windows::Win32::Foundation::*;
+use windows::Win32::Graphics::Gdi::{MonitorFromRect, MONITOR_DEFAULTTONULL};
 use windows::Win32::Security::{GetTokenInformation, TokenUIAccess, TOKEN_QUERY};
 use windows::Win32::System::Com::*;
 use windows::Win32::System::DataExchange::*;
@@ -16,6 +17,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::*;
 use windows::Win32::System::Ole::*;
 use windows::Win32::System::Threading::*;
+use windows::Win32::System::Variant::{VARIANT, VT_I4};
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -35,6 +37,29 @@ pub struct Selection {
     pub text: String,
     /// Screen rectangle of the selection, when known.
     pub anchor: Option<RECT>,
+}
+
+/// What UI Automation knows about the selection.
+enum Found {
+    Text(Selection),
+    /// The focused field has the caret and nothing selected.
+    Nothing,
+    /// The app can't say (it doesn't support UI Automation's text pattern,
+    /// or the caret isn't in the focused element).
+    Unknown,
+}
+
+/// The first selected range of a text pattern and its text, if any.
+fn selected_text(pattern: &IUIAutomationTextPattern) -> Option<(String, IUIAutomationTextRange)> {
+    unsafe {
+        let ranges = pattern.GetSelection().ok()?;
+        if ranges.Length().ok()? < 1 {
+            return None;
+        }
+        let range = ranges.GetElement(0).ok()?;
+        let text = range.GetText(512).ok()?.to_string();
+        Some((text, range))
+    }
 }
 
 pub struct Capturer {
@@ -73,16 +98,31 @@ impl Capturer {
 
     pub fn capture(&self, use_ui_automation: bool) -> Option<Selection> {
         let foreground = unsafe { GetForegroundWindow() };
-        let mut selection = if use_ui_automation {
+        let found = if use_ui_automation {
             self.via_ui_automation()
         } else {
-            None
+            Found::Unknown
         };
-        // In terminals Ctrl+C without a selection interrupts the running program.
-        if selection.is_none() && !is_terminal(foreground) {
+        let known_empty = matches!(found, Found::Nothing);
+        let mut selection = match found {
+            Found::Text(selection) => Some(selection),
+            Found::Nothing | Found::Unknown => None,
+        };
+        // When nothing is selected, a copy would never come: skip waiting
+        // for one where UI Automation has already said so. In terminals
+        // Ctrl+C without a selection interrupts the running program.
+        if selection.is_none() && !known_empty && !is_terminal(foreground) {
             selection = self
                 .via_clipboard()
                 .map(|text| Selection { text, anchor: None });
+        }
+        // Nothing selected: no text, but the caret, if there is one, is
+        // where the search box should open.
+        if selection.is_none() {
+            selection = self.caret(use_ui_automation).map(|r| Selection {
+                text: String::new(),
+                anchor: Some(r),
+            });
         }
         // Start and Search sit in a z-order band above every normal window,
         // so the card would open hidden behind them: close them first. With
@@ -98,23 +138,105 @@ impl Capturer {
         selection
     }
 
-    fn via_ui_automation(&self) -> Option<Selection> {
+    fn via_ui_automation(&self) -> Found {
+        let Some(uia) = self.uia.get_or_init(create_uia).as_ref() else {
+            return Found::Unknown;
+        };
+        unsafe {
+            let Ok(element) = uia.GetFocusedElement() else {
+                return Found::Unknown;
+            };
+            let Ok(pattern) =
+                element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId)
+            else {
+                return Found::Unknown;
+            };
+            let text = selected_text(&pattern);
+            if let Some((text, range)) = text.filter(|(t, _)| !t.trim().is_empty()) {
+                let anchor = bounding_rect(&range);
+                return Found::Text(Selection { text, anchor });
+            }
+            // Nothing selected here. Believe it only if the caret is here
+            // too: otherwise the selection could be somewhere this field
+            // doesn't know about.
+            let caret_here = element
+                .GetCurrentPatternAs::<IUIAutomationTextPattern2>(UIA_TextPattern2Id)
+                .is_ok_and(|pattern| {
+                    let mut active = BOOL(0);
+                    pattern.GetCaretRange(&mut active).is_ok() && active.as_bool()
+                });
+            if caret_here {
+                Found::Nothing
+            } else {
+                Found::Unknown
+            }
+        }
+    }
+
+    /// The text caret in the foreground app, in screen pixels.
+    fn caret(&self, use_ui_automation: bool) -> Option<RECT> {
+        // Some apps answer with a rectangle that isn't the caret (empty,
+        // as tall as the window, off every screen): ask the next way then.
+        let via_uia = if use_ui_automation {
+            self.caret_via_ui_automation().filter(is_caret_sized)
+        } else {
+            None
+        };
+        via_uia.or_else(|| caret_via_accessibility().filter(is_caret_sized))
+    }
+
+    fn caret_via_ui_automation(&self) -> Option<RECT> {
         let uia = self.uia.get_or_init(create_uia).as_ref()?;
         unsafe {
             let element = uia.GetFocusedElement().ok()?;
-            let pattern: IUIAutomationTextPattern =
-                element.GetCurrentPatternAs(UIA_TextPatternId).ok()?;
-            let ranges = pattern.GetSelection().ok()?;
-            if ranges.Length().ok()? < 1 {
+            let pattern: IUIAutomationTextPattern2 =
+                element.GetCurrentPatternAs(UIA_TextPattern2Id).ok()?;
+            let mut active = BOOL(0);
+            let caret = pattern.GetCaretRange(&mut active).ok()?;
+            if !active.as_bool() {
                 return None;
             }
-            let range = ranges.GetElement(0).ok()?;
-            let text = range.GetText(512).ok()?.to_string();
-            if text.trim().is_empty() {
-                return None;
+            // Many apps measure the caret itself, as a line with no width;
+            // others answer with nonsense (Windows Search puts it two
+            // billion pixels up).
+            if let Some(r) = bounding_rect(&caret).filter(is_caret_sized) {
+                return Some(RECT {
+                    right: r.left + 1,
+                    ..r
+                });
             }
-            let anchor = bounding_rect(&range);
-            Some(Selection { text, anchor })
+            // Measure the character before it, or the one after, and take
+            // the edge it sits on. Line breaks don't count, as they're
+            // measured oddly or not at all.
+            let character = |endpoint, step| -> Option<RECT> {
+                let range = caret.Clone().ok()?;
+                range
+                    .MoveEndpointByUnit(endpoint, TextUnit_Character, step)
+                    .ok()?;
+                let text = range.GetText(2).ok()?.to_string();
+                if text.is_empty() || text.contains(['\r', '\n']) {
+                    return None;
+                }
+                bounding_rect(&range).filter(is_caret_sized)
+            };
+            if let Some(r) = character(TextPatternRangeEndpoint_Start, -1) {
+                return Some(RECT {
+                    left: r.right - 1,
+                    ..r
+                });
+            }
+            if let Some(r) = character(TextPatternRangeEndpoint_End, 1) {
+                return Some(RECT {
+                    right: r.left + 1,
+                    ..r
+                });
+            }
+            // An empty field has no characters to measure: open at the field
+            // itself, if it's a single line (a search box, an address bar).
+            element
+                .CurrentBoundingRectangle()
+                .ok()
+                .filter(is_caret_sized)
         }
     }
 
@@ -158,6 +280,53 @@ fn create_uia() -> Option<IUIAutomation> {
             return uia.cast().ok();
         }
         CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()
+    }
+}
+
+/// Whether `r` could be a caret: about a line tall, and on a screen.
+fn is_caret_sized(r: &RECT) -> bool {
+    let height = r.bottom - r.top;
+    r.right >= r.left
+        && height > 0
+        && height < 160
+        && !unsafe { MonitorFromRect(r, MONITOR_DEFAULTTONULL) }.is_invalid()
+}
+
+/// The caret as the foreground app reports it to accessibility tools: the
+/// classic Win32 caret, or the one browsers and Office expose themselves.
+fn caret_via_accessibility() -> Option<RECT> {
+    unsafe {
+        let thread = GetWindowThreadProcessId(GetForegroundWindow(), None);
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        GetGUIThreadInfo(thread, &mut info).ok()?;
+        let hwnd = [info.hwndCaret, info.hwndFocus]
+            .into_iter()
+            .find(|h| !h.is_invalid())?;
+        let mut object: Option<IAccessible> = None;
+        AccessibleObjectFromWindow(
+            hwnd,
+            OBJID_CARET.0 as u32,
+            &IAccessible::IID,
+            &mut object as *mut _ as *mut _,
+        )
+        .ok()?;
+        let (mut left, mut top, mut width, mut height) = (0, 0, 0, 0);
+        // The caret itself (CHILDID_SELF), not one of its children.
+        let mut own = VARIANT::default();
+        (*own.Anonymous.Anonymous).vt = VT_I4;
+        object?
+            .accLocation(&mut left, &mut top, &mut width, &mut height, &own)
+            .ok()?;
+        // A hidden caret reports an empty rectangle.
+        (height > 0).then(|| RECT {
+            left,
+            top,
+            right: left + width.max(1),
+            bottom: top + height,
+        })
     }
 }
 
@@ -274,6 +443,26 @@ pub fn has_ui_access() -> bool {
         let _ = CloseHandle(token);
         ok && value != 0
     })
+}
+
+/// Brings `hwnd` to the foreground, so it gets the keyboard. Windows only
+/// lets the app that received the last input do that; the hotkey usually
+/// makes that us, and when it doesn't, an input of our own does.
+pub fn take_foreground(hwnd: HWND) -> bool {
+    unsafe {
+        if SetForegroundWindow(hwnd).as_bool() {
+            return true;
+        }
+        // A key no keyboard has: it does nothing but count as input.
+        let inputs = [key(VIRTUAL_KEY(0xFF), false), key(VIRTUAL_KEY(0xFF), true)];
+        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+        SetForegroundWindow(hwnd).as_bool()
+    }
+}
+
+/// The text on the clipboard, if any.
+pub fn clipboard_text(owner: HWND) -> Option<String> {
+    read_clipboard_text(owner)
 }
 
 /// Closes Start/Search with Esc.
