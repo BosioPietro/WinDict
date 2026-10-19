@@ -1,6 +1,6 @@
 [package]
 name = "windict"
-version = "0.10.0"
+version = "0.10.1"
 edition = "2021"
 # <[T]>::as_chunks (selection.rs)
 rust-version = "1.88"
