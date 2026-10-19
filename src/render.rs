@@ -314,12 +314,15 @@ impl Renderer {
     }
 
     /// What's typed in the search box, on one line at least `width` wide,
-    /// and where the caret goes after it.
-    pub fn layout_query(&self, text: &str, width: f32) -> Result<(Layout, Caret)> {
+    /// its width, and where the caret goes when it's `at` UTF-16 units in.
+    pub fn layout_query(&self, text: &str, at: u32, width: f32) -> Result<(Layout, f32, Caret)> {
         let line = self.text(text, &self.formats.query, width)?;
         let (w, height, baseline) = metrics(&line);
+        let (mut x, mut y) = (0.0, 0.0);
+        let mut hit = DWRITE_HIT_TEST_METRICS::default();
+        unsafe { line.HitTestTextPosition(at, false, &mut x, &mut y, &mut hit)? };
         let caret = Caret {
-            x: w,
+            x,
             top: baseline - QUERY_SIZE * 0.86,
             height: QUERY_SIZE * 1.1,
         };
@@ -331,7 +334,7 @@ impl Renderer {
             height,
             links: Vec::new(),
         };
-        Ok((layout, caret))
+        Ok((layout, w, caret))
     }
 
     /// A suggested word, its first `typed` characters (what was typed) in

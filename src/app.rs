@@ -112,6 +112,8 @@ struct Looked {
 #[derive(Default)]
 struct Search {
     text: String,
+    /// Where the caret is in `text`, in bytes.
+    caret: usize,
     title: &'static str,
     /// Whether the heading says why the last Enter did nothing.
     error: bool,
@@ -126,8 +128,45 @@ struct Search {
 impl Search {
     fn push(&mut self, c: char) {
         if !c.is_control() && self.text.chars().count() < SEARCH_MAX_CHARS {
-            self.text.push(c);
+            self.text.insert(self.caret, c);
+            self.caret += c.len_utf8();
         }
+    }
+
+    /// Where the caret is, in the UTF-16 units DirectWrite counts.
+    fn caret_utf16(&self) -> u32 {
+        self.text[..self.caret].encode_utf16().count() as u32
+    }
+
+    /// Where the character before the caret starts.
+    fn prev_char(&self) -> usize {
+        self.text[..self.caret]
+            .char_indices()
+            .next_back()
+            .map_or(0, |(i, _)| i)
+    }
+
+    /// Where the character after the caret ends.
+    fn next_char(&self) -> usize {
+        self.text[self.caret..]
+            .chars()
+            .next()
+            .map_or(self.caret, |c| self.caret + c.len_utf8())
+    }
+
+    /// Where the word before the caret starts, past any spaces after it.
+    fn prev_word(&self) -> usize {
+        let trimmed = self.text[..self.caret].trim_end();
+        trimmed.rfind(char::is_whitespace).map_or(0, |i| i + 1)
+    }
+
+    /// Where the next word starts, past the rest of this one and the
+    /// spaces after it, as Ctrl+Right goes elsewhere in Windows.
+    fn next_word(&self) -> usize {
+        let rest = &self.text[self.caret..];
+        let word = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let spaces = rest[word..].len() - rest[word..].trim_start().len();
+        self.caret + word + spaces
     }
 }
 
@@ -589,13 +628,15 @@ impl App {
                 return self.submit_search(picked);
             }
             0x08 => {
-                search.text.pop();
+                let from = search.prev_char();
+                search.text.replace_range(from..search.caret, "");
+                search.caret = from;
             }
-            // Ctrl+Backspace: the last word.
+            // Ctrl+Backspace: the word before the caret.
             0x7F => {
-                let trimmed = search.text.trim_end();
-                let kept = trimmed.rfind(char::is_whitespace).map_or(0, |i| i + 1);
-                search.text.truncate(kept);
+                let from = search.prev_word();
+                search.text.replace_range(from..search.caret, "");
+                search.caret = from;
             }
             // Ctrl+V: the first line on the clipboard.
             0x16 => {
@@ -625,20 +666,51 @@ impl App {
         self.refresh_search();
     }
 
-    /// A key pressed in the card (WM_KEYDOWN): the arrows, Tab and
-    /// Shift+Tab pick a suggestion.
+    /// A key pressed in the card (WM_KEYDOWN): Up, Down, Tab and Shift+Tab
+    /// pick a suggestion; Left, Right, Home and End move the caret, by
+    /// words with Ctrl; Delete removes what's after it.
     fn on_key(&mut self, key: VIRTUAL_KEY) {
-        let (Some(_), Some(popup)) = (self.search.as_ref(), self.popup.as_mut()) else {
+        let (Some(search), Some(popup)) = (self.search.as_mut(), self.popup.as_mut()) else {
             return;
         };
+        // The high bit (a negative state) means the key is down.
+        let held = |vk: VIRTUAL_KEY| unsafe { GetKeyState(vk.0 as i32) < 0 };
+        let ctrl = held(VK_CONTROL);
         let down = match key {
-            VK_DOWN => true,
-            VK_UP => false,
-            // The high bit (a negative state) means Shift is down.
-            VK_TAB => unsafe { GetKeyState(VK_SHIFT.0 as i32) >= 0 },
+            VK_DOWN => Some(true),
+            VK_UP => Some(false),
+            VK_TAB => Some(!held(VK_SHIFT)),
+            _ => None,
+        };
+        if let Some(down) = down {
+            let _ = popup.step_suggestion(down);
+            return;
+        }
+        let caret = match key {
+            VK_LEFT if ctrl => search.prev_word(),
+            VK_LEFT => search.prev_char(),
+            VK_RIGHT if ctrl => search.next_word(),
+            VK_RIGHT => search.next_char(),
+            VK_HOME => 0,
+            VK_END => search.text.len(),
+            VK_DELETE => {
+                let to = if ctrl {
+                    search.next_word()
+                } else {
+                    search.next_char()
+                };
+                if to == search.caret {
+                    return;
+                }
+                search.text.replace_range(search.caret..to, "");
+                return self.refresh_search();
+            }
             _ => return,
         };
-        let _ = popup.step_suggestion(down);
+        if caret != search.caret {
+            search.caret = caret;
+            let _ = popup.set_query(&search.text, search.caret_utf16());
+        }
     }
 
     /// Shows what's typed in the search box, and the words it could be the
@@ -651,7 +723,7 @@ impl App {
         if std::mem::take(&mut search.error) {
             let _ = popup.set_search_title(search.title);
         }
-        let _ = popup.set_query(&search.text);
+        let _ = popup.set_query(&search.text, search.caret_utf16());
         let typed = search.text.trim_start().to_lowercase();
         let typed_chars = typed.chars().count();
         let suggest = typed_chars >= SUGGEST_AFTER;
@@ -1767,7 +1839,7 @@ unsafe extern "system" fn popup_proc(
                 None => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
             }
         }
-        // Picking a suggestion in the search box.
+        // Picking a suggestion, or moving the caret, in the search box.
         WM_KEYDOWN => {
             with_app(|app| app.on_key(VIRTUAL_KEY(wparam.0 as u16)));
             LRESULT(0)

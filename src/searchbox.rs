@@ -273,7 +273,7 @@ impl SearchBox {
         self.query.clear();
         Animator::stop(&self.query.visual, &["Offset"]);
         self.query.visual.SetOffset(v3(0.0, self.query_y))?;
-        let (_, caret) = renderer.layout_query("", width)?;
+        let (_, _, caret) = renderer.layout_query("", 0, width)?;
         self.caret_y = self.query_y + (caret.top * s).round();
         self.caret.SetSize(v2(
             (CARET_W * s).round().max(1.0),
@@ -351,33 +351,43 @@ impl SearchBox {
         Ok(height)
     }
 
-    /// Shows `text` in the field. The caret glides to its end, the text
-    /// scrolls to keep it in view, and the placeholder fades out or back in.
+    /// Shows `text` in the field. The caret glides to `at` (UTF-16 units
+    /// in), the text scrolls to keep it in view, and the placeholder fades
+    /// out or back in.
     pub(crate) fn set_query(
         &mut self,
         renderer: &Renderer,
         anim: &Animator,
         theme: &Theme,
         text: &str,
+        at: u32,
     ) -> Result<()> {
         let s = self.scale;
         let room = self.text_host.Size()?.X;
-        let (layout, caret) = renderer.layout_query(text, room / s)?;
+        let (layout, width, caret) = renderer.layout_query(text, at, room / s)?;
         if text.is_empty() {
             self.query.clear();
         } else {
             self.query.show(renderer, &layout, s, theme)?;
         }
-        let end = caret.x * s;
-        // Scroll so the caret stays in view, with a little room after it.
-        let shift = (end + 2.0 * s - room).max(0.0).round();
+        let (end, x) = (width * s, caret.x * s);
+        // Scroll as little as keeps the caret in view, with a little room
+        // after it, and never past the end of the text.
+        let margin = 2.0 * s;
+        let shift = self
+            .shift
+            .min(end + margin - room)
+            .max(x + margin - room)
+            .min(x)
+            .max(0.0)
+            .round();
         if shift != self.shift {
             self.shift = shift;
             let to = v3(-shift, self.query_y);
             let ease = &anim.decelerate;
             anim.vector3(&self.query.visual, "Offset", to, CARET_GLIDE_MS, 0, ease)?;
         }
-        let to = v3((end - shift).round(), self.caret_y);
+        let to = v3((x - shift).round(), self.caret_y);
         anim.vector3(
             &self.caret,
             "Offset",

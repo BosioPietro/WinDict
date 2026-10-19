@@ -1042,10 +1042,10 @@ impl Popup {
         self.appear()
     }
 
-    /// Shows `text` in the search box.
-    pub fn set_query(&mut self, text: &str) -> Result<()> {
+    /// Shows `text` in the search box, the caret `at` UTF-16 units in.
+    pub fn set_query(&mut self, text: &str, at: u32) -> Result<()> {
         self.search
-            .set_query(&self.renderer, &self.anim, &self.theme, text)
+            .set_query(&self.renderer, &self.anim, &self.theme, text, at)
     }
 
     /// Changes the search box's heading.
