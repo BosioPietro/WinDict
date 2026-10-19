@@ -104,7 +104,9 @@ const FALLBACK_DELAY: Duration = Duration::from_millis(500);
 
 /// Asks the Free Dictionary API first. If it hasn't produced a definition
 /// within `FALLBACK_DELAY` (or fails or has no entry sooner), Wiktionary is
-/// asked as well, and the first definition to arrive wins.
+/// asked as well, and the first definition to arrive wins. The Free
+/// Dictionary API is built from Wiktionary, so once Wiktionary has no entry
+/// the word isn't waited on any longer.
 pub fn lookup_online(word: &str, max_senses: usize, max_synonyms: usize) -> Lookup {
     let (w1, w2) = (word.to_string(), word.to_string());
     race(
@@ -119,16 +121,17 @@ fn race(
     secondary: impl FnOnce() -> Lookup + Send + 'static,
     delay: Duration,
 ) -> Lookup {
+    // Each answer says whether it's the secondary's.
     let (tx, rx) = mpsc::channel();
     let primary_tx = tx.clone();
     thread::spawn(move || {
-        let _ = primary_tx.send(primary());
+        let _ = primary_tx.send((false, primary()));
     });
     let mut secondary = Some((secondary, tx));
     let mut start_secondary = move || {
         if let Some((f, tx)) = secondary.take() {
             thread::spawn(move || {
-                let _ = tx.send(f());
+                let _ = tx.send((true, f()));
             });
             true
         } else {
@@ -138,8 +141,9 @@ fn race(
 
     let mut pending = 1;
     let mut failure: Option<String> = None;
+    let mut not_found = false;
     while pending > 0 {
-        let result = match rx.recv_timeout(delay) {
+        let (from_secondary, result) = match rx.recv_timeout(delay) {
             Ok(result) => result,
             Err(_) => {
                 // Still waiting on the primary: ask the secondary too.
@@ -156,17 +160,20 @@ fn race(
         match result {
             found @ Lookup::Found(_) => return found,
             Lookup::Failed(e) => failure = Some(e),
-            Lookup::NotFound => {}
+            // The primary can't know a word the secondary doesn't: no
+            // sense waiting for it, should it hang.
+            Lookup::NotFound if from_secondary => return Lookup::NotFound,
+            Lookup::NotFound => not_found = true,
         }
         // The primary came up empty before the delay: don't wait any longer.
         if start_secondary() {
             pending += 1;
         }
     }
-    // A definite "not found" only counts if neither source was unreachable.
+    // A definite "not found" from either source beats the other failing.
     match failure {
-        Some(e) => Lookup::Failed(e),
-        None => Lookup::NotFound,
+        Some(e) if !not_found => Lookup::Failed(e),
+        _ => Lookup::NotFound,
     }
 }
 
@@ -558,20 +565,45 @@ mod tests {
     }
 
     #[test]
-    fn race_reports_failure_over_not_found() {
+    fn race_reports_not_found_over_failure() {
         let d = Duration::from_millis(10);
         let r = race(
             delayed(0, Lookup::NotFound),
             delayed(0, Lookup::Failed("x".into())),
             d,
         );
-        assert!(matches!(r, Lookup::Failed(_)));
+        assert!(matches!(r, Lookup::NotFound));
+        let r = race(
+            delayed(0, Lookup::Failed("x".into())),
+            delayed(0, Lookup::NotFound),
+            d,
+        );
+        assert!(matches!(r, Lookup::NotFound));
         let r = race(
             delayed(0, Lookup::NotFound),
             delayed(0, Lookup::NotFound),
             d,
         );
         assert!(matches!(r, Lookup::NotFound));
+        // Only when both fail is it a failure.
+        let r = race(
+            delayed(0, Lookup::Failed("x".into())),
+            delayed(0, Lookup::Failed("y".into())),
+            d,
+        );
+        assert!(matches!(r, Lookup::Failed(_)));
+    }
+
+    #[test]
+    fn race_stops_waiting_when_secondary_is_empty() {
+        let start = std::time::Instant::now();
+        let r = race(
+            delayed(3000, found("primary")),
+            delayed(0, Lookup::NotFound),
+            Duration::from_millis(10),
+        );
+        assert!(matches!(r, Lookup::NotFound));
+        assert!(start.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
