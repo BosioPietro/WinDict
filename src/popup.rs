@@ -466,6 +466,9 @@ impl Frame {
 
         let shadow = c.CreateSpriteVisual()?;
         let shadow_surface = c.CreateSurfaceBrush()?;
+        // The nine-grid needs the whole surface; the default, Uniform, keeps
+        // its aspect ratio and leaves the edges unstretched.
+        shadow_surface.SetStretch(CompositionStretch::Fill)?;
         let shadow_brush = c.CreateNineGridBrush()?;
         shadow_brush.SetSource(&shadow_surface)?;
         shadow.SetBrush(&shadow_brush)?;
