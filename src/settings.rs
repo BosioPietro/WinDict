@@ -120,6 +120,7 @@ pub struct Values {
     pub theme: ThemeMode,
     pub max_definitions: usize,
     pub max_synonyms: usize,
+    pub show_examples: bool,
     pub online_lookup: bool,
     pub use_ui_automation: bool,
     pub autostart: bool,
@@ -135,6 +136,7 @@ pub enum Change {
     Theme(ThemeMode),
     MaxDefinitions(usize),
     MaxSynonyms(usize),
+    ShowExamples(bool),
     OnlineLookup(bool),
     UiAutomation(bool),
     Autostart(bool),
@@ -147,9 +149,15 @@ enum Switch {
     Autostart,
     Online,
     Automation,
+    Examples,
 }
 
-const SWITCHES: [Switch; 3] = [Switch::Autostart, Switch::Online, Switch::Automation];
+const SWITCHES: [Switch; 4] = [
+    Switch::Autostart,
+    Switch::Online,
+    Switch::Automation,
+    Switch::Examples,
+];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Counter {
@@ -276,6 +284,11 @@ const SECTIONS: &[(&str, &[Row])] = &[
                 "Synonyms",
                 "Similar words under each part of speech",
                 Control::Counter(Counter::Synonyms),
+            ),
+            row(
+                "Examples",
+                "Sentences showing each sense in use",
+                Control::Switch(Switch::Examples),
             ),
         ],
     ),
@@ -881,6 +894,10 @@ impl Settings {
                         v.use_ui_automation = on;
                         Change::UiAutomation(on)
                     }
+                    Switch::Examples => {
+                        v.show_examples = on;
+                        Change::ShowExamples(on)
+                    }
                 };
                 self.show_switch(sw, true)?;
                 Some(change)
@@ -895,6 +912,7 @@ impl Settings {
             Switch::Autostart => self.values.autostart,
             Switch::Online => self.values.online_lookup,
             Switch::Automation => self.values.use_ui_automation,
+            Switch::Examples => self.values.show_examples,
         }
     }
 
@@ -2123,7 +2141,7 @@ impl Settings {
 #[derive(Default)]
 struct Parts {
     shortcut: Option<ShortcutView>,
-    switches: [Option<SwitchView>; 3],
+    switches: [Option<SwitchView>; 4],
     theme: Option<ThemeView>,
     counters: [Option<CounterView>; 2],
     hits: Vec<(Hit, Rect)>,

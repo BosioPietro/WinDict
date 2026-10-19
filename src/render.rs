@@ -667,23 +667,27 @@ impl Renderer {
                 out.y += 9.0;
             }
             if !meaning.synonyms.is_empty() {
-                self.layout_synonyms(out, &meaning.synonyms, indent, width - indent)?;
+                self.layout_related(out, "Similar", &meaning.synonyms, indent, width - indent)?;
+            }
+            if !meaning.antonyms.is_empty() {
+                self.layout_related(out, "Opposite", &meaning.antonyms, indent, width - indent)?;
             }
         }
         Ok(())
     }
 
-    /// "Similar" and the synonyms, each a link to its own definition.
-    fn layout_synonyms(
+    /// `label` ("Similar", "Opposite") and the words, each a link to its own
+    /// definition.
+    fn layout_related(
         &self,
         out: &mut Stack,
+        label: &str,
         synonyms: &[String],
         x: f32,
         width: f32,
     ) -> Result<()> {
-        let label = "Similar  ";
         let separator = " \u{00B7} ";
-        let mut line = String::from(label);
+        let mut line = format!("{label}  ");
         // DirectWrite counts UTF-16 code units.
         let utf16 = |s: &str| s.encode_utf16().count() as u32;
         let mut ranges = Vec::new();
@@ -701,7 +705,7 @@ impl Renderer {
         unsafe {
             let range = DWRITE_TEXT_RANGE {
                 startPosition: 0,
-                length: label.trim_end().len() as u32,
+                length: label.len() as u32,
             };
             let _ = syn.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, range);
             for range in &ranges {

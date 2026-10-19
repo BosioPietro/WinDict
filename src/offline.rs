@@ -4,7 +4,7 @@
 //! pages in the parts a lookup touches (the block index plus a few small
 //! compressed blocks), so it costs no memory while the app sits idle.
 
-use crate::dictionary::{Definition, Meaning, Sense, WORDNET};
+use crate::dictionary::{Definition, Meaning, Sense, MAX_ANTONYMS, WORDNET};
 
 static DATA: &[u8] = include_bytes!("../data/english.wdict");
 
@@ -288,6 +288,8 @@ struct Entry {
 
 struct Synset {
     lemmas: Vec<String>,
+    /// Each lemma's opposites, in the order of `lemmas`.
+    antonyms: Vec<Vec<String>>,
     definition: String,
     examples: Vec<String>,
 }
@@ -325,7 +327,7 @@ impl<'a> Dict<'a> {
             synset_blocks: 0,
             synsets_per_block: 0,
         };
-        if dict.u32(4) != 2 {
+        if dict.u32(4) != 3 {
             return None;
         }
         Some(Dict {
@@ -432,10 +434,21 @@ impl Dict<'_> {
         let record = text.split('\x1e').nth(id % self.synsets_per_block)?;
         let mut lines = record.split('\n');
         let lemmas = lines.next()?.split('|').map(str::to_string).collect();
+        let antonyms = lines
+            .next()?
+            .split('|')
+            .map(|a| {
+                a.split('\t')
+                    .filter(|a| !a.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .collect();
         let definition = lines.next()?.to_string();
         let examples = lines.map(str::to_string).collect();
         Some(Synset {
             lemmas,
+            antonyms,
             definition,
             examples,
         })
@@ -496,14 +509,21 @@ impl Dict<'_> {
         for (pos, ids) in &entry.senses {
             let mut senses = Vec::new();
             let mut synonyms: Vec<String> = Vec::new();
+            let mut antonyms: Vec<String> = Vec::new();
             for synset in ids
                 .iter()
                 .take(max_senses.max(1))
                 .filter_map(|&id| self.synset(id))
             {
-                for lemma in &synset.lemmas {
-                    if synonyms.len() < max_synonyms
-                        && !lemma.eq_ignore_ascii_case(key)
+                for (i, lemma) in synset.lemmas.iter().enumerate() {
+                    if lemma.eq_ignore_ascii_case(key) {
+                        // Opposites belong to a word, not to its synonyms.
+                        for a in synset.antonyms.get(i).into_iter().flatten() {
+                            if antonyms.len() < MAX_ANTONYMS && !antonyms.contains(a) {
+                                antonyms.push(a.clone());
+                            }
+                        }
+                    } else if synonyms.len() < max_synonyms
                         && !synonyms.iter().any(|s| s.eq_ignore_ascii_case(lemma))
                     {
                         synonyms.push(lemma.clone());
@@ -527,6 +547,7 @@ impl Dict<'_> {
                 part_of_speech: part_of_speech.into(),
                 senses,
                 synonyms,
+                antonyms,
             });
         }
         if meanings.is_empty() {
@@ -620,6 +641,23 @@ mod tests {
         assert_eq!(find("run").meanings[0].part_of_speech, "verb");
         assert_eq!(find("ice cream").word, "ice cream");
         assert_eq!(find("paris").word, "Paris");
+    }
+
+    #[test]
+    fn finds_antonyms() {
+        let adjective = |word: &str| {
+            find(word)
+                .meanings
+                .into_iter()
+                .find(|m| m.part_of_speech == "adjective")
+                .unwrap()
+        };
+        let good = adjective("good");
+        assert!(good.antonyms.contains(&"bad".to_string()), "{good:?}");
+        assert!(!good.synonyms.contains(&"bad".to_string()));
+        // A synonym's opposites aren't the word's: "large" is "small", "big" is "little".
+        assert_eq!(adjective("big").antonyms, ["little"]);
+        assert!(find("dog").meanings.iter().all(|m| m.antonyms.is_empty()));
     }
 
     #[test]

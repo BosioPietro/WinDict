@@ -787,8 +787,15 @@ impl App {
     /// dictionary answers instantly; the online one fills gaps.
     fn lookup(&mut self, word: String, place: Place) {
         let (max_defs, max_syn) = (self.config.max_definitions, self.config.max_synonyms);
+        let examples = self.config.show_examples;
         self.current = Some(word.clone());
-        self.local = offline::lookup(&word, max_defs, max_syn);
+        self.local = offline::lookup(&word, max_defs, max_syn).map(|def| {
+            if examples {
+                def
+            } else {
+                def.without_examples()
+            }
+        });
         let online_key = match &self.local {
             Some(def) => def.word.to_lowercase(),
             None => word.clone(),
@@ -818,7 +825,10 @@ impl App {
 
         let (id, notify) = (self.request, self.hwnd.0 as isize);
         std::thread::spawn(move || {
-            let result = dictionary::lookup_online(&online_key, max_defs, max_syn);
+            let result = match dictionary::lookup_online(&online_key, max_defs, max_syn) {
+                Lookup::Found(def) if !examples => Lookup::Found(def.without_examples()),
+                result => result,
+            };
             post(
                 notify,
                 WM_APP_RESULT,
@@ -1483,6 +1493,7 @@ impl App {
             theme: c.theme,
             max_definitions: c.max_definitions,
             max_synonyms: c.max_synonyms,
+            show_examples: c.show_examples,
             online_lookup: c.online_lookup,
             use_ui_automation: c.use_ui_automation,
             autostart: autostart::is_enabled(),
@@ -1591,10 +1602,11 @@ impl App {
             }
             Change::MaxDefinitions(n) => self.config.max_definitions = n,
             Change::MaxSynonyms(n) => self.config.max_synonyms = n,
+            Change::ShowExamples(on) => self.config.show_examples = on,
             Change::OnlineLookup(on) => self.config.online_lookup = on,
             Change::UiAutomation(on) => self.config.use_ui_automation = on,
         }
-        // Online answers were cut down to the old limits.
+        // Online answers were cut down to the old limits, examples and all.
         self.cache.clear();
         if let Err(e) = config::save(&self.config) {
             self.tray.notify("Settings not saved", &e);

@@ -21,6 +21,16 @@ pub struct Definition {
     pub sources: Vec<&'static str>,
 }
 
+impl Definition {
+    /// Leaves out the example sentences, when they're turned off.
+    pub fn without_examples(mut self) -> Definition {
+        for sense in self.meanings.iter_mut().flat_map(|m| &mut m.senses) {
+            sense.example = None;
+        }
+        self
+    }
+}
+
 pub const WORDNET: &str = "Open English WordNet";
 pub const WIKTIONARY: &str = "Wiktionary";
 
@@ -29,7 +39,11 @@ pub struct Meaning {
     pub part_of_speech: String,
     pub senses: Vec<Sense>,
     pub synonyms: Vec<String>,
+    pub antonyms: Vec<String>,
 }
+
+/// Most opposites shown per part of speech. Words rarely have more.
+pub const MAX_ANTONYMS: usize = 6;
 
 #[derive(Clone, Debug)]
 pub struct Sense {
@@ -67,6 +81,8 @@ struct ApiMeaning {
     definitions: Vec<ApiDefinition>,
     #[serde(default)]
     synonyms: Vec<String>,
+    #[serde(default)]
+    antonyms: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -75,6 +91,8 @@ struct ApiDefinition {
     example: Option<String>,
     #[serde(default)]
     synonyms: Vec<String>,
+    #[serde(default)]
+    antonyms: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -275,6 +293,7 @@ fn parse_wiktionary(body: &[u8], word: &str, max_senses: usize) -> Option<Defini
                 part_of_speech: pos,
                 senses,
                 synonyms: Vec::new(),
+                antonyms: Vec::new(),
             }),
         }
     }
@@ -341,6 +360,7 @@ fn parse(body: &[u8], max_senses: usize, max_synonyms: usize) -> Option<Definiti
                     part_of_speech: pos,
                     senses: Vec::new(),
                     synonyms: Vec::new(),
+                    antonyms: Vec::new(),
                 });
                 meanings.len() - 1
             }
@@ -373,6 +393,18 @@ fn parse(body: &[u8], max_senses: usize, max_synonyms: usize) -> Option<Definiti
             }
             if !target.synonyms.contains(s) && !s.eq_ignore_ascii_case(&word) {
                 target.synonyms.push(s.clone());
+            }
+        }
+        let antonyms = meaning
+            .antonyms
+            .iter()
+            .chain(meaning.definitions.iter().flat_map(|d| &d.antonyms));
+        for a in antonyms {
+            if target.antonyms.len() >= MAX_ANTONYMS {
+                break;
+            }
+            if !target.antonyms.contains(a) && !a.eq_ignore_ascii_case(&word) {
+                target.antonyms.push(a.clone());
             }
         }
     }
@@ -611,8 +643,8 @@ mod tests {
         let body = br#"[
           {"word":"run","phonetics":[{"text":""},{"text":"/ran/"}],
            "meanings":[{"partOfSpeech":"verb","definitions":[
-              {"definition":"To move swiftly.","example":"Run to the store.","synonyms":["sprint"]},
-              {"definition":"To manage.","synonyms":[]}],"synonyms":["dash"]}]},
+              {"definition":"To move swiftly.","example":"Run to the store.","synonyms":["sprint"],"antonyms":["walk"]},
+              {"definition":"To manage.","synonyms":[]}],"synonyms":["dash"],"antonyms":["stop","walk"]}]},
           {"word":"run","meanings":[{"partOfSpeech":"verb","definitions":[{"definition":"Third."}]},
              {"partOfSpeech":"noun","definitions":[{"definition":"An act of running."}]}]}
         ]"#;
@@ -626,6 +658,8 @@ mod tests {
             Some("Run to the store.")
         );
         assert_eq!(def.meanings[0].synonyms, vec!["dash", "sprint"]);
+        assert_eq!(def.meanings[0].antonyms, vec!["stop", "walk"]);
+        assert!(def.meanings[1].antonyms.is_empty());
         assert_eq!(def.meanings[1].part_of_speech, "noun");
     }
 }

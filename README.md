@@ -14,7 +14,8 @@ the mouse. Press Enter to look it up; Esc or the shortcut
 again closes it. A word that isn't found offers the one it likely
 misspells (“emobdy”: “Did you mean embody?”), a link like the synonyms.
 
-Click a synonym to open its definition in the same card; the arrow next to
+Each part of speech lists similar words and, where there are any, opposite
+ones (“good”: “bad”). Click one to open its definition in the same card; the arrow next to
 the word, Backspace, Alt+← or the mouse's back button returns to the
 previous one. Tab and Shift+Tab move between the synonyms and the source
 links in order, and Enter opens the one that's ringed.
@@ -58,6 +59,7 @@ by hand, use **Open config.json** at the bottom of the settings window, then
 | `theme` | `"system"` | `"system"`, `"dark"` or `"light"`. |
 | `max_definitions` | `4` | Definitions per part of speech. |
 | `max_synonyms` | `6` | Synonyms per part of speech; `0` hides them. |
+| `show_examples` | `true` | Example sentences under the senses. |
 | `online_lookup` | `true` | `false` keeps WinDict fully offline. |
 | `use_ui_automation` | `true` | Read selections without touching the clipboard where apps allow it. |
 

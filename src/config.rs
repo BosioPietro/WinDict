@@ -23,6 +23,8 @@ pub struct Config {
     pub max_definitions: usize,
     /// Max synonyms shown per part of speech (0 hides them).
     pub max_synonyms: usize,
+    /// Show the example sentences under the senses.
+    pub show_examples: bool,
     /// Read the selection through UI Automation before falling back to the clipboard.
     pub use_ui_automation: bool,
     /// Use the online dictionary for words (and pronunciations) the bundled one lacks.
@@ -36,6 +38,7 @@ impl Default for Config {
             theme: ThemeMode::System,
             max_definitions: 4,
             max_synonyms: 6,
+            show_examples: true,
             use_ui_automation: true,
             online_lookup: true,
         }
@@ -96,6 +99,7 @@ mod tests {
         // Missing fields keep their defaults.
         assert_eq!(config.max_synonyms, 6);
         assert!(config.online_lookup);
+        assert!(config.show_examples);
         assert_eq!(
             parse(br#"{"max_definitions": 0}"#).unwrap().max_definitions,
             1
