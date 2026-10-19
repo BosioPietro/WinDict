@@ -1065,13 +1065,18 @@ impl Popup {
         self.search.field_at(x, y)
     }
 
-    /// Shows `items` (each a word and what it's a form of) under the search
-    /// field, the first `typed` characters in bold, resizing the card to fit.
-    pub fn set_suggestions(&mut self, items: &[(&str, Option<&str>)], typed: usize) -> Result<()> {
+    /// Shows `items` (each a word, what it's a form of, and how many of its
+    /// first characters to bold as typed) under the search field, or else
+    /// `note`, resizing the card to fit.
+    pub fn set_suggestions(
+        &mut self,
+        items: &[(&str, Option<&str>, usize)],
+        note: Option<&str>,
+    ) -> Result<()> {
         let (renderer, anim, theme) = (&self.renderer, &self.anim, &self.theme);
         let h = self
             .search
-            .set_suggestions(renderer, anim, theme, items, typed)?;
+            .set_suggestions(renderer, anim, theme, items, note)?;
         self.header_h = h;
         if (h - self.card_h).abs() > 0.5 {
             self.resize(h, true)?;

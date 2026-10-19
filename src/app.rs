@@ -84,6 +84,9 @@ const SEARCH_AGAIN_TITLE: &str = "Look up another word";
 const SEARCH_TOO_LONG: &str = "Try a single word or a short phrase";
 /// Suggestions start with this many letters typed: fewer match too much.
 const SUGGEST_AFTER: usize = 2;
+/// Under the field when the bundled dictionary has nothing to suggest.
+const NO_SUGGESTIONS: &str = "No matches in the offline dictionary";
+const NO_SUGGESTIONS_ONLINE: &str = "No offline matches \u{2014} Enter searches online";
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -116,6 +119,8 @@ struct Search {
     high_surrogate: Option<u16>,
     /// The words offered under the field.
     suggestions: Vec<offline::Suggestion>,
+    /// What they're picked from, read once something's typed.
+    words: Option<offline::Words>,
 }
 
 impl Search {
@@ -649,17 +654,27 @@ impl App {
         let _ = popup.set_query(&search.text);
         let typed = search.text.trim_start().to_lowercase();
         let typed_chars = typed.chars().count();
-        search.suggestions = if typed_chars >= SUGGEST_AFTER {
-            offline::suggest(&typed, MAX_SUGGESTIONS)
+        let suggest = typed_chars >= SUGGEST_AFTER;
+        search.suggestions = if suggest {
+            let words = search.words.get_or_insert_with(offline::Words::load);
+            words.suggest(&typed, MAX_SUGGESTIONS)
         } else {
             Vec::new()
         };
-        let items: Vec<(&str, Option<&str>)> = search
+        // Suggestions come from the bundled dictionary only: say so when it
+        // has nothing, and whether Enter will still look further.
+        let note =
+            (suggest && search.suggestions.is_empty()).then_some(if self.config.online_lookup {
+                NO_SUGGESTIONS_ONLINE
+            } else {
+                NO_SUGGESTIONS
+            });
+        let items: Vec<(&str, Option<&str>, usize)> = search
             .suggestions
             .iter()
-            .map(|s| (s.word.as_str(), s.base.as_deref()))
+            .map(|s| (s.word.as_str(), s.base.as_deref(), s.typed))
             .collect();
-        let _ = popup.set_suggestions(&items, typed_chars);
+        let _ = popup.set_suggestions(&items, note);
         self.on_resized();
     }
 

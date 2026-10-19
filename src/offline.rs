@@ -21,20 +21,208 @@ pub struct Suggestion {
     pub word: String,
     /// What an inflected form is a form of ("geese" → "goose").
     pub base: Option<String>,
+    /// How many of its first characters are what was typed: none when it
+    /// puts a typo right.
+    pub typed: usize,
 }
 
-/// How many blocks of entries a search for suggestions reads at most, so
-/// that a short, common prefix stays quick.
-const SUGGEST_BLOCKS: usize = 256;
+/// Every word the dictionary defines, to suggest from as the search box is
+/// typed in. Building it reads the whole dictionary (a few tens of ms), so
+/// it's made when the search box first needs it and dropped with the box.
+pub struct Words {
+    /// Each word's key, followed by its display form when that differs.
+    text: String,
+    /// In key order.
+    words: Vec<Word>,
+}
 
-/// Up to `limit` words starting with `prefix` (lowercase), the likeliest
-/// first: the word itself, then single words before phrases, then the ones
-/// with the most meanings, which tend to be the common ones.
-pub fn suggest(prefix: &str, limit: usize) -> Vec<Suggestion> {
-    match Dict::open(DATA) {
-        Some(dict) if !prefix.is_empty() => dict.suggest(prefix, limit),
-        _ => Vec::new(),
+struct Word {
+    start: u32,
+    key_len: u16,
+    display_len: u16,
+    senses: u16,
+}
+
+impl Words {
+    pub fn load() -> Words {
+        let mut words = Words {
+            text: String::new(),
+            words: Vec::new(),
+        };
+        let Some(dict) = Dict::open(DATA) else {
+            return words;
+        };
+        for block in 0..dict.entry_blocks {
+            let Some(text) = dict.entry_block(block) else {
+                continue;
+            };
+            for record in text.split('\x1e') {
+                let key = record.split('\n').next().unwrap_or_default();
+                let entry = Entry::parse(record);
+                let senses: usize = entry.senses.iter().map(|(_, ids)| ids.len()).sum();
+                if senses == 0 {
+                    continue;
+                }
+                let display = entry.display.filter(|d| d != key).unwrap_or_default();
+                words.words.push(Word {
+                    start: words.text.len() as u32,
+                    key_len: key.len() as u16,
+                    display_len: display.len() as u16,
+                    senses: senses.min(u16::MAX as usize) as u16,
+                });
+                words.text.push_str(key);
+                words.text.push_str(&display);
+            }
+        }
+        words
     }
+
+    fn key(&self, word: &Word) -> &str {
+        let start = word.start as usize;
+        &self.text[start..start + word.key_len as usize]
+    }
+
+    fn display(&self, word: &Word) -> &str {
+        let start = word.start as usize + word.key_len as usize;
+        match word.display_len {
+            0 => self.key(word),
+            len => &self.text[start..start + len as usize],
+        }
+    }
+
+    /// Up to `limit` words for what's been `typed` (lowercase), the likeliest
+    /// first: the word itself, then words starting with what's typed, then
+    /// words that do once a typo or two is put right ("recieve", "seperat").
+    /// Among those, single words come before phrases, then the ones with the
+    /// most meanings, which tend to be the common ones.
+    pub fn suggest(&self, typed: &str, limit: usize) -> Vec<Suggestion> {
+        if typed.is_empty() {
+            return Vec::new();
+        }
+        let rank = |i: usize, typos: usize| {
+            let word = &self.words[i];
+            let key = self.key(word);
+            let rank = (
+                key != typed,
+                typos,
+                key.contains(' '),
+                std::cmp::Reverse(word.senses),
+                key.len(),
+            );
+            (rank, i)
+        };
+        // Words starting with what's typed are consecutive.
+        let first = self.words.partition_point(|w| self.key(w) < typed);
+        let mut found: Vec<_> = (first..self.words.len())
+            .take_while(|&i| self.key(&self.words[i]).starts_with(typed))
+            .map(|i| rank(i, 0))
+            .collect();
+        let typed_chars: Vec<char> = typed.chars().collect();
+        let max = typos_allowed(typed_chars.len());
+        // Words with typos rank below those, so they're looked for only
+        // when there's room left.
+        if found.len() < limit && max > 0 {
+            let mut rows = Vec::new();
+            for (i, word) in self.words.iter().enumerate() {
+                let key = self.key(word);
+                if key.starts_with(typed) {
+                    continue;
+                }
+                if let Some(n) = typos(&typed_chars, key, max, &mut rows) {
+                    found.push(rank(i, n));
+                }
+            }
+        }
+        // Stable: equal ranks stay in alphabetical order.
+        found.sort_by_key(|(rank, _)| *rank);
+        let mut out: Vec<Suggestion> = found
+            .into_iter()
+            .take(limit)
+            .map(|((_, typos, ..), i)| Suggestion {
+                word: self.display(&self.words[i]).to_string(),
+                base: None,
+                typed: if typos == 0 { typed_chars.len() } else { 0 },
+            })
+            .collect();
+        // An inflected form ("geese", "walked") is offered, as what it's a
+        // form of, only once it's typed in full.
+        let defined = out.first().is_some_and(|s| s.word.to_lowercase() == typed);
+        if !defined {
+            if let Some(base) = Dict::open(DATA).and_then(|d| d.base_of(typed)) {
+                out.insert(
+                    0,
+                    Suggestion {
+                        word: typed.to_string(),
+                        base: Some(base),
+                        typed: typed_chars.len(),
+                    },
+                );
+                out.truncate(limit);
+            }
+        }
+        out
+    }
+}
+
+/// A typo, in half typos: two letters swapped, the likeliest slip, counts
+/// as half of one, so "recie" suggests "receive" before "review".
+const TYPO: usize = 2;
+const SWAP: usize = 1;
+
+/// How many typos a suggestion may put right, in half typos: none in a
+/// short word, where one would match too much.
+fn typos_allowed(chars: usize) -> usize {
+    match chars {
+        0..=3 => 0,
+        4..=7 => TYPO,
+        _ => 2 * TYPO,
+    }
+}
+
+/// The fewest typos (a letter added, dropped, changed, or two swapped) that
+/// turn the start of `key` into `typed`, in half typos, if there are at
+/// most `max`. `rows` is scratch space, kept between calls.
+fn typos(typed: &[char], key: &str, max: usize, rows: &mut Vec<usize>) -> Option<usize> {
+    // Edit distance, three rows at a time: one per letter of the key. With
+    // at most `band` letters added or dropped, only cells that close to the
+    // diagonal can be in reach; the ones just past it read as out of reach.
+    const FAR: usize = usize::MAX / 4;
+    let (m, band) = (typed.len(), max / TYPO);
+    let w = m + 1;
+    rows.clear();
+    rows.extend((0..w).map(|i| if i <= band { i * TYPO } else { FAR }));
+    rows.resize(3 * w, FAR);
+    let mut best = if m <= band { m * TYPO } else { FAR };
+    let mut before = '\0';
+    for (j, c) in key.chars().take(m + band).enumerate() {
+        let j = j + 1;
+        let (cur, prev, prev2) = ((j % 3) * w, ((j - 1) % 3) * w, ((j + 1) % 3) * w);
+        let (lo, hi) = (j.saturating_sub(band).max(1), (j + band).min(m));
+        rows[cur + lo - 1] = if j <= band { j * TYPO } else { FAR };
+        let mut row_min = rows[cur + lo - 1];
+        for i in lo..=hi {
+            let cost = if typed[i - 1] == c { 0 } else { TYPO };
+            let mut d = (rows[prev + i] + TYPO)
+                .min(rows[cur + i - 1] + TYPO)
+                .min(rows[prev + i - 1] + cost);
+            if i > 1 && j > 1 && typed[i - 1] == before && typed[i - 2] == c {
+                d = d.min(rows[prev2 + i - 2] + SWAP);
+            }
+            rows[cur + i] = d;
+            row_min = row_min.min(d);
+        }
+        if hi < m {
+            rows[cur + hi + 1] = FAR;
+        }
+        if hi == m {
+            best = best.min(rows[cur + m]);
+        }
+        if row_min > max {
+            break;
+        }
+        before = c;
+    }
+    (best <= max).then_some(best)
 }
 
 struct Dict<'a> {
@@ -147,45 +335,18 @@ impl<'a> Dict<'a> {
         Some(Entry::parse(record))
     }
 
-    fn suggest(&self, prefix: &str, limit: usize) -> Vec<Suggestion> {
-        // Entries are sorted, so the matches are consecutive.
-        let first = self.block_of(prefix).unwrap_or(0);
-        let last = self.entry_blocks.min(first + SUGGEST_BLOCKS);
-        let mut found = Vec::new();
-        'blocks: for block in first..last {
-            let Some(text) = self.entry_block(block) else {
-                break;
-            };
-            for record in text.split('\x1e') {
-                let key = record.split('\n').next().unwrap_or_default();
-                if !key.starts_with(prefix) {
-                    if key > prefix {
-                        break 'blocks;
-                    }
-                    continue;
-                }
-                let entry = Entry::parse(record);
-                let senses: usize = entry.senses.iter().map(|(_, ids)| ids.len()).sum();
-                let exact = key == prefix;
-                // An inflected form ("geese") only when it's what was typed.
-                let base = match (senses, entry.redirects.first()) {
-                    (0, Some(base)) if exact => Some(base.clone()),
-                    (0, _) => continue,
-                    _ => None,
-                };
-                let word = entry.display.unwrap_or_else(|| key.to_string());
-                let rank = (
-                    !exact,
-                    key.contains(' '),
-                    std::cmp::Reverse(senses),
-                    key.len(),
-                );
-                found.push((rank, Suggestion { word, base }));
-            }
+    /// What `word` is a form of, if it isn't a word in its own right:
+    /// "geese" → "goose", "walked" → "walk".
+    fn base_of(&self, word: &str) -> Option<String> {
+        let entry = self.entry(word).unwrap_or_default();
+        if !entry.senses.is_empty() {
+            return None;
         }
-        // Stable: equal ranks stay in alphabetical order.
-        found.sort_by_key(|(rank, _)| *rank);
-        found.into_iter().take(limit).map(|(_, s)| s).collect()
+        entry
+            .redirects
+            .into_iter()
+            .chain(inflection_bases(word))
+            .find(|base| self.defined(base).is_some())
     }
 }
 
@@ -456,8 +617,17 @@ mod tests {
         assert_eq!(spellings("dog"), ["dog"]);
     }
 
-    fn words(prefix: &str) -> Vec<String> {
-        suggest(prefix, 5).into_iter().map(|s| s.word).collect()
+    fn all_words() -> &'static Words {
+        static WORDS: std::sync::OnceLock<Words> = std::sync::OnceLock::new();
+        WORDS.get_or_init(Words::load)
+    }
+
+    fn suggest(typed: &str, limit: usize) -> Vec<Suggestion> {
+        all_words().suggest(typed, limit)
+    }
+
+    fn words(typed: &str) -> Vec<String> {
+        suggest(typed, 5).into_iter().map(|s| s.word).collect()
     }
 
     #[test]
@@ -480,17 +650,70 @@ mod tests {
         // Inflected forms only when typed in full.
         let geese = suggest("geese", 5);
         assert_eq!(geese[0].base.as_deref(), Some("goose"));
-        assert!(suggest("gees", 5).iter().all(|s| s.base.is_none()));
+        assert_eq!(suggest("walked", 5)[0].base.as_deref(), Some("walk"));
+        assert!(suggest("gee", 5).iter().all(|s| s.base.is_none()));
+    }
+
+    #[test]
+    fn suggests_despite_typos() {
+        // Swapped, changed, missing and extra letters.
+        assert_eq!(words("recieve")[0], "receive");
+        assert_eq!(words("seperate")[0], "separate");
+        assert_eq!(words("definately")[0], "definitely");
+        assert!(words("acomodate").contains(&"accommodate".to_string()));
+        assert!(words("embarass").contains(&"embarrass".to_string()));
+        // While typing, too.
+        assert!(words("necces").contains(&"necessary".to_string()));
+        // What's typed correctly still comes first.
+        let hous = words("hous");
+        assert!(hous.iter().all(|w| w.to_lowercase().starts_with("hous")));
+        // A swap is the likeliest typo.
+        assert_eq!(words("recie")[0], "receive");
+        // Short words are taken as typed.
+        assert!(words("qwz").is_empty());
+        assert!(words("xqzvw").is_empty());
+    }
+
+    #[test]
+    fn counts_typos() {
+        let count = |typed: &str, key: &str| {
+            let typed: Vec<char> = typed.chars().collect();
+            typos(&typed, key, 2 * TYPO, &mut Vec::new())
+        };
+        assert_eq!(count("house", "house"), Some(0));
+        assert_eq!(count("hous", "household"), Some(0));
+        assert_eq!(count("hosue", "house"), Some(SWAP));
+        assert_eq!(count("huse", "house"), Some(TYPO));
+        assert_eq!(count("hoouse", "house"), Some(TYPO));
+        assert_eq!(count("hause", "house"), Some(TYPO));
+        assert_eq!(count("haase", "house"), Some(2 * TYPO));
+        assert_eq!(count("hhaase", "house"), None);
+        assert_eq!(count("accomodate", "accommodate"), Some(TYPO));
+        assert_eq!(count("acomodate", "accommodate"), Some(2 * TYPO));
+        assert_eq!(count("zzzzz", "house"), None);
     }
 
     #[test]
     fn suggests_quickly() {
         let start = std::time::Instant::now();
-        for prefix in ["co", "re", "st", "pr", "ma"] {
-            assert_eq!(suggest(prefix, 5).len(), 5);
+        let words = all_words();
+        eprintln!("load: {:?}", start.elapsed());
+        let start = std::time::Instant::now();
+        let typed = [
+            "co",
+            "re",
+            "st",
+            "pr",
+            "ma",
+            "recie",
+            "seperat",
+            "definately",
+        ];
+        for t in typed {
+            assert!(!words.suggest(t, 5).is_empty(), "{t}");
         }
-        let each = start.elapsed() / 5;
-        eprintln!("suggest: {each:?} per prefix");
+        let each = start.elapsed() / typed.len() as u32;
+        eprintln!("suggest: {each:?} per query");
     }
 
     #[test]

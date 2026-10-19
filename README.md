@@ -7,8 +7,9 @@ Press Esc or click elsewhere to close it.
 With nothing selected, the shortcut opens a small box to type a word into
 instead, for text that can't be selected: in an image, a protected PDF or a
 game. It opens at the text cursor if the app reports one, and in the middle
-of the screen otherwise. Words from the dictionary
-are suggested as you type; pick one with Tab, Shift+Tab, the arrow keys or
+of the screen otherwise. Words from the bundled dictionary
+are suggested as you type, typos and all (“recieve” finds “receive”);
+pick one with Tab, Shift+Tab, the arrow keys or
 the mouse. Press Enter to look it up; Esc or the shortcut
 again closes it.
 

@@ -77,6 +77,9 @@ pub(crate) struct SearchBox {
     highlight_clip: CompositionRoundedRectangleGeometry,
     highlight_brush: CompositionColorBrush,
     rows: Vec<Text>,
+    /// Says why there are no suggestions, in the first row's place.
+    note: Text,
+    noted: bool,
     /// How many rows show, and which one is picked.
     count: usize,
     selected: Option<usize>,
@@ -153,6 +156,7 @@ impl SearchBox {
         let rows = (0..MAX_SUGGESTIONS)
             .map(|_| Text::new(c, &list))
             .collect::<Result<Vec<_>>>()?;
+        let note = Text::new(c, &list)?;
 
         let footer = Text::new(c, &visual)?;
 
@@ -179,6 +183,8 @@ impl SearchBox {
             highlight_clip,
             highlight_brush,
             rows,
+            note,
+            noted: false,
             count: 0,
             selected: None,
             row_rest: vec![v3(0.0, 0.0); MAX_SUGGESTIONS],
@@ -286,7 +292,10 @@ impl SearchBox {
             row.visual.SetOpacity(0.0)?;
             row.clear();
         }
-        (self.count, self.selected) = (0, None);
+        Animator::stop(&self.note.visual, &["Opacity", "Offset"]);
+        self.note.visual.SetOpacity(0.0)?;
+        self.note.clear();
+        (self.count, self.selected, self.noted) = (0, None, false);
         self.highlight_brush.SetColor(theme.highlight())?;
         let row_size = v2(field_w, (ROW_H * s).round());
         self.highlight.SetSize(row_size)?;
@@ -389,32 +398,58 @@ impl SearchBox {
         Ok(())
     }
 
-    /// Shows `items` (each a word and what it's a form of) under the field,
-    /// the first `typed` characters in bold. New rows slide in, rows no
-    /// longer needed fade, and the footer glides to its new place. Returns
-    /// the box's new height in pixels.
+    /// Shows `items` (each a word, what it's a form of, and how many of its
+    /// first characters to bold as typed) under the field, or else `note`
+    /// in their place. New rows slide in, rows no longer needed fade, and
+    /// the footer glides to its new place. Returns the box's new height in
+    /// pixels.
     pub(crate) fn set_suggestions(
         &mut self,
         renderer: &Renderer,
         anim: &Animator,
         theme: &Theme,
-        items: &[(&str, Option<&str>)],
-        typed: usize,
+        items: &[(&str, Option<&str>, usize)],
+        note: Option<&str>,
     ) -> Result<f32> {
         let s = self.scale;
         let count = items.len().min(self.rows.len());
         let x = self.field_at.X + (TEXT_X * s).round();
         let room = self.field_size.X - (TEXT_X + TEXT_PAD_RIGHT) * s;
         let row_h = (ROW_H * s).round();
+        let was_noted = self.noted;
+        self.noted = count == 0 && note.is_some();
+        let v = &self.note.visual;
+        match note.filter(|_| self.noted) {
+            Some(note) => {
+                let layout = renderer.layout_line(note, Face::Menu, Ink::Tertiary, room / s)?;
+                let size = self.note.show(renderer, &layout, s, theme)?;
+                let rest = v3(x, ((row_h - size.Y) / 2.0).round());
+                Animator::stop(v, &["Offset"]);
+                if was_noted {
+                    v.SetOffset(rest)?;
+                } else {
+                    // Like a row: a short slide down from under the field.
+                    Animator::stop(v, &["Opacity"]);
+                    v.SetOpacity(0.0)?;
+                    v.SetOffset(v3(rest.X, rest.Y - DRIFT * s))?;
+                    anim.scalar(v, "Opacity", 1.0, ROW_MS, 0, &anim.decelerate)?;
+                    anim.vector3(v, "Offset", rest, ROW_MS, 0, &anim.decelerate)?;
+                }
+            }
+            None if was_noted => {
+                anim.scalar(v, "Opacity", 0.0, LEAVE_MS, 0, &anim.accelerate)?;
+            }
+            None => {}
+        }
         for (i, row) in self.rows.iter().enumerate() {
             let v = &row.visual;
-            let Some((word, base)) = items.get(i).filter(|_| i < count) else {
+            let Some((word, base, typed)) = items.get(i).filter(|_| i < count) else {
                 if i < self.count {
                     anim.scalar(v, "Opacity", 0.0, LEAVE_MS, 0, &anim.accelerate)?;
                 }
                 continue;
             };
-            let layout = renderer.layout_suggestion(word, typed, *base, room / s)?;
+            let layout = renderer.layout_suggestion(word, *typed, *base, room / s)?;
             let size = row.show(renderer, &layout, s, theme)?;
             let rest = v3(x, i as f32 * row_h + ((row_h - size.Y) / 2.0).round());
             self.row_rest[i] = rest;
@@ -431,14 +466,16 @@ impl SearchBox {
             anim.scalar(v, "Opacity", 1.0, ROW_MS, delay, &anim.decelerate)?;
             anim.vector3(v, "Offset", rest, ROW_MS, delay, &anim.decelerate)?;
         }
-        if count != self.count {
-            let to = v3(self.field_at.X, self.footer_y(count));
+        // The note takes a row's room.
+        let shown = count.max(self.noted as usize);
+        if shown != self.count.max(was_noted as usize) {
+            let to = v3(self.field_at.X, self.footer_y(shown));
             let footer = &self.footer.visual;
             anim.vector3(footer, "Offset", to, RESIZE_MS, 0, &anim.decelerate)?;
         }
         self.count = count;
         self.select(anim, None)?;
-        Ok(self.height(count))
+        Ok(self.height(shown))
     }
 
     /// The picked suggestion, if any.
@@ -557,13 +594,14 @@ impl SearchBox {
             &self.placeholder,
             &self.query,
             &self.footer,
+            &self.note,
         ]
         .into_iter()
         .chain(&self.rows)
         {
             text.clear();
         }
-        (self.count, self.selected) = (0, None);
+        (self.count, self.selected, self.noted) = (0, None, false);
     }
 
     /// Whether a point in card pixels is on the field.
@@ -572,7 +610,7 @@ impl SearchBox {
         self.active && x >= at.X && x < at.X + size.X && y >= at.Y && y < at.Y + size.Y
     }
 
-    /// Where the footer goes with `count` suggestions, in card pixels.
+    /// Where the footer goes with `count` rows under the field, in card pixels.
     fn footer_y(&self, count: usize) -> f32 {
         let s = self.scale;
         let field_bottom = self.field_at.Y + self.field_size.Y;
@@ -584,7 +622,7 @@ impl SearchBox {
         field_bottom + list + (FOOTER_GAP * s).round()
     }
 
-    /// The box's height with `count` suggestions, in pixels.
+    /// The box's height with `count` rows under the field, in pixels.
     fn height(&self, count: usize) -> f32 {
         (self.footer_y(count) + self.footer_h + PAD_BOTTOM * self.scale).ceil()
     }
