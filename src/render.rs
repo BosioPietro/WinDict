@@ -173,7 +173,13 @@ pub enum Face {
 pub enum Body<'a> {
     Loading,
     Definition(&'a Definition),
-    Message { title: &'a str, detail: &'a str },
+    /// `suggestion`, if any, is offered after `detail` as a link to its own
+    /// definition: "Did you mean embody?"
+    Message {
+        title: &'a str,
+        detail: &'a str,
+        suggestion: Option<&'a str>,
+    },
 }
 
 /// Where the caret goes in a laid-out text box, in DIPs.
@@ -555,9 +561,11 @@ impl Renderer {
         match body {
             // Room for the loading dots, which popup.rs draws.
             Body::Loading => out.y = 26.0,
-            Body::Message { title, detail } => {
-                self.layout_message(&mut out, title, detail, width)?
-            }
+            Body::Message {
+                title,
+                detail,
+                suggestion,
+            } => self.layout_message(&mut out, title, detail, *suggestion, width)?,
             Body::Definition(def) => {
                 self.layout_definition(&mut out, def, width)?;
                 self.layout_sources(&mut out, def, width)?;
@@ -571,7 +579,14 @@ impl Renderer {
         })
     }
 
-    fn layout_message(&self, out: &mut Stack, title: &str, detail: &str, width: f32) -> Result<()> {
+    fn layout_message(
+        &self,
+        out: &mut Stack,
+        title: &str,
+        detail: &str,
+        suggestion: Option<&str>,
+        width: f32,
+    ) -> Result<()> {
         let (_, h) = out.text(
             self.text(title, &self.formats.title, width)?,
             0.0,
@@ -581,6 +596,31 @@ impl Renderer {
         if !detail.is_empty() {
             let d = self.text(detail, &self.formats.body, width)?;
             let (_, h) = out.text(d, 0.0, Ink::Secondary);
+            out.y += h;
+        }
+        if let Some(word) = suggestion {
+            out.y += 8.0;
+            let ask = "Did you mean ";
+            // DirectWrite counts UTF-16 code units.
+            let range = DWRITE_TEXT_RANGE {
+                startPosition: ask.encode_utf16().count() as u32,
+                length: word.encode_utf16().count() as u32,
+            };
+            let line = self.text(&format!("{ask}{word}?"), &self.formats.body, width)?;
+            unsafe {
+                let _ = line.SetUnderline(true, range);
+            }
+            // Like a synonym: one rectangle per line, should it wrap.
+            for r in hit_rects(&line, range) {
+                out.links.push(Link {
+                    x: r.left - 2.0,
+                    y: out.y + r.top,
+                    width: r.width + 4.0,
+                    height: r.height,
+                    target: Target::Word(word.to_string()),
+                });
+            }
+            let (_, h) = out.text_with_accents(line, 0.0, Ink::Secondary, vec![range]);
             out.y += h;
         }
         Ok(())

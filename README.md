@@ -11,7 +11,8 @@ of the screen otherwise. Words from the bundled dictionary
 are suggested as you type, typos and all (“recieve” finds “receive”);
 pick one with Tab, Shift+Tab, the arrow keys or
 the mouse. Press Enter to look it up; Esc or the shortcut
-again closes it.
+again closes it. A word that isn't found offers the one it likely
+misspells (“emobdy”: “Did you mean embody?”), a link like the synonyms.
 
 Click a synonym to open its definition in the same card; the arrow next to
 the word, Backspace, Alt+← or the mouse's back button returns to the

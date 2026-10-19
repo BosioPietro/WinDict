@@ -868,8 +868,13 @@ impl App {
         }
     }
 
-    /// The card's title, pronunciation and body for a lookup of `word`.
-    fn card_for<'a>(word: &'a str, result: &'a Lookup) -> (&'a str, Option<&'a str>, Body<'a>) {
+    /// The card's title, pronunciation and body for a lookup of `word`,
+    /// offering `correction` when it wasn't found or couldn't be looked up.
+    fn card_for<'a>(
+        word: &'a str,
+        result: &'a Lookup,
+        correction: Option<&'a str>,
+    ) -> (&'a str, Option<&'a str>, Body<'a>) {
         match result {
             Lookup::Found(def) => (&def.word, def.phonetic.as_deref(), Body::Definition(def)),
             Lookup::NotFound => (
@@ -877,7 +882,11 @@ impl App {
                 None,
                 Body::Message {
                     title: "No definition found",
-                    detail: "This word isn\u{2019}t in the dictionary. Check the spelling?",
+                    detail: match correction {
+                        Some(_) => "This word isn\u{2019}t in the dictionary.",
+                        None => "This word isn\u{2019}t in the dictionary. Check the spelling?",
+                    },
+                    suggestion: correction,
                 },
             ),
             Lookup::Failed(error) => (
@@ -886,13 +895,25 @@ impl App {
                 Body::Message {
                     title: "Couldn\u{2019}t look that up",
                     detail: error,
+                    suggestion: correction,
                 },
             ),
         }
     }
 
+    /// The word `word` was likely a typo of, when it wasn't found or couldn't
+    /// be looked up. Reads the whole word list (a few tens of ms), dropped
+    /// again straight after.
+    fn correction(word: &str, result: &Lookup) -> Option<String> {
+        if matches!(result, Lookup::Found(_)) {
+            return None;
+        }
+        offline::Words::load().correct(word).map(str::to_string)
+    }
+
     fn present(&mut self, place: Place, word: &str, result: &Lookup) {
-        let (title, phonetic, body) = Self::card_for(word, result);
+        let correction = Self::correction(word, result);
+        let (title, phonetic, body) = Self::card_for(word, result, correction.as_deref());
         self.present_body(place, title, phonetic, body);
     }
 
@@ -910,7 +931,8 @@ impl App {
     }
 
     fn update(&mut self, word: &str, result: &Lookup, transition: Transition) {
-        let (title, phonetic, body) = Self::card_for(word, result);
+        let correction = Self::correction(word, result);
+        let (title, phonetic, body) = Self::card_for(word, result, correction.as_deref());
         self.update_body(title, phonetic, body, transition);
     }
 
@@ -943,7 +965,11 @@ impl App {
             anchor,
             "WinDict",
             None,
-            Body::Message { title, detail },
+            Body::Message {
+                title,
+                detail,
+                suggestion: None,
+            },
             auto_hide,
         );
     }

@@ -128,7 +128,7 @@ impl Words {
                 if key.starts_with(typed) {
                     continue;
                 }
-                if let Some(n) = typos(&typed_chars, key, max, &mut rows) {
+                if let Some(n) = typos(&typed_chars, key, max, false, &mut rows) {
                     found.push(rank(i, n));
                 }
             }
@@ -162,6 +162,31 @@ impl Words {
         }
         out
     }
+
+    /// The word that was likely meant by `typed` (lowercase), which wasn't
+    /// found: the closest one once a typo or two is put right ("emobdy" →
+    /// "embody"), single words before phrases, then the one with the most
+    /// meanings.
+    pub fn correct(&self, typed: &str) -> Option<&str> {
+        let typed_chars: Vec<char> = typed.chars().collect();
+        let max = typos_allowed(typed_chars.len());
+        if max == 0 {
+            return None;
+        }
+        let mut rows = Vec::new();
+        let word = self
+            .words
+            .iter()
+            .filter(|w| self.key(w) != typed)
+            .filter_map(|w| {
+                let key = self.key(w);
+                let n = typos(&typed_chars, key, max, true, &mut rows)?;
+                Some(((n, key.contains(' '), std::cmp::Reverse(w.senses)), w))
+            })
+            .min_by_key(|(rank, _)| *rank)?
+            .1;
+        Some(self.display(word))
+    }
 }
 
 /// A typo, in half typos: two letters swapped, the likeliest slip, counts
@@ -180,19 +205,40 @@ fn typos_allowed(chars: usize) -> usize {
 }
 
 /// The fewest typos (a letter added, dropped, changed, or two swapped) that
-/// turn the start of `key` into `typed`, in half typos, if there are at
-/// most `max`. `rows` is scratch space, kept between calls.
-fn typos(typed: &[char], key: &str, max: usize, rows: &mut Vec<usize>) -> Option<usize> {
+/// turn the start of `key`, or all of it when `whole`, into `typed`, in
+/// half typos, if there are at most `max`. `rows` is scratch space, kept
+/// between calls.
+fn typos(
+    typed: &[char],
+    key: &str,
+    max: usize,
+    whole: bool,
+    rows: &mut Vec<usize>,
+) -> Option<usize> {
     // Edit distance, three rows at a time: one per letter of the key. With
     // at most `band` letters added or dropped, only cells that close to the
     // diagonal can be in reach; the ones just past it read as out of reach.
     const FAR: usize = usize::MAX / 4;
     let (m, band) = (typed.len(), max / TYPO);
+    // Only the cells at the key's end count when all of it must match.
+    let end = if whole {
+        let len = key.chars().count();
+        if len > m + band {
+            return None;
+        }
+        Some(len)
+    } else {
+        None
+    };
     let w = m + 1;
     rows.clear();
     rows.extend((0..w).map(|i| if i <= band { i * TYPO } else { FAR }));
     rows.resize(3 * w, FAR);
-    let mut best = if m <= band { m * TYPO } else { FAR };
+    let mut best = if m <= band && end.is_none_or(|e| e == 0) {
+        m * TYPO
+    } else {
+        FAR
+    };
     let mut before = '\0';
     for (j, c) in key.chars().take(m + band).enumerate() {
         let j = j + 1;
@@ -214,7 +260,7 @@ fn typos(typed: &[char], key: &str, max: usize, rows: &mut Vec<usize>) -> Option
         if hi < m {
             rows[cur + hi + 1] = FAR;
         }
-        if hi == m {
+        if hi == m && end.is_none_or(|e| e == j) {
             best = best.min(rows[cur + m]);
         }
         if row_min > max {
@@ -678,7 +724,11 @@ mod tests {
     fn counts_typos() {
         let count = |typed: &str, key: &str| {
             let typed: Vec<char> = typed.chars().collect();
-            typos(&typed, key, 2 * TYPO, &mut Vec::new())
+            typos(&typed, key, 2 * TYPO, false, &mut Vec::new())
+        };
+        let whole = |typed: &str, key: &str| {
+            let typed: Vec<char> = typed.chars().collect();
+            typos(&typed, key, 2 * TYPO, true, &mut Vec::new())
         };
         assert_eq!(count("house", "house"), Some(0));
         assert_eq!(count("hous", "household"), Some(0));
@@ -691,6 +741,25 @@ mod tests {
         assert_eq!(count("accomodate", "accommodate"), Some(TYPO));
         assert_eq!(count("acomodate", "accommodate"), Some(2 * TYPO));
         assert_eq!(count("zzzzz", "house"), None);
+        // All of the key, when whole.
+        assert_eq!(whole("hous", "household"), None);
+        assert_eq!(whole("hous", "house"), Some(TYPO));
+        assert_eq!(whole("emobdy", "embody"), Some(SWAP));
+        assert_eq!(whole("emobdy", "embodying"), None);
+    }
+
+    #[test]
+    fn corrects_typos() {
+        let correct = |typed: &str| all_words().correct(typed);
+        assert_eq!(correct("emobdy"), Some("embody"));
+        assert_eq!(correct("embnody"), Some("embody"));
+        assert_eq!(correct("recieve"), Some("receive"));
+        assert_eq!(correct("seperate"), Some("separate"));
+        assert_eq!(correct("definately"), Some("definitely"));
+        assert_eq!(correct("hosue"), Some("house"));
+        // Short words are taken as typed.
+        assert_eq!(correct("qwz"), None);
+        assert_eq!(correct("xqzvwkj"), None);
     }
 
     #[test]
