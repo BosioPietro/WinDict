@@ -41,4 +41,5 @@ jobs:
             WinDict-${{ env.TAG }}.exe
             WinDict-${{ env.TAG }}-uiaccess.exe
             scripts/install-uiaccess.ps1
+            scripts/install-uiaccess-local.ps1
           generate_release_notes: true

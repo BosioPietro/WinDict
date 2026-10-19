@@ -69,12 +69,17 @@ Windows keeps Start and Search above every ordinary window, so by default
 WinDict closes them before showing a definition. To have the card appear on
 top of them instead, install the UI access edition. Windows grants that
 permission only to signed apps in a protected folder, and the included script
-handles all of it. From an administrator PowerShell, in the release folder or
-in a clone of this repository:
+handles all of it. Download `install-uiaccess.ps1` from the
+[latest release](https://github.com/BosioPietro/WinDict/releases/latest) and
+run it from an administrator PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\install-uiaccess.ps1
+powershell -ExecutionPolicy Bypass -File install-uiaccess.ps1
 ```
+
+It downloads the latest UI access build, so no Rust toolchain is needed. To
+install your own build from a clone of this repository instead, run
+`scripts\install-uiaccess-local.ps1`, which builds it with Cargo.
 
 The script creates a certificate that is trusted on this machine only, signs
 WinDict with it, installs it to `C:\Program Files\WinDict` and starts it. The
