@@ -1,18 +1,239 @@
-//! The bundled dictionary (Open English WordNet), built by `tools/build_dict.py`.
+//! The offline dictionaries, in the format `tools/build_dict.py` describes.
 //!
-//! The file is embedded in the executable and read in place: Windows only
-//! pages in the parts a lookup touches (the block index plus a few small
-//! compressed blocks), so it costs no memory while the app sits idle.
+//! English (Open English WordNet) is embedded in the executable; another
+//! language is read from `%LOCALAPPDATA%\WinDict\dicts\<language>.wdict`.
+//! Either way the file is read in place: Windows only pages in the parts a
+//! lookup touches (the block index plus a few small compressed blocks), so
+//! it costs no memory while the app sits idle.
 
-use crate::dictionary::{Definition, Detail, Meaning, Sense, MAX_ANTONYMS, WORDNET};
+use std::fs::File;
+use std::os::windows::fs::OpenOptionsExt;
+use std::os::windows::io::AsRawHandle;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock, RwLock};
 
-static DATA: &[u8] = include_bytes!("../data/english.wdict");
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::System::Memory::{
+    CreateFileMappingW, MapViewOfFile, UnmapViewOfFile, FILE_MAP_READ, MEMORY_MAPPED_VIEW_ADDRESS,
+    PAGE_READONLY,
+};
 
-const HEADER: usize = 20;
+use crate::dictionary::{percent_encode, Definition, Detail, Meaning, Sense, MAX_ANTONYMS};
+
+static ENGLISH: &[u8] = include_bytes!("../data/english.wdict");
+
+const HEADER: usize = 28;
+
+/// The most a block may inflate to. They're a few KB; this keeps a broken
+/// file from taking all the memory.
+const MAX_BLOCK: usize = 1 << 20;
+
+/// The dictionary lookups use, which the `language` setting picks.
+static ACTIVE: RwLock<Option<Arc<Dictionary>>> = RwLock::new(None);
 
 pub fn lookup(word: &str, detail: Detail) -> Option<Definition> {
-    let def = Dict::open(DATA)?.lookup(word, detail)?;
-    Some(detail.apply(def))
+    active().lookup(word, detail)
+}
+
+/// The dictionary lookups use: English until [`set_language`] picks another.
+pub fn active() -> Arc<Dictionary> {
+    ACTIVE
+        .read()
+        .ok()
+        .and_then(|a| a.clone())
+        .unwrap_or_else(english)
+}
+
+/// Looks words up in `language` ("en", "it"): English is built in, others
+/// are read from their file. If that can't be, English is used, and the
+/// error says why.
+pub fn set_language(language: &str) -> Result<(), String> {
+    let (dictionary, result) = match open(language) {
+        Ok(dictionary) => (dictionary, Ok(())),
+        Err(e) => (english(), Err(e)),
+    };
+    if let Ok(mut active) = ACTIVE.write() {
+        *active = Some(dictionary);
+    }
+    result
+}
+
+fn open(language: &str) -> Result<Arc<Dictionary>, String> {
+    if language == "en" {
+        return Ok(english());
+    }
+    // It names a file: nothing that could lead out of the folder.
+    if language.is_empty() || !language.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+        return Err(format!(
+            "\u{201C}{language}\u{201D} isn't a language code, like \u{201C}en\u{201D}."
+        ));
+    }
+    open_file(&dicts_dir().join(format!("{language}.wdict")), language).map(Arc::new)
+}
+
+fn open_file(path: &std::path::Path, language: &str) -> Result<Dictionary, String> {
+    let file = Mapping::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let dictionary = Dictionary::new(Data::File(file));
+    if dictionary.info.language != language {
+        return Err(format!(
+            "{} isn't a WinDict dictionary for \u{201C}{language}\u{201D}, or is for another version of WinDict.",
+            path.display()
+        ));
+    }
+    Ok(dictionary)
+}
+
+fn english() -> Arc<Dictionary> {
+    static DICTIONARY: OnceLock<Arc<Dictionary>> = OnceLock::new();
+    DICTIONARY
+        .get_or_init(|| Arc::new(Dictionary::new(Data::Embedded(ENGLISH))))
+        .clone()
+}
+
+/// Where the dictionaries other than English are kept.
+pub fn dicts_dir() -> PathBuf {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("WinDict").join("dicts")
+}
+
+/// The page for `word` at `source`, if it's the active dictionary's.
+pub fn link(source: &str, word: &str) -> Option<String> {
+    let dictionary = active();
+    let info = &dictionary.info;
+    let link = info.link.as_ref().filter(|_| info.name == source)?;
+    Some(link.replace("{}", &percent_encode(word)))
+}
+
+/// An offline dictionary, embedded or read from a file.
+pub struct Dictionary {
+    data: Data,
+    info: Info,
+}
+
+enum Data {
+    Embedded(&'static [u8]),
+    File(Mapping),
+}
+
+/// What a dictionary says about itself.
+#[derive(Default)]
+struct Info {
+    language: String,
+    /// Credited on the card, which keeps it for as long as the app runs.
+    name: &'static str,
+    /// Its page for a word, with "{}" for the word.
+    link: Option<String>,
+}
+
+impl Dictionary {
+    fn new(data: Data) -> Dictionary {
+        let mut dictionary = Dictionary {
+            data,
+            info: Info::default(),
+        };
+        if let Some(info) = dictionary.dict().and_then(|d| d.info()) {
+            dictionary.info = Info::parse(info);
+        }
+        dictionary
+    }
+
+    fn dict(&self) -> Option<Dict<'_>> {
+        let data = match &self.data {
+            Data::Embedded(data) => data,
+            Data::File(file) => file.bytes(),
+        };
+        Dict::open(data)
+    }
+
+    pub fn language(&self) -> &str {
+        &self.info.language
+    }
+
+    pub fn lookup(&self, word: &str, detail: Detail) -> Option<Definition> {
+        let def = self.dict()?.lookup(word, detail, self.info.name)?;
+        Some(detail.apply(def))
+    }
+}
+
+impl Info {
+    fn parse(text: &str) -> Info {
+        let mut info = Info::default();
+        for line in text.lines() {
+            match line.split_once('=') {
+                Some(("language", v)) => info.language = v.to_string(),
+                // Leaked, once per dictionary opened: the card's sources are
+                // `&'static str`, and a dictionary's name is a few bytes.
+                Some(("name", v)) => info.name = Box::leak(v.into()),
+                // Opened with the shell, so only a web page will do.
+                Some(("link", v)) if v.starts_with("https://") => info.link = Some(v.to_string()),
+                _ => {}
+            }
+        }
+        info
+    }
+}
+
+/// A file mapped into memory, read only. Nothing can write to it while
+/// it's open, so the bytes stay as they were.
+struct Mapping {
+    view: MEMORY_MAPPED_VIEW_ADDRESS,
+    len: usize,
+    _file: File,
+}
+
+// The view is only read, from any thread.
+unsafe impl Send for Mapping {}
+unsafe impl Sync for Mapping {}
+
+impl Mapping {
+    fn open(path: &std::path::Path) -> std::io::Result<Mapping> {
+        // FILE_SHARE_READ | FILE_SHARE_DELETE: others may read it, or move
+        // a newer copy in its place, but not change it.
+        let file = File::options()
+            .read(true)
+            .share_mode(0x1 | 0x4)
+            .open(path)?;
+        let len = usize::try_from(file.metadata()?.len()).unwrap_or(usize::MAX);
+        if len < HEADER {
+            return Err(std::io::ErrorKind::InvalidData.into());
+        }
+        unsafe {
+            let mapping = CreateFileMappingW(
+                HANDLE(file.as_raw_handle()),
+                None,
+                PAGE_READONLY,
+                0,
+                0,
+                None,
+            )?;
+            // The view keeps the mapping open.
+            let view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+            let error = std::io::Error::last_os_error();
+            let _ = CloseHandle(mapping);
+            if view.Value.is_null() {
+                return Err(error);
+            }
+            Ok(Mapping {
+                view,
+                len,
+                _file: file,
+            })
+        }
+    }
+
+    fn bytes(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.view.Value as *const u8, self.len) }
+    }
+}
+
+impl Drop for Mapping {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = UnmapViewOfFile(self.view);
+        }
+    }
 }
 
 /// A word offered for what's been typed in the search box.
@@ -35,6 +256,8 @@ pub struct Words {
     text: String,
     /// In key order.
     words: Vec<Word>,
+    /// Where they're from, for the forms of words.
+    dictionary: Arc<Dictionary>,
 }
 
 struct Word {
@@ -45,12 +268,18 @@ struct Word {
 }
 
 impl Words {
+    /// The active dictionary's words.
     pub fn load() -> Words {
+        Words::of(active())
+    }
+
+    fn of(dictionary: Arc<Dictionary>) -> Words {
         let mut words = Words {
             text: String::new(),
             words: Vec::new(),
+            dictionary: dictionary.clone(),
         };
-        let Some(dict) = Dict::open(DATA) else {
+        let Some(dict) = dictionary.dict() else {
             return words;
         };
         for block in 0..dict.entry_blocks {
@@ -59,7 +288,19 @@ impl Words {
             };
             for record in text.split('\x1e') {
                 let key = record.split('\n').next().unwrap_or_default();
-                let entry = Entry::parse(record);
+                let mut entry = Entry::parse(record);
+                // Spelt without its accents ("arleng"): offered as written.
+                if entry.senses.is_empty() {
+                    if let Some(written) = entry.spellings.iter().find_map(|s| {
+                        let e = dict.defined(s)?;
+                        Some(Entry {
+                            display: Some(e.display.clone().unwrap_or_else(|| s.clone())),
+                            ..e
+                        })
+                    }) {
+                        entry = written;
+                    }
+                }
                 let senses: usize = entry.senses.iter().map(|(_, ids)| ids.len()).sum();
                 if senses == 0 {
                     continue;
@@ -136,20 +377,27 @@ impl Words {
         }
         // Stable: equal ranks stay in alphabetical order.
         found.sort_by_key(|(rank, _)| *rank);
-        let mut out: Vec<Suggestion> = found
-            .into_iter()
-            .take(limit)
-            .map(|((_, typos, ..), i)| Suggestion {
-                word: self.display(&self.words[i]).to_string(),
+        let mut out: Vec<Suggestion> = Vec::new();
+        for ((_, typos, ..), i) in found {
+            if out.len() == limit {
+                break;
+            }
+            let word = self.display(&self.words[i]);
+            // Once, though it's there with and without its accents.
+            if out.iter().any(|s| s.word == word) {
+                continue;
+            }
+            out.push(Suggestion {
+                word: word.to_string(),
                 base: None,
                 typed: if typos == 0 { typed_chars.len() } else { 0 },
-            })
-            .collect();
+            });
+        }
         // An inflected form ("geese", "walked") is offered, as what it's a
         // form of, only once it's typed in full.
         let defined = out.first().is_some_and(|s| s.word.to_lowercase() == typed);
         if !defined {
-            if let Some(base) = Dict::open(DATA).and_then(|d| d.base_of(typed)) {
+            if let Some(base) = self.dictionary.dict().and_then(|d| d.base_of(typed)) {
                 out.insert(
                     0,
                     Suggestion {
@@ -283,6 +531,8 @@ struct Dict<'a> {
 struct Entry {
     display: Option<String>,
     redirects: Vec<String>,
+    /// How it's written, when it's typed without its accents.
+    spellings: Vec<String>,
     /// Part of speech and synset ids, most-used part of speech first.
     senses: Vec<(char, Vec<usize>)>,
 }
@@ -306,7 +556,7 @@ impl<'a> Dict<'a> {
             synset_blocks: 0,
             synsets_per_block: 0,
         };
-        if dict.u32(4) != 3 {
+        if dict.u32(4) != 4 {
             return None;
         }
         Some(Dict {
@@ -317,6 +567,12 @@ impl<'a> Dict<'a> {
         })
     }
 
+    /// What the dictionary says about itself: "name=value" lines.
+    fn info(&self) -> Option<&'a str> {
+        let (offset, len) = (self.u32(20), self.u32(24));
+        std::str::from_utf8(self.data.get(offset..offset.checked_add(len)?)?).ok()
+    }
+
     fn u32(&self, offset: usize) -> usize {
         self.data
             .get(offset..offset + 4)
@@ -324,8 +580,8 @@ impl<'a> Dict<'a> {
     }
 
     fn inflate(&self, offset: usize, len: usize) -> Option<String> {
-        let packed = self.data.get(offset..offset + len)?;
-        let raw = miniz_oxide::inflate::decompress_to_vec(packed).ok()?;
+        let packed = self.data.get(offset..offset.checked_add(len)?)?;
+        let raw = miniz_oxide::inflate::decompress_to_vec_with_limit(packed, MAX_BLOCK).ok()?;
         String::from_utf8(raw).ok()
     }
 
@@ -385,6 +641,7 @@ impl Entry {
             match chars.next() {
                 Some('W') => entry.display = Some(chars.as_str().to_string()),
                 Some('R') => entry.redirects.push(chars.as_str().to_string()),
+                Some('S') => entry.spellings.push(chars.as_str().to_string()),
                 Some('P') => {
                     let pos = chars.next().unwrap_or('n');
                     let ids = chars
@@ -436,9 +693,10 @@ impl Dict<'_> {
         self.entry(key).filter(|e| !e.senses.is_empty())
     }
 
-    fn lookup(&self, word: &str, detail: Detail) -> Option<Definition> {
-        let build =
-            |key: &str, entry: &Entry, note: Option<String>| self.build(key, entry, note, detail);
+    fn lookup(&self, word: &str, detail: Detail, source: &'static str) -> Option<Definition> {
+        let build = |key: &str, entry: &Entry, note: Option<String>| {
+            self.build(key, entry, note, detail, source)
+        };
         for candidate in spellings(word) {
             let Some(entry) = self.entry(&candidate) else {
                 continue;
@@ -460,6 +718,12 @@ impl Dict<'_> {
                     );
                 }
             }
+            // Typed without its accents ("arleng"): show it as it's written.
+            for spelling in &entry.spellings {
+                if let Some(written) = self.defined(spelling) {
+                    return build(spelling, &written, None);
+                }
+            }
         }
         None
     }
@@ -470,6 +734,7 @@ impl Dict<'_> {
         entry: &Entry,
         note: Option<String>,
         detail: Detail,
+        source: &'static str,
     ) -> Option<Definition> {
         let mut meanings = Vec::new();
         for (pos, ids) in &entry.senses {
@@ -482,7 +747,7 @@ impl Dict<'_> {
                 .filter_map(|&id| self.synset(id))
             {
                 for (i, lemma) in synset.lemmas.iter().enumerate() {
-                    if lemma.eq_ignore_ascii_case(key) {
+                    if same_word(lemma, key) {
                         // Opposites belong to a word, not to its synonyms.
                         for a in synset.antonyms.get(i).into_iter().flatten() {
                             if antonyms.len() < MAX_ANTONYMS && !antonyms.contains(a) {
@@ -490,7 +755,7 @@ impl Dict<'_> {
                             }
                         }
                     } else if synonyms.len() < detail.synonyms
-                        && !synonyms.iter().any(|s| s.eq_ignore_ascii_case(lemma))
+                        && !synonyms.iter().any(|s| same_word(s, lemma))
                     {
                         synonyms.push(lemma.clone());
                     }
@@ -524,9 +789,16 @@ impl Dict<'_> {
             phonetic: None,
             meanings,
             note,
-            sources: vec![WORDNET],
+            sources: vec![source],
         })
     }
+}
+
+/// Whether `a` and `b` are the same word but for case, in any alphabet.
+fn same_word(a: &str, b: &str) -> bool {
+    a.chars()
+        .flat_map(char::to_lowercase)
+        .eq(b.chars().flat_map(char::to_lowercase))
 }
 
 /// The word as selected, plus common spelling variants of compounds.
@@ -641,6 +913,89 @@ mod tests {
         let stopped = find("stopped");
         assert_eq!(stopped.word, "stopped");
         assert!(stopped.note.unwrap().contains("stop"));
+    }
+
+    #[test]
+    fn finds_words_typed_without_accents() {
+        assert_eq!(find("arleng").word, find("arlêng").word);
+        assert!(find("arleng").word.contains('ê'));
+        assert!(find("arleng").note.is_none());
+        // Offered as written, once.
+        let arleng = words("arleng");
+        assert_eq!(
+            arleng.iter().filter(|w| *w == "Arlêng").count(),
+            1,
+            "{arleng:?}"
+        );
+        assert!(same_word("Señor", "señor"));
+        assert!(!same_word("senor", "señor"));
+    }
+
+    #[test]
+    fn says_what_it_is() {
+        let english = english();
+        assert_eq!(english.language(), "en");
+        assert_eq!(english.info.name, "Open English WordNet");
+        assert_eq!(find("dog").sources, ["Open English WordNet"]);
+        assert_eq!(
+            link("Open English WordNet", "ice cream").as_deref(),
+            Some("https://en-word.net/lemma/ice%20cream")
+        );
+        assert_eq!(link("Elsewhere", "ice cream"), None);
+        // Only web pages are opened.
+        let info = Info::parse("language=xx\nname=X\nlink=file:///C:/Windows/notepad.exe");
+        assert_eq!(
+            (info.language.as_str(), info.name, info.link),
+            ("xx", "X", None)
+        );
+    }
+
+    #[test]
+    fn reads_dictionaries_from_files() {
+        let dir = std::env::temp_dir().join(format!("windict-dicts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("en.wdict");
+        std::fs::write(&path, ENGLISH).unwrap();
+        {
+            let dictionary = open_file(&path, "en").unwrap();
+            let dog = dictionary.lookup("dog", DETAIL).unwrap();
+            assert_eq!(dog.meanings[0].part_of_speech, "noun");
+            assert!(Words::of(Arc::new(open_file(&path, "en").unwrap()))
+                .suggest("walked", 5)
+                .iter()
+                .any(|s| s.base.as_deref() == Some("walk")));
+            // Nothing can change it while it's in use.
+            assert!(std::fs::write(&path, b"x").is_err());
+            // A dictionary for another language isn't taken for this one.
+            let other = open_file(&path, "it").err().unwrap_or_default();
+            assert!(other.contains("isn't a WinDict dictionary"), "{other}");
+        }
+        // Nor is what isn't a dictionary at all, or one cut short.
+        for broken in [
+            &b"not a dictionary, nor anything else"[..],
+            &ENGLISH[..1000],
+            b"",
+        ] {
+            std::fs::write(&path, broken).unwrap();
+            assert!(open_file(&path, "en").is_err());
+        }
+        assert!(open_file(&dir.join("missing.wdict"), "en").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn falls_back_to_english() {
+        // Codes can't lead out of the folder.
+        for code in ["../evil", "C:\\x", "", "EN"] {
+            assert!(open(code).is_err(), "{code}");
+        }
+        assert!(set_language("../evil").is_err());
+        assert_eq!(active().language(), "en");
+        assert!(set_language("zz").is_err());
+        assert_eq!(active().language(), "en");
+        assert!(set_language("en").is_ok());
+        assert!(lookup("dog", DETAIL).is_some());
     }
 
     #[test]

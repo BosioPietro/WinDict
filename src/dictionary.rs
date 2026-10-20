@@ -46,7 +46,6 @@ impl Detail {
     }
 }
 
-pub const WORDNET: &str = "Open English WordNet";
 pub const WIKTIONARY: &str = "Wiktionary";
 
 #[derive(Clone, Debug)]
@@ -128,15 +127,11 @@ pub fn merge(mut local: Definition, online: Option<&Lookup>) -> Definition {
 /// A web page for `word` at `source`, for the card's footer links.
 pub fn source_url(source: &str, word: &str) -> Option<String> {
     match source {
-        WORDNET => Some(format!(
-            "https://en-word.net/lemma/{}",
-            percent_encode(word)
-        )),
         WIKTIONARY => Some(format!(
             "https://en.wiktionary.org/wiki/{}",
             percent_encode(&word.replace(' ', "_"))
         )),
-        _ => None,
+        _ => crate::offline::link(source, word),
     }
 }
 
@@ -156,6 +151,9 @@ pub fn percent_encode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The built-in dictionary's name.
+    const WORDNET: &str = "Open English WordNet";
 
     #[test]
     fn normalizes_selection() {

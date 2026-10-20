@@ -61,6 +61,7 @@ by hand, use **Open config.json** at the bottom of the settings window, then
 | `max_synonyms` | `6` | Synonyms per part of speech; `0` hides them. |
 | `show_examples` | `true` | Example sentences under the senses. |
 | `online_lookup` | `true` | `false` keeps WinDict fully offline. |
+| `language` | `"en"` | The dictionary's language. English is built in; another is read from `%LOCALAPPDATA%\WinDict\dicts\<language>.wdict`. |
 | `use_ui_automation` | `true` | Read selections without touching the clipboard where apps allow it. |
 
 ## Showing the card above the Start menu

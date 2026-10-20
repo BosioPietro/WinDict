@@ -21,14 +21,19 @@ const FALLBACK_DELAY: Duration = Duration::from_millis(500);
 /// within `FALLBACK_DELAY` (or fails or has no entry sooner), Wiktionary is
 /// asked as well, and the first definition to arrive wins. The Free
 /// Dictionary API is built from Wiktionary, so once Wiktionary has no entry
-/// the word isn't waited on any longer.
-pub fn lookup(word: &str, detail: Detail) -> Lookup {
-    let (w1, w2) = (word.to_string(), word.to_string());
-    let result = race(
-        move || lookup_free_dictionary(&w1, detail.senses, detail.synonyms),
-        move || lookup_wiktionary(&w2, detail.senses),
-        FALLBACK_DELAY,
-    );
+/// the word isn't waited on any longer. The Free Dictionary API only has
+/// English: a word in another `language` is only looked for in Wiktionary.
+pub fn lookup(word: &str, detail: Detail, language: &str) -> Lookup {
+    let result = if language == "en" {
+        let (w1, w2) = (word.to_string(), word.to_string());
+        race(
+            move || lookup_free_dictionary(&w1, detail.senses, detail.synonyms),
+            move || lookup_wiktionary(&w2, detail.senses, "en"),
+            FALLBACK_DELAY,
+        )
+    } else {
+        lookup_wiktionary(word, detail.senses, language)
+    };
     match result {
         Lookup::Found(def) => Lookup::Found(detail.apply(def)),
         result => result,
@@ -103,13 +108,15 @@ fn lookup_free_dictionary(word: &str, max_senses: usize, max_synonyms: usize) ->
     })
 }
 
-fn lookup_wiktionary(word: &str, max_senses: usize) -> Lookup {
+/// English Wiktionary's entry for `word` in `language`: its definitions are
+/// in English, whatever the word's language.
+fn lookup_wiktionary(word: &str, max_senses: usize, language: &str) -> Lookup {
     let path = format!(
         "/api/rest_v1/page/definition/{}",
         percent_encode(&word.replace(' ', "_"))
     );
     fetch("en.wiktionary.org", &path, |body| {
-        parse_wiktionary(body, word, max_senses)
+        parse_wiktionary(body, word, max_senses, language)
     })
 }
 
@@ -157,10 +164,15 @@ struct WiktExample {
     example: String,
 }
 
-fn parse_wiktionary(body: &[u8], word: &str, max_senses: usize) -> Option<Definition> {
+fn parse_wiktionary(
+    body: &[u8],
+    word: &str,
+    max_senses: usize,
+    language: &str,
+) -> Option<Definition> {
     let mut languages: std::collections::HashMap<String, Vec<WiktEntry>> =
         serde_json::from_slice(body).ok()?;
-    let entries = languages.remove("en")?;
+    let entries = languages.remove(language)?;
 
     let mut meanings: Vec<Meaning> = Vec::new();
     for entry in entries {
@@ -384,7 +396,7 @@ mod tests {
           {"partOfSpeech":"Verb","language":"English","definitions":[
             {"definition":"<span>present participle of <i>underwhelm</i></span>"}]}],
           "fr":[{"partOfSpeech":"Nom","definitions":[{"definition":"x"}]}]}"#;
-        let def = parse_wiktionary(body, "underwhelming", 3).unwrap();
+        let def = parse_wiktionary(body, "underwhelming", 3, "en").unwrap();
         assert_eq!(def.meanings.len(), 2);
         assert_eq!(def.meanings[0].part_of_speech, "adjective");
         assert_eq!(
@@ -399,7 +411,11 @@ mod tests {
             def.meanings[1].senses[0].text,
             "present participle of underwhelm"
         );
-        assert!(parse_wiktionary(br#"{"fr":[]}"#, "x", 3).is_none());
+        assert!(parse_wiktionary(br#"{"fr":[]}"#, "x", 3, "en").is_none());
+        // The entry in the language asked for.
+        let fr = parse_wiktionary(body, "underwhelming", 3, "fr").unwrap();
+        assert_eq!(fr.meanings[0].part_of_speech, "nom");
+        assert!(parse_wiktionary(body, "underwhelming", 3, "it").is_none());
     }
 
     fn found(word: &str) -> Lookup {

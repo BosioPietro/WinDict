@@ -8,16 +8,22 @@ package: https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corp
 
 File layout (little endian):
 
-    b"WDIC"  u32 version (3)
+    b"WDIC"  u32 version (4)
     u32 entry_block_count   u32 synset_block_count   u32 synsets_per_block
+    u32 info_offset   u32 info_length
     entry_block_count  x (u32 first_key_offset, u32 data_offset, u32 data_length)
     synset_block_count x (u32 data_offset, u32 data_length)
     first keys of the entry blocks (NUL-terminated UTF-8)
+    info: '\\n'-separated "name=value" lines (UTF-8): `language`, the code the
+        app's `language` setting names it by; `name`, the source the card
+        credits; `link`, its page for a word, with "{}" for the word
     raw-deflate blocks
 
 Entry blocks hold consecutive entries, sorted by key in byte order and
-separated by 0x1E. An entry is '\\n'-separated lines: the key, then
-    W<display form>   R<base form, for inflections>   P<pos (n v a r)><space-separated synset ids>
+separated by 0x1E. Keys are lowercase (str.lower), as the app looks them up.
+An entry is '\\n'-separated lines: the key, then
+    W<display form>   R<base form, for inflections>   S<spelling with accents, for words typed without>
+    P<pos (n v a r)><space-separated synset ids>
 Synset blocks hold `synsets_per_block` synsets separated by 0x1E, each
 '\\n'-separated: lemmas joined by '|', their antonyms (a group per lemma, in
 the same order, joined by '|', each joined by '\\t'), the definition, then
@@ -27,6 +33,7 @@ examples.
 import re
 import struct
 import sys
+import unicodedata
 import zlib
 from pathlib import Path
 
@@ -34,6 +41,11 @@ POS_FILES = {"n": "noun", "v": "verb", "a": "adj", "r": "adv"}
 MAX_SENSES = 8
 ENTRIES_PER_BLOCK = 64
 SYNSETS_PER_BLOCK = 64
+INFO = {
+    "language": "en",
+    "name": "Open English WordNet",
+    "link": "https://en-word.net/lemma/{}",
+}
 
 
 def clean_lemma(word):
@@ -45,6 +57,14 @@ def parse_gloss(gloss):
     examples = [e.strip() for e in re.findall(r'"([^"]+)"', gloss) if e.strip()]
     definition = gloss.split('"')[0].strip().rstrip(";").strip() if '"' in gloss else gloss
     return definition or gloss.strip(), examples
+
+
+def new_entry():
+    return {"display": None, "redirects": [], "spellings": [], "pos": [], "forms": []}
+
+
+def without_accents(text):
+    return "".join(c for c in unicodedata.normalize("NFD", text) if not unicodedata.combining(c))
 
 
 def ends_in_consonant_y(word):
@@ -164,7 +184,7 @@ def main(root, out):
             key = fields[0].replace("_", " ")
             offsets = fields[6 + int(fields[3]):]
             sense_ids = [ids[(pos, o)] for o in offsets[:MAX_SENSES]]
-            entry = entries.setdefault(key, {"display": None, "redirects": [], "pos": [], "forms": []})
+            entry = entries.setdefault(key, new_entry())
             entry["forms"] += [l for i in sense_ids for l in synsets[i][0] if l.lower() == key]
             entry["pos"].append((pos, len(offsets), sense_ids))
 
@@ -178,7 +198,7 @@ def main(root, out):
             form, bases = words[0], [b for b in words[1:] if b in entries and b != words[0]]
             if not bases:
                 continue
-            entry = entries.setdefault(form, {"display": None, "redirects": [], "pos": [], "forms": []})
+            entry = entries.setdefault(form, new_entry())
             entry["redirects"] += [b for b in bases if b not in entry["redirects"]]
 
     # Regular inflections, for the words that aren't words of their own: a
@@ -193,7 +213,7 @@ def main(root, out):
                 if form != key and (senses, key) not in bases.setdefault(form, []):
                     bases[form].append((senses, key))
     for form, found in bases.items():
-        entry = entries.setdefault(form, {"display": None, "redirects": [], "pos": [], "forms": []})
+        entry = entries.setdefault(form, new_entry())
         if entry["pos"]:
             continue
         # "hoping" is from "hope", not "hop", which doubles its last letter.
@@ -201,11 +221,20 @@ def main(root, out):
         found.sort(key=lambda b: (doubles(b[1]) and b[1] + "e" in keys, -b[0]))
         entry["redirects"] += [b for _, b in found if b not in entry["redirects"]]
 
+    # Accented words, as they're often typed: "senor" for "señor".
+    for key, entry in list(entries.items()):
+        plain = without_accents(key)
+        if plain != key and entry["pos"]:
+            other = entries.setdefault(plain, new_entry())
+            if not other["pos"] and key not in other["spellings"]:
+                other["spellings"].append(key)
+
     def entry_text(key, e):
         lines = [key]
         if e["display"] and e["display"] != key:
             lines.append("W" + e["display"])
         lines += ["R" + r for r in e["redirects"]]
+        lines += ["S" + s for s in e["spellings"]]
         for pos, _, sense_ids in sorted(e["pos"], key=lambda p: -p[1]):  # most senses first
             lines.append("P" + pos + " ".join(map(str, sense_ids)))
         return "\n".join(clean(l) for l in lines)
@@ -220,9 +249,10 @@ def main(root, out):
     synset_blocks = [range(i, min(i + SYNSETS_PER_BLOCK, len(synsets)))
                      for i in range(0, len(synsets), SYNSETS_PER_BLOCK)]
 
-    header_len = 20 + 12 * len(entry_blocks) + 8 * len(synset_blocks)
+    header_len = 28 + 12 * len(entry_blocks) + 8 * len(synset_blocks)
     key_area = b"".join(b[0].encode("utf-8") + b"\0" for b in entry_blocks)
-    data_base = header_len + len(key_area)
+    info = "\n".join(f"{k}={v}" for k, v in INFO.items()).encode("utf-8")
+    data_base = header_len + len(key_area) + len(info)
     data = bytearray()
     entry_table, synset_table = [], []
     key_off = header_len
@@ -237,12 +267,14 @@ def main(root, out):
         data += packed
 
     with open(out, "wb") as f:
-        f.write(b"WDIC" + struct.pack("<IIII", 3,len(entry_blocks), len(synset_blocks), SYNSETS_PER_BLOCK))
+        f.write(b"WDIC" + struct.pack("<IIIIII", 4, len(entry_blocks), len(synset_blocks), SYNSETS_PER_BLOCK,
+                                      header_len + len(key_area), len(info)))
         for t in entry_table:
             f.write(struct.pack("<III", *t))
         for t in synset_table:
             f.write(struct.pack("<II", *t))
         f.write(key_area)
+        f.write(info)
         f.write(data)
     pairs = sum(len(a) for s in antonyms for a in s)
     print(f"{len(keys)} entries, {len(synsets)} synsets, {pairs} antonyms, {data_base + len(data)} bytes")

@@ -30,6 +30,9 @@ pub struct Config {
     pub use_ui_automation: bool,
     /// Use the online dictionary for words (and pronunciations) the bundled one lacks.
     pub online_lookup: bool,
+    /// The language words are looked up in, as a code: "en" is built in,
+    /// another is read from `%LOCALAPPDATA%\WinDict\dicts\<code>.wdict`.
+    pub language: String,
 }
 
 impl Default for Config {
@@ -42,6 +45,7 @@ impl Default for Config {
             show_examples: true,
             use_ui_automation: true,
             online_lookup: true,
+            language: "en".into(),
         }
     }
 }
@@ -112,6 +116,7 @@ mod tests {
         assert_eq!(config.max_synonyms, 6);
         assert!(config.online_lookup);
         assert!(config.show_examples);
+        assert_eq!(config.language, "en");
         assert_eq!(
             parse(br#"{"max_definitions": 0}"#).unwrap().max_definitions,
             1

@@ -356,9 +356,12 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             focus_hook: None,
         };
         app.register_hotkey();
+        let dictionary_error = offline::set_language(&app.config.language).err();
         if let Some(e) = config_error {
             app.tray
                 .notify("Settings not loaded, using the defaults", &e);
+        } else if let Some(e) = dictionary_error {
+            app.tray.notify("Dictionary not loaded, using English", &e);
         } else if first_run && app.hotkey_ok {
             app.tray.notify(
                 "WinDict is running",
@@ -759,8 +762,11 @@ impl App {
         }
 
         let (id, events) = (self.request, self.events.clone());
+        // In the language of the dictionary in use, which is English when
+        // the chosen one couldn't be read.
+        let language = offline::active().language().to_string();
         std::thread::spawn(move || {
-            let result = online::lookup(&online_key, detail);
+            let result = online::lookup(&online_key, detail, &language);
             events.send(Event::Looked(Looked {
                 id,
                 word: online_key,
@@ -1333,7 +1339,9 @@ impl App {
                 self.cache.clear();
                 self.register_hotkey();
                 self.refresh_settings();
-                if self.hotkey_ok {
+                if let Err(e) = offline::set_language(&self.config.language) {
+                    self.tray.notify("Dictionary not loaded, using English", &e);
+                } else if self.hotkey_ok {
                     self.tray.notify(
                         "Settings reloaded",
                         &format!("Look up words with {}.", self.config.hotkey),
