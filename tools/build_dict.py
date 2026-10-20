@@ -6,41 +6,17 @@ Usage: python tools/build_dict.py <wordnet dir> data/english.wdict
 The WNDB files of Open English WordNet ship in NLTK's `english_wordnet`
 package: https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/english_wordnet.zip
 
-File layout (little endian):
-
-    b"WDIC"  u32 version (4)
-    u32 entry_block_count   u32 synset_block_count   u32 synsets_per_block
-    u32 info_offset   u32 info_length
-    entry_block_count  x (u32 first_key_offset, u32 data_offset, u32 data_length)
-    synset_block_count x (u32 data_offset, u32 data_length)
-    first keys of the entry blocks (NUL-terminated UTF-8)
-    info: '\\n'-separated "name=value" lines (UTF-8): `language`, the code the
-        app's `language` setting names it by; `name`, the source the card
-        credits; `link`, its page for a word, with "{}" for the word
-    raw-deflate blocks
-
-Entry blocks hold consecutive entries, sorted by key in byte order and
-separated by 0x1E. Keys are lowercase (str.lower), as the app looks them up.
-An entry is '\\n'-separated lines: the key, then
-    W<display form>   R<base form, for inflections>   S<spelling with accents, for words typed without>
-    P<pos (n v a r)><space-separated synset ids>
-Synset blocks hold `synsets_per_block` synsets separated by 0x1E, each
-'\\n'-separated: lemmas joined by '|', their antonyms (a group per lemma, in
-the same order, joined by '|', each joined by '\\t'), the definition, then
-examples.
+The file format is described in `wdict.py`, which writes it.
 """
 
 import re
-import struct
 import sys
-import unicodedata
-import zlib
 from pathlib import Path
+
+from wdict import add_spellings, new_entry, write
 
 POS_FILES = {"n": "noun", "v": "verb", "a": "adj", "r": "adv"}
 MAX_SENSES = 8
-ENTRIES_PER_BLOCK = 64
-SYNSETS_PER_BLOCK = 64
 INFO = {
     "language": "en",
     "name": "Open English WordNet",
@@ -57,14 +33,6 @@ def parse_gloss(gloss):
     examples = [e.strip() for e in re.findall(r'"([^"]+)"', gloss) if e.strip()]
     definition = gloss.split('"')[0].strip().rstrip(";").strip() if '"' in gloss else gloss
     return definition or gloss.strip(), examples
-
-
-def new_entry():
-    return {"display": None, "redirects": [], "spellings": [], "pos": [], "forms": []}
-
-
-def without_accents(text):
-    return "".join(c for c in unicodedata.normalize("NFD", text) if not unicodedata.combining(c))
 
 
 def ends_in_consonant_y(word):
@@ -134,15 +102,6 @@ def inflections(key, pos):
     if not (words[i].isalpha() and len(words[i]) >= 2):
         return []
     return [" ".join(words[:i] + [form] + words[i + 1:]) for form in rules(words[i])]
-
-
-def deflate(text):
-    c = zlib.compressobj(9, zlib.DEFLATED, -15)
-    return c.compress(text.encode("utf-8")) + c.flush()
-
-
-def clean(text):
-    return text.replace("\x1e", " ").replace("\n", " ")
 
 
 def main(root, out):
@@ -221,63 +180,8 @@ def main(root, out):
         found.sort(key=lambda b: (doubles(b[1]) and b[1] + "e" in keys, -b[0]))
         entry["redirects"] += [b for _, b in found if b not in entry["redirects"]]
 
-    # Accented words, as they're often typed: "senor" for "señor".
-    for key, entry in list(entries.items()):
-        plain = without_accents(key)
-        if plain != key and entry["pos"]:
-            other = entries.setdefault(plain, new_entry())
-            if not other["pos"] and key not in other["spellings"]:
-                other["spellings"].append(key)
-
-    def entry_text(key, e):
-        lines = [key]
-        if e["display"] and e["display"] != key:
-            lines.append("W" + e["display"])
-        lines += ["R" + r for r in e["redirects"]]
-        lines += ["S" + s for s in e["spellings"]]
-        for pos, _, sense_ids in sorted(e["pos"], key=lambda p: -p[1]):  # most senses first
-            lines.append("P" + pos + " ".join(map(str, sense_ids)))
-        return "\n".join(clean(l) for l in lines)
-
-    def synset_text(s, opposites):
-        lemmas, definition, examples = s
-        opposites = "|".join("\t".join(a) for a in opposites)
-        return "\n".join(clean(l) for l in ["|".join(lemmas), opposites, definition, *examples[:2]])
-
-    keys = sorted(entries, key=lambda k: k.encode("utf-8"))
-    entry_blocks = [keys[i:i + ENTRIES_PER_BLOCK] for i in range(0, len(keys), ENTRIES_PER_BLOCK)]
-    synset_blocks = [range(i, min(i + SYNSETS_PER_BLOCK, len(synsets)))
-                     for i in range(0, len(synsets), SYNSETS_PER_BLOCK)]
-
-    header_len = 28 + 12 * len(entry_blocks) + 8 * len(synset_blocks)
-    key_area = b"".join(b[0].encode("utf-8") + b"\0" for b in entry_blocks)
-    info = "\n".join(f"{k}={v}" for k, v in INFO.items()).encode("utf-8")
-    data_base = header_len + len(key_area) + len(info)
-    data = bytearray()
-    entry_table, synset_table = [], []
-    key_off = header_len
-    for block in entry_blocks:
-        packed = deflate("\x1e".join(entry_text(k, entries[k]) for k in block))
-        entry_table.append((key_off, data_base + len(data), len(packed)))
-        key_off += len(block[0].encode("utf-8")) + 1
-        data += packed
-    for block in synset_blocks:
-        packed = deflate("\x1e".join(synset_text(synsets[i], antonyms[i]) for i in block))
-        synset_table.append((data_base + len(data), len(packed)))
-        data += packed
-
-    with open(out, "wb") as f:
-        f.write(b"WDIC" + struct.pack("<IIIIII", 4, len(entry_blocks), len(synset_blocks), SYNSETS_PER_BLOCK,
-                                      header_len + len(key_area), len(info)))
-        for t in entry_table:
-            f.write(struct.pack("<III", *t))
-        for t in synset_table:
-            f.write(struct.pack("<II", *t))
-        f.write(key_area)
-        f.write(info)
-        f.write(data)
-    pairs = sum(len(a) for s in antonyms for a in s)
-    print(f"{len(keys)} entries, {len(synsets)} synsets, {pairs} antonyms, {data_base + len(data)} bytes")
+    add_spellings(entries)
+    write(out, entries, synsets, antonyms, INFO)
 
 
 if __name__ == "__main__":

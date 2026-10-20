@@ -772,6 +772,13 @@ impl Dict<'_> {
                 'v' => "verb",
                 'a' | 's' => "adjective",
                 'r' => "adverb",
+                'p' => "phrase",
+                'i' => "interjection",
+                'o' => "pronoun",
+                'e' => "preposition",
+                'c' => "conjunction",
+                't' => "article",
+                'b' => "abbreviation",
                 _ => "noun",
             };
             meanings.push(Meaning {
