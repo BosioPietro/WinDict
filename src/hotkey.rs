@@ -1,4 +1,5 @@
-//! Parsing of hotkey strings such as "Ctrl+Alt+D", and naming them back.
+//! Parsing of hotkey strings such as "Ctrl+Alt+D", naming them back, and
+//! reading the keys held as one is pressed.
 
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
@@ -138,6 +139,46 @@ fn key_code(key: &str) -> Option<u32> {
         .iter()
         .find(|(names, _)| names.iter().any(|n| n.eq_ignore_ascii_case(key)))
         .map(|(_, vk)| vk.0 as u32)
+}
+
+/// Whether `vk` is held down, as of the message being handled.
+pub fn is_held(vk: VIRTUAL_KEY) -> bool {
+    // The high bit (a negative state) means the key is down.
+    unsafe { GetKeyState(vk.0 as i32) < 0 }
+}
+
+/// The modifiers held down, as of the message being handled.
+pub fn held_modifiers() -> HOT_KEY_MODIFIERS {
+    let mut modifiers = HOT_KEY_MODIFIERS(0);
+    for (vks, modifier) in [
+        (&[VK_CONTROL][..], MOD_CONTROL),
+        (&[VK_MENU], MOD_ALT),
+        (&[VK_SHIFT], MOD_SHIFT),
+        (&[VK_LWIN, VK_RWIN], MOD_WIN),
+    ] {
+        if vks.iter().any(|&vk| is_held(vk)) {
+            modifiers |= modifier;
+        }
+    }
+    modifiers
+}
+
+/// Whether `vk` is Ctrl, Alt, Shift or Win, on either side.
+pub fn is_modifier(vk: VIRTUAL_KEY) -> bool {
+    matches!(
+        vk,
+        VK_CONTROL
+            | VK_LCONTROL
+            | VK_RCONTROL
+            | VK_MENU
+            | VK_LMENU
+            | VK_RMENU
+            | VK_SHIFT
+            | VK_LSHIFT
+            | VK_RSHIFT
+            | VK_LWIN
+            | VK_RWIN
+    )
 }
 
 #[cfg(test)]

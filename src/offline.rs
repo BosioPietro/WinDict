@@ -4,14 +4,15 @@
 //! pages in the parts a lookup touches (the block index plus a few small
 //! compressed blocks), so it costs no memory while the app sits idle.
 
-use crate::dictionary::{Definition, Meaning, Sense, MAX_ANTONYMS, WORDNET};
+use crate::dictionary::{Definition, Detail, Meaning, Sense, MAX_ANTONYMS, WORDNET};
 
 static DATA: &[u8] = include_bytes!("../data/english.wdict");
 
 const HEADER: usize = 20;
 
-pub fn lookup(word: &str, max_senses: usize, max_synonyms: usize) -> Option<Definition> {
-    Dict::open(DATA)?.lookup(word, max_senses, max_synonyms)
+pub fn lookup(word: &str, detail: Detail) -> Option<Definition> {
+    let def = Dict::open(DATA)?.lookup(word, detail)?;
+    Some(detail.apply(def))
 }
 
 /// A word offered for what's been typed in the search box.
@@ -458,10 +459,9 @@ impl Dict<'_> {
         self.entry(key).filter(|e| !e.senses.is_empty())
     }
 
-    fn lookup(&self, word: &str, max_senses: usize, max_synonyms: usize) -> Option<Definition> {
-        let build = |key: &str, entry: &Entry, note: Option<String>| {
-            self.build(key, entry, note, max_senses, max_synonyms)
-        };
+    fn lookup(&self, word: &str, detail: Detail) -> Option<Definition> {
+        let build =
+            |key: &str, entry: &Entry, note: Option<String>| self.build(key, entry, note, detail);
         for candidate in spellings(word) {
             let Some(entry) = self.entry(&candidate) else {
                 continue;
@@ -502,8 +502,7 @@ impl Dict<'_> {
         key: &str,
         entry: &Entry,
         note: Option<String>,
-        max_senses: usize,
-        max_synonyms: usize,
+        detail: Detail,
     ) -> Option<Definition> {
         let mut meanings = Vec::new();
         for (pos, ids) in &entry.senses {
@@ -512,7 +511,7 @@ impl Dict<'_> {
             let mut antonyms: Vec<String> = Vec::new();
             for synset in ids
                 .iter()
-                .take(max_senses.max(1))
+                .take(detail.senses.max(1))
                 .filter_map(|&id| self.synset(id))
             {
                 for (i, lemma) in synset.lemmas.iter().enumerate() {
@@ -523,7 +522,7 @@ impl Dict<'_> {
                                 antonyms.push(a.clone());
                             }
                         }
-                    } else if synonyms.len() < max_synonyms
+                    } else if synonyms.len() < detail.synonyms
                         && !synonyms.iter().any(|s| s.eq_ignore_ascii_case(lemma))
                     {
                         synonyms.push(lemma.clone());
@@ -625,8 +624,14 @@ fn sentence(text: &str) -> String {
 mod tests {
     use super::*;
 
+    const DETAIL: Detail = Detail {
+        senses: 4,
+        synonyms: 6,
+        examples: true,
+    };
+
     fn find(word: &str) -> Definition {
-        lookup(word, 4, 6).unwrap_or_else(|| panic!("{word} not found"))
+        lookup(word, DETAIL).unwrap_or_else(|| panic!("{word} not found"))
     }
 
     #[test]
@@ -661,6 +666,28 @@ mod tests {
     }
 
     #[test]
+    fn keeps_what_is_asked_for() {
+        let brief = Detail {
+            senses: 1,
+            synonyms: 0,
+            examples: false,
+        };
+        let run = lookup("run", brief).unwrap();
+        assert!(run.meanings.iter().all(|m| m.senses.len() == 1));
+        assert!(run.meanings.iter().all(|m| m.synonyms.is_empty()));
+        assert!(run
+            .meanings
+            .iter()
+            .flat_map(|m| &m.senses)
+            .all(|s| s.example.is_none()));
+        assert!(find("run")
+            .meanings
+            .iter()
+            .flat_map(|m| &m.senses)
+            .any(|s| s.example.is_some()));
+    }
+
+    #[test]
     fn resolves_inflections() {
         assert_eq!(find("ran").word, "run");
         assert_eq!(find("geese").word, "goose");
@@ -675,10 +702,10 @@ mod tests {
 
     #[test]
     fn handles_missing_words() {
-        assert!(lookup("qwzxv", 4, 6).is_none());
-        assert!(lookup("", 4, 6).is_none());
-        assert!(lookup("zzzzzzzzz", 4, 6).is_none());
-        assert!(lookup("a", 4, 6).is_some());
+        assert!(lookup("qwzxv", DETAIL).is_none());
+        assert!(lookup("", DETAIL).is_none());
+        assert!(lookup("zzzzzzzzz", DETAIL).is_none());
+        assert!(lookup("a", DETAIL).is_some());
     }
 
     #[test]

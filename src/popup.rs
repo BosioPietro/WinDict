@@ -3,37 +3,33 @@
 //! backdrop brush; every animation runs on the system compositor, so motion
 //! stays smooth no matter what our UI thread is doing.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use windows::core::{Interface, Result, BOOL, HSTRING, PWSTR};
-use windows::Foundation::TimeSpan;
+use windows::core::{Interface, Result, HSTRING, PWSTR};
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::WinRT::Composition::ICompositorDesktopInterop;
 use windows::Win32::UI::Controls::*;
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
-use windows_numerics::{Vector2, Vector3};
+use windows_numerics::Vector3;
 
-use crate::render::{Body, Face, Ink, Layout, Link, Renderer, Target, WORD_SIZE};
+use crate::render::{Body, Face, Ink, Link, Renderer, Target, WORD_SIZE};
 use crate::searchbox::SearchBox;
 use crate::theme::Theme;
+use crate::ui::{
+    self, attach, cubic_bezier, monitor_at, scale, text_sprite, ts, v2, v3, Animator, Frame,
+    MARGIN, RESIZE_MS, SCROLL_EASE,
+};
+use crate::win::Window;
 
 // Geometry, in DIPs.
 pub(crate) const CARD_W: f32 = 384.0;
 const MAX_CARD_H: f32 = 460.0;
-pub(crate) const MARGIN: f32 = 32.0; // room for the shadow
-const RADIUS: f32 = 12.0;
 pub(crate) const PAD_X: f32 = 22.0;
 pub(crate) const PAD_TOP: f32 = 18.0;
 const HEADER_GAP: f32 = 12.0;
 const PAD_BOTTOM: f32 = 18.0;
-const SHADOW_DY: f32 = 6.0;
-/// How far the shadow extends past the card; it must fit in `MARGIN`.
-const SHADOW_SPREAD: f32 = MARGIN * 0.75;
 const ANCHOR_GAP: f32 = 10.0;
 const SCREEN_GAP: f32 = 8.0;
 const BACK_SIZE: f32 = 28.0;
@@ -56,38 +52,14 @@ const FOCUS_MARGIN: f32 = 12.0;
 
 // Durations, in ms.
 pub const SHOW_MS: u64 = 340;
-pub const HIDE_MS: u64 = 120;
-pub const RESIZE_MS: u64 = 300;
+const FADE_IN_MS: u64 = 160;
 const SCROLL_MS: u64 = 140;
 /// How long what the card showed takes to fade out as the search box comes in.
 const MAKE_WAY_MS: u64 = 120;
-/// Ease-out curve for scrolling: quick to respond, soft to settle.
-const SCROLL_EASE: (f32, f32, f32, f32) = (0.25, 0.8, 0.4, 1.0);
-/// Ease-out that runs a touch past the end and settles back, like a spring.
-const OVERSHOOT_EASE: (f32, f32, f32, f32) = (0.3, 1.35, 0.55, 1.0);
-const SHAKE_MS: u64 = 400;
 
 struct ScrollAnim {
     from: f32,
     started: Instant,
-}
-
-/// Progress of a CSS-style cubic-bezier easing at time `t` (0..=1).
-fn cubic_bezier((x1, y1, x2, y2): (f32, f32, f32, f32), t: f32) -> f32 {
-    let bezier = |a: f32, b: f32, u: f32| {
-        3.0 * a * u * (1.0 - u).powi(2) + 3.0 * b * u * u * (1.0 - u) + u.powi(3)
-    };
-    // Solve x(u) = t by bisection, then evaluate y(u).
-    let (mut lo, mut hi) = (0.0f32, 1.0f32);
-    for _ in 0..24 {
-        let mid = (lo + hi) / 2.0;
-        if bezier(x1, x2, mid) < t {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    bezier(y1, y2, (lo + hi) / 2.0)
 }
 
 /// Where the window goes for a card next to `anchor` inside the monitor's
@@ -129,21 +101,6 @@ fn placement(anchor: RECT, work: RECT, scale: f32, downward: bool) -> (RECT, boo
     (window, grow_up)
 }
 
-/// The work area and scale (pixels per DIP) of the monitor nearest `point`.
-pub(crate) fn monitor_at(point: POINT) -> (RECT, f32) {
-    let monitor = unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST) };
-    let mut info = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
-        ..Default::default()
-    };
-    let (mut dpi_x, mut dpi_y) = (96u32, 96u32);
-    unsafe {
-        let _ = GetMonitorInfoW(monitor, &mut info);
-        let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
-    }
-    (info.rcWork, dpi_x as f32 / 96.0)
-}
-
 /// About half the empty search box's height, in DIPs: how far above the
 /// screen's middle a centred one starts, so that it sits in the middle.
 const CENTRED_RISE: f32 = 68.0;
@@ -166,30 +123,6 @@ fn centred_in(work: RECT, s: f32) -> RECT {
         top: bottom - 1,
         right: left + 1,
         bottom,
-    }
-}
-
-/// Makes `hwnd` a composition surface: the host backdrop brush can sample
-/// what's behind it, DWM's own show/hide animations are off, and the
-/// returned target (kept alive by the caller) displays the visual tree.
-pub(crate) fn attach(hwnd: HWND, compositor: &Compositor) -> Result<DesktopWindowTarget> {
-    unsafe {
-        let on = BOOL(1);
-        let size = std::mem::size_of::<BOOL>() as u32;
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_USE_HOSTBACKDROPBRUSH,
-            &on as *const _ as _,
-            size,
-        );
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_TRANSITIONS_FORCEDISABLED,
-            &on as *const _ as _,
-            size,
-        );
-        let interop: ICompositorDesktopInterop = compositor.cast()?;
-        interop.CreateDesktopWindowTarget(hwnd, true)
     }
 }
 
@@ -233,373 +166,12 @@ pub struct Popup {
     scroll: f32,
     scroll_anim: Option<ScrollAnim>,
     pub visible: bool,
-}
-
-pub(crate) fn ts(ms: u64) -> TimeSpan {
-    TimeSpan::from(Duration::from_millis(ms))
-}
-
-pub(crate) fn v2(x: f32, y: f32) -> Vector2 {
-    Vector2 { X: x, Y: y }
-}
-
-pub(crate) fn v3(x: f32, y: f32) -> Vector3 {
-    Vector3 { X: x, Y: y, Z: 0.0 }
-}
-
-/// A visual showing a text surface at its natural size, from the top left.
-pub(crate) fn text_sprite(c: &Compositor) -> Result<(SpriteVisual, CompositionSurfaceBrush)> {
-    let brush = c.CreateSurfaceBrush()?;
-    brush.SetStretch(CompositionStretch::None)?;
-    brush.SetHorizontalAlignmentRatio(0.0)?;
-    brush.SetVerticalAlignmentRatio(0.0)?;
-    let sprite = c.CreateSpriteVisual()?;
-    sprite.SetBrush(&brush)?;
-    Ok((sprite, brush))
-}
-
-/// A line of text and the brush that shows it.
-pub(crate) struct Text {
-    pub(crate) visual: SpriteVisual,
-    pub(crate) brush: CompositionSurfaceBrush,
-}
-
-impl Text {
-    pub(crate) fn new(c: &Compositor, parent: &ContainerVisual) -> Result<Text> {
-        let (visual, brush) = text_sprite(c)?;
-        parent.Children()?.InsertAtTop(&visual)?;
-        Ok(Text { visual, brush })
-    }
-
-    /// Shows `layout` drawn at `s` pixels per DIP; returns its size in pixels.
-    pub(crate) fn show(
-        &self,
-        renderer: &Renderer,
-        layout: &Layout,
-        s: f32,
-        theme: &Theme,
-    ) -> Result<Vector2> {
-        self.brush.SetSurface(&renderer.draw(layout, s, theme)?)?;
-        let size = v2((layout.width * s).ceil(), (layout.height * s).ceil());
-        self.visual.SetSize(size)?;
-        Ok(size)
-    }
-
-    pub(crate) fn clear(&self) {
-        let _ = self.brush.SetSurface(None::<&ICompositionSurface>);
-    }
+    /// Last, so it goes after everything shown on it.
+    _window: Window,
 }
 
 // ---------------------------------------------------------------------------
 // Parts of the card
-
-/// Starts compositor animations with the card's easing curves.
-pub(crate) struct Animator {
-    pub(crate) compositor: Compositor,
-    pub(crate) decelerate: CompositionEasingFunction,
-    pub(crate) accelerate: CompositionEasingFunction,
-    scroll_ease: CompositionEasingFunction,
-    /// Ease-in-out, for fades that should be seen happening.
-    pub(crate) fade: CompositionEasingFunction,
-    /// For things that move into place with a little bounce.
-    pub(crate) overshoot: CompositionEasingFunction,
-}
-
-impl Animator {
-    pub(crate) fn new(compositor: Compositor) -> Result<Animator> {
-        let c = &compositor;
-        let decelerate: CompositionEasingFunction = c
-            .CreateCubicBezierEasingFunction(v2(0.1, 0.9), v2(0.2, 1.0))?
-            .cast()?;
-        let (x1, y1, x2, y2) = SCROLL_EASE;
-        let scroll_ease = c
-            .CreateCubicBezierEasingFunction(v2(x1, y1), v2(x2, y2))?
-            .cast()?;
-        let accelerate = c
-            .CreateCubicBezierEasingFunction(v2(0.7, 0.0), v2(1.0, 0.5))?
-            .cast()?;
-        let fade = c
-            .CreateCubicBezierEasingFunction(v2(0.4, 0.0), v2(0.6, 1.0))?
-            .cast()?;
-        let (x1, y1, x2, y2) = OVERSHOOT_EASE;
-        // Should the system refuse a curve that leaves 0..1, settle softly instead.
-        let overshoot: CompositionEasingFunction =
-            match c.CreateCubicBezierEasingFunction(v2(x1, y1), v2(x2, y2)) {
-                Ok(curve) => curve.cast()?,
-                Err(_) => decelerate.clone(),
-            };
-        Ok(Animator {
-            compositor,
-            decelerate,
-            accelerate,
-            scroll_ease,
-            fade,
-            overshoot,
-        })
-    }
-
-    pub(crate) fn scalar(
-        &self,
-        target: &impl Interface,
-        property: &str,
-        to: f32,
-        ms: u64,
-        delay: u64,
-        ease: &CompositionEasingFunction,
-    ) -> Result<()> {
-        let anim = self.compositor.CreateScalarKeyFrameAnimation()?;
-        anim.InsertKeyFrameWithEasingFunction(1.0, to, ease)?;
-        anim.SetDuration(ts(ms))?;
-        if delay > 0 {
-            anim.SetDelayTime(ts(delay))?;
-        }
-        target
-            .cast::<CompositionObject>()?
-            .StartAnimation(&HSTRING::from(property), &anim)
-    }
-
-    pub(crate) fn vector2(
-        &self,
-        target: &impl Interface,
-        property: &str,
-        to: Vector2,
-        ms: u64,
-    ) -> Result<()> {
-        let anim = self.compositor.CreateVector2KeyFrameAnimation()?;
-        anim.InsertKeyFrameWithEasingFunction(1.0, to, &self.decelerate)?;
-        anim.SetDuration(ts(ms))?;
-        target
-            .cast::<CompositionObject>()?
-            .StartAnimation(&HSTRING::from(property), &anim)
-    }
-
-    pub(crate) fn vector3(
-        &self,
-        target: &impl Interface,
-        property: &str,
-        to: Vector3,
-        ms: u64,
-        delay: u64,
-        ease: &CompositionEasingFunction,
-    ) -> Result<()> {
-        let anim = self.compositor.CreateVector3KeyFrameAnimation()?;
-        anim.InsertKeyFrameWithEasingFunction(1.0, to, ease)?;
-        anim.SetDuration(ts(ms))?;
-        if delay > 0 {
-            anim.SetDelayTime(ts(delay))?;
-        }
-        target
-            .cast::<CompositionObject>()?
-            .StartAnimation(&HSTRING::from(property), &anim)
-    }
-
-    /// Fades a brush from `from` to `to`.
-    pub(crate) fn color(
-        &self,
-        brush: &CompositionColorBrush,
-        from: windows::UI::Color,
-        to: windows::UI::Color,
-        ms: u64,
-    ) -> Result<()> {
-        let anim = self.compositor.CreateColorKeyFrameAnimation()?;
-        anim.SetInterpolationColorSpace(CompositionColorSpace::Rgb)?;
-        anim.InsertKeyFrame(0.0, from)?;
-        anim.InsertKeyFrameWithEasingFunction(1.0, to, &self.fade)?;
-        anim.SetDuration(ts(ms))?;
-        brush.SetColor(to)?;
-        brush.StartAnimation(&HSTRING::from("Color"), &anim)
-    }
-
-    /// Shakes `visual`, which rests at `at`, from side to side: a sign that
-    /// what was asked for can't be done. `s` is pixels per DIP.
-    pub(crate) fn shake(&self, visual: &impl Interface, at: Vector3, s: f32) -> Result<()> {
-        let a = self.compositor.CreateVector3KeyFrameAnimation()?;
-        let swings = [
-            (0.0, 0.0),
-            (0.12, -8.0),
-            (0.28, 7.0),
-            (0.44, -5.0),
-            (0.6, 3.0),
-            (0.78, -1.0),
-            (1.0, 0.0),
-        ];
-        for (t, dx) in swings {
-            a.InsertKeyFrame(t, v3(at.X + dx * s, at.Y))?;
-        }
-        a.SetDuration(ts(SHAKE_MS))?;
-        visual
-            .cast::<CompositionObject>()?
-            .StartAnimation(&HSTRING::from("Offset"), &a)
-    }
-
-    pub(crate) fn stop(target: &impl Interface, properties: &[&str]) {
-        if let Ok(object) = target.cast::<CompositionObject>() {
-            for p in properties {
-                let _ = object.StopAnimation(&HSTRING::from(*p));
-            }
-        }
-    }
-}
-
-/// The card's outline: its shadow, the clipped acrylic background that
-/// holds the content, and a hairline border on top.
-pub(crate) struct Frame {
-    pub(crate) visual: ContainerVisual,
-    shadow: SpriteVisual,
-    shadow_surface: CompositionSurfaceBrush,
-    shadow_brush: CompositionNineGridBrush,
-    /// Scale and darkness the shadow was last drawn for.
-    shadow_key: Option<(u32, bool)>,
-    /// The content goes in here.
-    pub(crate) card: ContainerVisual,
-    clip: CompositionRoundedRectangleGeometry,
-    tint: CompositionColorBrush,
-    border: ShapeVisual,
-    border_geometry: CompositionRoundedRectangleGeometry,
-    border_brush: CompositionColorBrush,
-}
-
-impl Frame {
-    pub(crate) fn new(c: &Compositor, parent: &ContainerVisual, theme: &Theme) -> Result<Frame> {
-        let visual = c.CreateContainerVisual()?;
-        parent.Children()?.InsertAtTop(&visual)?;
-
-        let shadow = c.CreateSpriteVisual()?;
-        let shadow_surface = c.CreateSurfaceBrush()?;
-        // The nine-grid needs the whole surface; the default, Uniform, keeps
-        // its aspect ratio and leaves the edges unstretched.
-        shadow_surface.SetStretch(CompositionStretch::Fill)?;
-        let shadow_brush = c.CreateNineGridBrush()?;
-        shadow_brush.SetSource(&shadow_surface)?;
-        shadow.SetBrush(&shadow_brush)?;
-        visual.Children()?.InsertAtTop(&shadow)?;
-
-        let card = c.CreateContainerVisual()?;
-        let clip = c.CreateRoundedRectangleGeometry()?;
-        card.SetClip(&c.CreateGeometricClipWithGeometry(&clip)?)?;
-        visual.Children()?.InsertAtTop(&card)?;
-
-        // Acrylic: the blurred desktop, then a translucent tint on top.
-        let backdrop = c.CreateSpriteVisual()?;
-        backdrop.SetBrush(&c.CreateHostBackdropBrush()?)?;
-        backdrop.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
-        card.Children()?.InsertAtTop(&backdrop)?;
-        let tint = c.CreateColorBrushWithColor(theme.tint())?;
-        let tint_visual = c.CreateSpriteVisual()?;
-        tint_visual.SetBrush(&tint)?;
-        tint_visual.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
-        card.Children()?.InsertAtTop(&tint_visual)?;
-
-        // A hairline edge, as on Windows 11 flyouts.
-        let border = c.CreateShapeVisual()?;
-        let border_geometry = c.CreateRoundedRectangleGeometry()?;
-        let border_shape = c.CreateSpriteShapeWithGeometry(&border_geometry)?;
-        let border_brush = c.CreateColorBrush()?;
-        border_shape.SetStrokeBrush(&border_brush)?;
-        border_shape.SetStrokeThickness(1.0)?;
-        border.Shapes()?.Append(&border_shape)?;
-        visual.Children()?.InsertAtTop(&border)?;
-
-        Ok(Frame {
-            visual,
-            shadow,
-            shadow_surface,
-            shadow_brush,
-            shadow_key: None,
-            card,
-            clip,
-            tint,
-            border,
-            border_geometry,
-            border_brush,
-        })
-    }
-
-    pub(crate) fn apply_theme(&mut self, renderer: &Renderer, t: &Theme, s: f32) -> Result<()> {
-        self.tint.SetColor(t.tint())?;
-        self.border_brush.SetColor(t.border())?;
-        let key = ((s * 100.0) as u32, t.dark);
-        if self.shadow_key != Some(key) {
-            let (surface, inset) =
-                renderer.draw_shadow(SHADOW_SPREAD * s, RADIUS * s, t.shadow_opacity())?;
-            self.shadow_surface.SetSurface(&surface)?;
-            self.shadow_brush.SetInsets(inset)?;
-            self.shadow_key = Some(key);
-        }
-        let shadow_margin = SHADOW_SPREAD * s;
-        self.shadow
-            .SetOffset(v3(-shadow_margin, -shadow_margin + SHADOW_DY * s))?;
-        self.clip.SetCornerRadius(v2(RADIUS * s, RADIUS * s))?;
-        self.border_geometry
-            .SetCornerRadius(v2(RADIUS * s - 0.5, RADIUS * s - 0.5))?;
-        self.border_geometry.SetOffset(v2(0.5, 0.5))?;
-        Ok(())
-    }
-
-    /// Like [`Frame::apply_theme`], with the card's colors fading over `ms`.
-    pub(crate) fn fade_theme(
-        &mut self,
-        anim: &Animator,
-        renderer: &Renderer,
-        t: &Theme,
-        s: f32,
-        ms: u64,
-    ) -> Result<()> {
-        let (tint, border) = (self.tint.Color()?, self.border_brush.Color()?);
-        self.apply_theme(renderer, t, s)?;
-        anim.color(&self.tint, tint, t.tint(), ms)?;
-        anim.color(&self.border_brush, border, t.border(), ms)
-    }
-
-    /// Sizes the card to `w` × `h` pixels with its top left at `offset`.
-    pub(crate) fn resize(
-        &self,
-        anim: &Animator,
-        w: f32,
-        h: f32,
-        offset: Vector3,
-        s: f32,
-        animate: bool,
-    ) -> Result<()> {
-        let shadow_margin = SHADOW_SPREAD * s;
-        let sizes: [(&dyn Fn() -> Result<CompositionObject>, Vector2); 5] = [
-            (&|| self.card.cast(), v2(w, h)),
-            (&|| self.clip.cast(), v2(w, h)),
-            (&|| self.border.cast(), v2(w, h)),
-            (&|| self.border_geometry.cast(), v2(w - 1.0, h - 1.0)),
-            (
-                &|| self.shadow.cast(),
-                v2(w + 2.0 * shadow_margin, h + 2.0 * shadow_margin),
-            ),
-        ];
-        if animate {
-            for (target, size) in sizes {
-                anim.vector2(&target()?, "Size", size, RESIZE_MS)?;
-            }
-            anim.vector3(
-                &self.visual,
-                "Offset",
-                offset,
-                RESIZE_MS,
-                0,
-                &anim.decelerate,
-            )
-        } else {
-            for (target, size) in sizes {
-                let object = target()?;
-                Animator::stop(&object, &["Size"]);
-                match object.cast::<Visual>() {
-                    Ok(visual) => visual.SetSize(size)?,
-                    Err(_) => object
-                        .cast::<CompositionRoundedRectangleGeometry>()?
-                        .SetSize(size)?,
-                }
-            }
-            Animator::stop(&self.visual, &["Offset"]);
-            self.visual.SetOffset(offset)
-        }
-    }
-}
 
 /// The word and its pronunciation. `back` holds the previous rendering
 /// while it cross-fades to the new one.
@@ -878,21 +450,9 @@ impl Loader {
             dot.StartAnimation(&HSTRING::from("Opacity"), &pulse)?;
 
             let bounce = anim.compositor.CreateVector3KeyFrameAnimation()?;
-            let small = Vector3 {
-                X: 0.8,
-                Y: 0.8,
-                Z: 1.0,
-            };
+            let small = scale(0.8);
             bounce.InsertKeyFrame(0.0, small)?;
-            bounce.InsertKeyFrameWithEasingFunction(
-                0.3,
-                Vector3 {
-                    X: 1.0,
-                    Y: 1.0,
-                    Z: 1.0,
-                },
-                &anim.decelerate,
-            )?;
+            bounce.InsertKeyFrameWithEasingFunction(0.3, scale(1.0), &anim.decelerate)?;
             bounce.InsertKeyFrameWithEasingFunction(0.7, small, &anim.decelerate)?;
             bounce.InsertKeyFrame(1.0, small)?;
             bounce.SetDuration(ts(1100))?;
@@ -948,26 +508,16 @@ impl ScrollChrome {
     }
 
     fn apply_theme(&self, t: &Theme) -> Result<()> {
-        let ink = if t.dark { 0xFF } else { 0x00 };
-        self.divider_brush.SetColor(crate::theme::argb(
-            if t.dark { 0x1F } else { 0x14 },
-            ink,
-            ink,
-            ink,
-        ))?;
-        self.thumb_brush.SetColor(crate::theme::argb(
-            if t.dark { 0x60 } else { 0x50 },
-            ink,
-            ink,
-            ink,
-        ))
+        self.divider_brush.SetColor(t.scroll_divider())?;
+        self.thumb_brush.SetColor(t.thumb())
     }
 }
 
 // ---------------------------------------------------------------------------
 
 impl Popup {
-    pub fn new(hwnd: HWND, compositor: Compositor, theme: Theme) -> Result<Popup> {
+    pub fn new(window: Window, compositor: Compositor, theme: Theme) -> Result<Popup> {
+        let hwnd = window.hwnd();
         let target = attach(hwnd, &compositor)?;
         let renderer = Renderer::new(&compositor)?;
         let c = &compositor;
@@ -1007,6 +557,7 @@ impl Popup {
             scroll: 0.0,
             scroll_anim: None,
             visible: false,
+            _window: window,
         })
     }
 
@@ -1108,35 +659,14 @@ impl Popup {
         self.search.row_at(x, y)
     }
 
-    /// Fades the card out. The caller hides the window after [`HIDE_MS`].
+    /// Fades the card out. The caller hides the window after [`crate::ui::HIDE_MS`].
     pub fn begin_hide(&mut self) -> Result<()> {
         if !self.visible {
             return Ok(());
         }
         self.visible = false;
         let dy = if self.grow_up { 6.0 } else { -6.0 } * self.scale;
-        let anim = &self.anim;
-        anim.scalar(&self.root, "Opacity", 0.0, HIDE_MS, 0, &anim.accelerate)?;
-        anim.vector3(
-            &self.root,
-            "Offset",
-            v3(0.0, dy),
-            HIDE_MS,
-            0,
-            &anim.accelerate,
-        )?;
-        anim.vector3(
-            &self.root,
-            "Scale",
-            Vector3 {
-                X: 0.98,
-                Y: 0.98,
-                Z: 1.0,
-            },
-            HIDE_MS,
-            0,
-            &anim.accelerate,
-        )
+        self.anim.fade_out(&self.root, dy)
     }
 
     pub fn finish_hide(&mut self) {
@@ -1236,11 +766,7 @@ impl Popup {
             .visual
             .SetSize(v2(content_w * s, header_layout.height * s))?;
         let rest = v3(PAD_X * s, PAD_TOP * s);
-        let full = Vector3 {
-            X: 1.0,
-            Y: 1.0,
-            Z: 1.0,
-        };
+        let full = scale(1.0);
         Animator::stop(&header.visual, &["Offset", "Scale"]);
         header.visual.SetScale(full)?;
         if let Some((from, size)) = rise_from {
@@ -1628,11 +1154,7 @@ impl Popup {
         ] {
             Animator::stop(v, &["Opacity", "Offset", "Scale"]);
         }
-        self.header.visual.SetScale(Vector3 {
-            X: 1.0,
-            Y: 1.0,
-            Z: 1.0,
-        })?;
+        self.header.visual.SetScale(scale(1.0))?;
         // A new card has nowhere to go back to.
         let back = &mut self.back;
         Animator::stop(&back.visual, &["Opacity"]);
@@ -1660,11 +1182,7 @@ impl Popup {
             Z: 0.0,
         })?;
         self.root.SetOpacity(0.0)?;
-        self.root.SetScale(Vector3 {
-            X: 0.96,
-            Y: 0.96,
-            Z: 1.0,
-        })?;
+        self.root.SetScale(scale(0.96))?;
         self.root
             .SetOffset(v3(0.0, if self.grow_up { 10.0 } else { -10.0 } * s))?;
 
@@ -1681,29 +1199,7 @@ impl Popup {
         }
         self.visible = true;
 
-        let anim = &self.anim;
-        anim.scalar(&self.root, "Opacity", 1.0, 160, 0, &anim.decelerate)?;
-        anim.vector3(
-            &self.root,
-            "Scale",
-            Vector3 {
-                X: 1.0,
-                Y: 1.0,
-                Z: 1.0,
-            },
-            SHOW_MS,
-            0,
-            &anim.decelerate,
-        )?;
-        anim.vector3(
-            &self.root,
-            "Offset",
-            v3(0.0, 0.0),
-            SHOW_MS,
-            0,
-            &anim.decelerate,
-        )?;
-        Ok(())
+        self.anim.fade_in(&self.root, FADE_IN_MS, SHOW_MS)
     }
 
     /// Turns the card into the search box. `in_place` fades out what it
@@ -1756,13 +1252,7 @@ impl Popup {
     }
 
     fn max_scroll(&self) -> f32 {
-        let overflow = self.body_h - (self.card_h - self.header_h);
-        // Ignore rounding slack: no scrollbar for a pixel or two.
-        if overflow > 2.0 * self.scale {
-            overflow
-        } else {
-            0.0
-        }
+        ui::max_scroll(self.body_h, self.card_h - self.header_h, self.scale)
     }
 
     /// Picks the window position and scale for a card next to `anchor`, on
@@ -1851,16 +1341,11 @@ impl Popup {
             return Ok(());
         }
         let viewport = self.card_h - self.header_h;
-        let track = viewport - 8.0 * s;
-        let thumb = (track * viewport / self.body_h).max(28.0 * s);
-        let thumb_y = |scroll: f32| {
-            self.header_h + 4.0 * s + (track - thumb) * (scroll / max).clamp(0.0, 1.0)
-        };
+        let thumb_y =
+            |scroll: f32| self.header_h + ui::thumb_span(viewport, self.body_h, scroll, max, s).0;
+        let (_, thumb) = ui::thumb_span(viewport, self.body_h, self.scroll, max, s);
         let y = thumb_y(self.scroll);
-        let x = CARD_W * s - 7.0 * s;
-        chrome.thumb.SetSize(v2(3.0 * s, thumb))?;
-        chrome.thumb_clip.SetSize(v2(3.0 * s, thumb))?;
-        chrome.thumb_clip.SetCornerRadius(v2(1.5 * s, 1.5 * s))?;
+        let x = ui::size_thumb(&chrome.thumb, &chrome.thumb_clip, CARD_W * s, thumb, s)?;
         if animate {
             // Track the content exactly, starting from where the thumb is now.
             let a = anim.compositor.CreateVector3KeyFrameAnimation()?;
@@ -1972,17 +1457,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn eases_like_css() {
-        assert!(cubic_bezier(SCROLL_EASE, 0.0).abs() < 1e-3);
-        assert!((cubic_bezier(SCROLL_EASE, 1.0) - 1.0).abs() < 1e-3);
-        // An ease-out is ahead of linear halfway through, and never goes back.
-        assert!(cubic_bezier(SCROLL_EASE, 0.5) > 0.5);
-        let samples: Vec<f32> = (0..=20)
-            .map(|i| cubic_bezier(SCROLL_EASE, i as f32 / 20.0))
-            .collect();
-        assert!(samples.windows(2).all(|w| w[1] >= w[0]));
     }
 }

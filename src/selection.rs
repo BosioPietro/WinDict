@@ -7,7 +7,7 @@
 use std::cell::OnceCell;
 use std::time::{Duration, Instant};
 
-use windows::core::{w, Interface, BOOL, PWSTR};
+use windows::core::{w, Interface, Owned, BOOL, PWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::{MonitorFromRect, MONITOR_DEFAULTTONULL};
 use windows::Win32::Security::{GetTokenInformation, TokenUIAccess, TOKEN_QUERY};
@@ -21,6 +21,8 @@ use windows::Win32::System::Variant::{VARIANT, VT_I4};
 use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+
+use crate::win;
 
 /// Marks input we inject so it can be recognised.
 const INJECTED: usize = 0x5744_4943; // "WDIC"
@@ -178,11 +180,11 @@ impl Capturer {
         // Some apps answer with a rectangle that isn't the caret (empty,
         // as tall as the window, off every screen): ask the next way then.
         let via_uia = if use_ui_automation {
-            self.caret_via_ui_automation().filter(is_caret_sized)
+            self.caret_via_ui_automation().filter(is_line_sized)
         } else {
             None
         };
-        via_uia.or_else(|| caret_via_accessibility().filter(is_caret_sized))
+        via_uia.or_else(|| caret_via_accessibility().filter(is_line_sized))
     }
 
     fn caret_via_ui_automation(&self) -> Option<RECT> {
@@ -199,7 +201,7 @@ impl Capturer {
             // Many apps measure the caret itself, as a line with no width;
             // others answer with nonsense (Windows Search puts it two
             // billion pixels up).
-            if let Some(r) = bounding_rect(&caret).filter(is_caret_sized) {
+            if let Some(r) = bounding_rect(&caret).filter(is_line_sized) {
                 return Some(RECT {
                     right: r.left + 1,
                     ..r
@@ -217,7 +219,7 @@ impl Capturer {
                 if text.is_empty() || text.contains(['\r', '\n']) {
                     return None;
                 }
-                bounding_rect(&range).filter(is_caret_sized)
+                bounding_rect(&range).filter(is_line_sized)
             };
             if let Some(r) = character(TextPatternRangeEndpoint_Start, -1) {
                 return Some(RECT {
@@ -236,7 +238,7 @@ impl Capturer {
             element
                 .CurrentBoundingRectangle()
                 .ok()
-                .filter(is_caret_sized)
+                .filter(is_line_sized)
         }
     }
 
@@ -283,8 +285,9 @@ fn create_uia() -> Option<IUIAutomation> {
     }
 }
 
-/// Whether `r` could be a caret: about a line tall, and on a screen.
-fn is_caret_sized(r: &RECT) -> bool {
+/// Whether `r` could be a caret or a line of selected text: about a line
+/// tall, and on a screen.
+pub fn is_line_sized(r: &RECT) -> bool {
     let height = r.bottom - r.top;
     r.right >= r.left
         && height > 0
@@ -376,12 +379,10 @@ fn bounding_rect(range: &IUIAutomationTextRange) -> Option<RECT> {
 /// every normal window, so the card can't be shown over them.
 pub fn is_shell_flyout(hwnd: HWND) -> bool {
     let hwnd = unsafe { GetAncestor(hwnd, GA_ROOT) };
-    let mut buf = [0u16; 64];
-    let len = unsafe { GetClassNameW(hwnd, &mut buf) } as usize;
     // Packaged apps show up as ApplicationFrameWindow; a bare CoreWindow in
     // front is a shell surface (Start, Search, Action Center, Win+V...).
     if matches!(
-        String::from_utf16_lossy(&buf[..len]).as_str(),
+        win::class_name(hwnd).as_str(),
         "Windows.UI.Core.CoreWindow" | "XamlExplorerHostIslandWindow"
     ) {
         return true;
@@ -392,20 +393,18 @@ pub fn is_shell_flyout(hwnd: HWND) -> bool {
     else {
         return false;
     };
+    let process = unsafe { Owned::new(process) };
     let mut buf = [0u16; 260];
     let mut len = buf.len() as u32;
     let ok = unsafe {
         QueryFullProcessImageNameW(
-            process,
+            *process,
             PROCESS_NAME_WIN32,
             PWSTR(buf.as_mut_ptr()),
             &mut len,
         )
     }
     .is_ok();
-    unsafe {
-        let _ = CloseHandle(process);
-    }
     if !ok {
         return false;
     }
@@ -430,17 +429,17 @@ pub fn has_ui_access() -> bool {
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token).is_err() {
             return false;
         }
+        let token = Owned::new(token);
         let mut value = 0u32;
         let mut len = 0u32;
         let ok = GetTokenInformation(
-            token,
+            *token,
             TokenUIAccess,
             Some(&mut value as *mut u32 as *mut _),
             std::mem::size_of::<u32>() as u32,
             &mut len,
         )
         .is_ok();
-        let _ = CloseHandle(token);
         ok && value != 0
     })
 }
@@ -475,11 +474,8 @@ pub fn close_flyout() {
 }
 
 fn is_terminal(hwnd: HWND) -> bool {
-    let mut buf = [0u16; 64];
-    let len = unsafe { GetClassNameW(hwnd, &mut buf) } as usize;
-    let class = String::from_utf16_lossy(&buf[..len]);
     matches!(
-        class.as_str(),
+        win::class_name(hwnd).as_str(),
         "ConsoleWindowClass"
             | "CASCADIA_HOSTING_WINDOW_CLASS"
             | "mintty"

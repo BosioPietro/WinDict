@@ -9,6 +9,13 @@ use std::sync::OnceLock;
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Networking::WinHttp::*;
 
+/// How long each step may take, in ms: resolving the name, connecting,
+/// sending, and receiving.
+const TIMEOUTS_MS: [i32; 4] = [4000, 4000, 4000, 8000];
+/// Responses are read this much at a time, and given up on past `MAX_BODY`.
+const CHUNK: usize = 16 * 1024;
+const MAX_BODY: usize = 4 * 1024 * 1024;
+
 /// A WinHTTP handle that is closed on drop.
 struct Handle(*mut c_void);
 
@@ -42,8 +49,8 @@ fn session() -> Result<&'static Handle, String> {
             0,
         );
         if !h.is_null() {
-            // resolve, connect, send, receive (ms)
-            let _ = WinHttpSetTimeouts(h, 4000, 4000, 4000, 8000);
+            let [resolve, connect, send, receive] = TIMEOUTS_MS;
+            let _ = WinHttpSetTimeouts(h, resolve, connect, send, receive);
         }
         Handle(h)
     });
@@ -96,7 +103,7 @@ pub fn get(host: &str, path: &str) -> Result<(u32, Vec<u8>), String> {
         .map_err(|_| offline())?;
 
         let mut body = Vec::new();
-        let mut chunk = vec![0u8; 16 * 1024];
+        let mut chunk = vec![0u8; CHUNK];
         loop {
             let mut read = 0u32;
             WinHttpReadData(
@@ -110,7 +117,7 @@ pub fn get(host: &str, path: &str) -> Result<(u32, Vec<u8>), String> {
                 break;
             }
             body.extend_from_slice(&chunk[..read as usize]);
-            if body.len() > 4 * 1024 * 1024 {
+            if body.len() > MAX_BODY {
                 return Err("The dictionary response was unexpectedly large.".into());
             }
         }

@@ -9,10 +9,10 @@ use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::Vector3;
 
-use crate::popup::{self, v2, v3, Animator, Frame, MARGIN};
 use crate::render::{Face, Ink, Renderer};
-use crate::theme::{argb, Theme};
-use crate::tray;
+use crate::theme::Theme;
+use crate::ui::{self, scale, v2, v3, Animator, Frame, MARGIN};
+use crate::win::Window;
 
 // Geometry, in DIPs.
 const WIDTH: f32 = 204.0;
@@ -39,11 +39,20 @@ const ROW_MS: u64 = 220;
 const ROW_STAGGER_MS: u64 = 24;
 const HIGHLIGHT_MOVE_MS: u64 = 150;
 
+/// What a row of the menu does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Command {
+    Autostart,
+    Settings,
+    Reload,
+    Quit,
+}
+
 #[derive(Clone, Copy)]
 enum Kind {
     Title,
     Separator,
-    Command { id: u32, checked: bool },
+    Command { id: Command, checked: bool },
 }
 
 struct Entry {
@@ -60,7 +69,7 @@ impl Entry {
         }
     }
 
-    fn command(id: u32, label: &str, checked: bool) -> Entry {
+    fn command(id: Command, label: &str, checked: bool) -> Entry {
         Entry {
             kind: Kind::Command { id, checked },
             label: label.to_owned(),
@@ -82,11 +91,11 @@ fn entries(hotkey: &str, autostart: bool) -> Vec<Entry> {
             label: format!("WinDict  -  {hotkey}"),
         },
         Entry::separator(),
-        Entry::command(tray::ID_AUTOSTART, "Start with Windows", autostart),
-        Entry::command(tray::ID_SETTINGS, "Settings\u{2026}", false),
-        Entry::command(tray::ID_RELOAD, "Reload settings", false),
+        Entry::command(Command::Autostart, "Start with Windows", autostart),
+        Entry::command(Command::Settings, "Settings\u{2026}", false),
+        Entry::command(Command::Reload, "Reload settings", false),
         Entry::separator(),
-        Entry::command(tray::ID_QUIT, "Quit", false),
+        Entry::command(Command::Quit, "Quit", false),
     ]
 }
 
@@ -94,7 +103,7 @@ fn entries(hotkey: &str, autostart: bool) -> Vec<Entry> {
 struct Row {
     top: f32,
     height: f32,
-    command: Option<u32>,
+    command: Option<Command>,
 }
 
 /// The soft rectangle behind the row under the pointer or the keyboard.
@@ -151,11 +160,14 @@ pub struct Menu {
     card: (f32, f32),
     selected: Option<usize>,
     pub visible: bool,
+    /// Last, so it goes after everything shown on it.
+    _window: Window,
 }
 
 impl Menu {
-    pub fn new(hwnd: HWND, compositor: Compositor, theme: Theme) -> Result<Menu> {
-        let target = popup::attach(hwnd, &compositor)?;
+    pub fn new(window: Window, compositor: Compositor, theme: Theme) -> Result<Menu> {
+        let hwnd = window.hwnd();
+        let target = ui::attach(hwnd, &compositor)?;
         let renderer = Renderer::new(&compositor)?;
         let c = &compositor;
 
@@ -183,6 +195,7 @@ impl Menu {
             card: (0.0, 0.0),
             selected: None,
             visible: false,
+            _window: window,
         })
     }
 
@@ -197,7 +210,7 @@ impl Menu {
         hotkey: &str,
         autostart: bool,
     ) -> Result<()> {
-        let (work, s) = popup::monitor_at(cursor);
+        let (work, s) = ui::monitor_at(cursor);
         self.theme = theme;
         self.scale = s;
         let px = |dip: f32| (dip * s).round();
@@ -269,11 +282,7 @@ impl Menu {
             Z: 0.0,
         })?;
         self.root.SetOpacity(0.0)?;
-        self.root.SetScale(Vector3 {
-            X: 0.94,
-            Y: 0.94,
-            Z: 1.0,
-        })?;
+        self.root.SetScale(scale(0.94))?;
         let drift = CARD_DRIFT * s;
         self.root
             .SetOffset(v3(0.0, if grow_up { drift } else { -drift }))?;
@@ -291,67 +300,18 @@ impl Menu {
         }
         self.visible = true;
 
-        let anim = &self.anim;
-        anim.scalar(&self.root, "Opacity", 1.0, FADE_IN_MS, 0, &anim.decelerate)?;
-        anim.vector3(
-            &self.root,
-            "Scale",
-            Vector3 {
-                X: 1.0,
-                Y: 1.0,
-                Z: 1.0,
-            },
-            SHOW_MS,
-            0,
-            &anim.decelerate,
-        )?;
-        anim.vector3(
-            &self.root,
-            "Offset",
-            v3(0.0, 0.0),
-            SHOW_MS,
-            0,
-            &anim.decelerate,
-        )?;
+        self.anim.fade_in(&self.root, FADE_IN_MS, SHOW_MS)?;
         self.reveal_rows(&reveal)
     }
 
-    /// Fades the menu out. The caller hides the window after [`popup::HIDE_MS`].
+    /// Fades the menu out. The caller hides the window after [`ui::HIDE_MS`].
     pub fn begin_hide(&mut self) -> Result<()> {
         if !self.visible {
             return Ok(());
         }
         self.visible = false;
         let dy = if self.grow_up { 6.0 } else { -6.0 } * self.scale;
-        let anim = &self.anim;
-        anim.scalar(
-            &self.root,
-            "Opacity",
-            0.0,
-            popup::HIDE_MS,
-            0,
-            &anim.accelerate,
-        )?;
-        anim.vector3(
-            &self.root,
-            "Offset",
-            v3(0.0, dy),
-            popup::HIDE_MS,
-            0,
-            &anim.accelerate,
-        )?;
-        anim.vector3(
-            &self.root,
-            "Scale",
-            Vector3 {
-                X: 0.98,
-                Y: 0.98,
-                Z: 1.0,
-            },
-            popup::HIDE_MS,
-            0,
-            &anim.accelerate,
-        )
+        self.anim.fade_out(&self.root, dy)
     }
 
     pub fn finish_hide(&mut self) {
@@ -393,11 +353,11 @@ impl Menu {
     }
 
     /// The command under a point in window pixels, if any.
-    pub fn command_at(&self, x: i32, y: i32) -> Option<u32> {
+    pub fn command_at(&self, x: i32, y: i32) -> Option<Command> {
         self.command_row_at(x, y).and_then(|i| self.rows[i].command)
     }
 
-    pub fn selected_command(&self) -> Option<u32> {
+    pub fn selected_command(&self) -> Option<Command> {
         self.selected.and_then(|i| self.rows[i].command)
     }
 
@@ -485,14 +445,8 @@ impl Menu {
         match entry.kind {
             Kind::Separator => {
                 let line = self.anim.compositor.CreateSpriteVisual()?;
-                let ink = if self.theme.dark { 0xFF } else { 0x00 };
-                let alpha = if self.theme.dark { 0x24 } else { 0x1A };
-                line.SetBrush(
-                    &self
-                        .anim
-                        .compositor
-                        .CreateColorBrushWithColor(argb(alpha, ink, ink, ink))?,
-                )?;
+                let color = self.theme.menu_separator();
+                line.SetBrush(&self.anim.compositor.CreateColorBrushWithColor(color)?)?;
                 let thickness = s.round().max(1.0);
                 line.SetSize(v2(self.card.0 - 2.0 * INSET * s, thickness))?;
                 line.SetOffset(v3(
@@ -551,7 +505,7 @@ impl Menu {
         let s = self.scale;
         let layout = self.renderer.layout_line(text, face, ink, width)?;
         let surface = self.renderer.draw(&layout, s, &self.theme)?;
-        let (sprite, brush) = popup::text_sprite(&self.anim.compositor)?;
+        let (sprite, brush) = ui::text_sprite(&self.anim.compositor)?;
         brush.SetSurface(&surface)?;
         let (w, h) = ((layout.width * s).ceil(), (layout.height * s).ceil());
         sprite.SetSize(v2(w, h))?;

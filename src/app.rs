@@ -1,28 +1,29 @@
 //! Ties everything together on the UI thread: hotkey → selection → lookup → card.
 
+mod edit;
+mod procs;
+
 use std::cell::{Cell, RefCell};
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{channel, Receiver, Sender};
 
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Gdi::{MonitorFromRect, ScreenToClient, MONITOR_DEFAULTTONULL};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, GetCurrentProcessId, GetCurrentThreadId, SetProcessWorkingSetSize,
+    GetCurrentProcess, GetCurrentThreadId, SetProcessWorkingSetSize,
 };
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
-use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Composition::Compositor;
 
 use crate::autostart;
 use crate::config::{self, Config};
-use crate::dictionary::{self, Definition, Lookup, NormalizeError};
+use crate::dictionary::{self, Definition, Detail, Lookup, NormalizeError};
 use crate::hotkey;
-use crate::menu::Menu;
+use crate::menu::{Command, Menu};
 use crate::offline;
+use crate::online;
 use crate::popup::{self, Popup, Transition};
 use crate::render::{Body, Target};
 use crate::searchbox::MAX_SUGGESTIONS;
@@ -30,18 +31,30 @@ use crate::selection::{self, Capturer, Selection};
 use crate::settings::{self, Change, Settings, Values};
 use crate::theme::Theme;
 use crate::tray::{self, Tray};
+use crate::ui;
+use crate::win::{self, Window};
+use edit::{Input, LineEdit, Motion};
+use procs::{focus_hook, main_proc, menu_proc, mouse_hook, popup_proc, settings_proc};
+
+const MAIN_CLASS: PCWSTR = w!("WinDict.Main");
+const POPUP_CLASS: PCWSTR = w!("WinDict.Popup");
+const MENU_CLASS: PCWSTR = w!("WinDict.Menu");
+const SETTINGS_CLASS: PCWSTR = w!("WinDict.Settings");
+/// The card and the menu: drawn by the compositor, above everything, and
+/// never activated by a click.
+const FLYOUT_EX_STYLE: WINDOW_EX_STYLE = WINDOW_EX_STYLE(
+    WS_EX_NOREDIRECTIONBITMAP.0 | WS_EX_TOOLWINDOW.0 | WS_EX_TOPMOST.0 | WS_EX_NOACTIVATE.0,
+);
 
 const WM_APP_TRAY: u32 = WM_APP + 1;
-const WM_APP_SELECTION: u32 = WM_APP + 2;
-const WM_APP_RESULT: u32 = WM_APP + 3;
+/// Something arrived in the app's [`Events`] channel.
+const WM_APP_EVENT: u32 = WM_APP + 2;
 const WM_APP_DISMISS: u32 = WM_APP + 4;
 const WM_APP_WHEEL: u32 = WM_APP + 5;
 const WM_APP_CAPTURE: u32 = WM_APP + 6;
 const WM_APP_CLICK: u32 = WM_APP + 7;
 const WM_APP_BACK: u32 = WM_APP + 8;
 const WM_APP_CLOSE_SETTINGS: u32 = WM_APP + 9;
-/// Not in the windows crate's message set (it lives with the common controls).
-const WM_MOUSELEAVE: u32 = 0x02A3;
 
 const HOTKEY_LOOKUP: i32 = 1;
 const HOTKEY_ESCAPE: i32 = 2;
@@ -50,6 +63,24 @@ const HOTKEY_BACK_ALT: i32 = 4;
 const HOTKEY_NEXT_LINK: i32 = 5;
 const HOTKEY_PREV_LINK: i32 = 6;
 const HOTKEY_OPEN_LINK: i32 = 7;
+
+/// Hotkeys registered only while the card has a use for them, as (id,
+/// modifiers, key).
+type Keys = &'static [(i32, HOT_KEY_MODIFIERS, VIRTUAL_KEY)];
+const BACK_KEYS: Keys = &[
+    (HOTKEY_BACK, MOD_NOREPEAT, VK_BACK),
+    (
+        HOTKEY_BACK_ALT,
+        HOT_KEY_MODIFIERS(MOD_ALT.0 | MOD_NOREPEAT.0),
+        VK_LEFT,
+    ),
+];
+/// Held down, Tab keeps moving, as it does everywhere else.
+const LINK_KEYS: Keys = &[
+    (HOTKEY_NEXT_LINK, HOT_KEY_MODIFIERS(0), VK_TAB),
+    (HOTKEY_PREV_LINK, MOD_SHIFT, VK_TAB),
+];
+const OPEN_KEY: Keys = &[(HOTKEY_OPEN_LINK, MOD_NOREPEAT, VK_RETURN)];
 
 const TIMER_HIDE: usize = 1;
 const TIMER_SETTLE: usize = 2;
@@ -66,17 +97,18 @@ const IDLE_TEARDOWN_MS: u32 = 3 * 60 * 1000;
 const AUTOHIDE_MS: u32 = 3500;
 /// How soon after showing to check whether Start/Search covers the card.
 const COVERED_CHECK_MS: u32 = 150;
+/// Foreground changes this soon after the card appears are from closing
+/// Start/Search for it, not the user switching apps.
+const FOREGROUND_GRACE_MS: u64 = 500;
 /// A click that lands this soon after the tray menu closed was the one that closed it.
 const MENU_REOPEN_GUARD_MS: u64 = 300;
 /// Hide the window once the fade-out has played, with a little slack.
-const HIDE_DONE_MS: u32 = popup::HIDE_MS as u32 + 30;
+const HIDE_DONE_MS: u32 = ui::HIDE_MS as u32 + 30;
 /// Shrink the hit-test region once a resize animation has played.
-const SETTLE_MS: u32 = popup::RESIZE_MS as u32 + 60;
+const SETTLE_MS: u32 = ui::RESIZE_MS as u32 + 60;
 const CACHE_SIZE: usize = 64;
 /// How many words "back" remembers.
 const HISTORY_SIZE: usize = 50;
-/// The most the search box holds, as many as a lookup accepts.
-const SEARCH_MAX_CHARS: usize = 60;
 const SEARCH_PLACEHOLDER: &str = "Type a word to look it up";
 const SEARCH_TITLE: &str = "No text selected";
 /// Opened again from the card itself, where nothing was meant to be selected.
@@ -93,7 +125,7 @@ thread_local! {
     // Read by the low-level mouse hook, which must not touch APP.
     static CARD_RECT: Cell<RECT> = const { Cell::new(RECT { left: 0, top: 0, right: 0, bottom: 0 }) };
     static MSG_HWND: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) };
-    // When the card last appeared (GetTickCount64), read by the focus hook.
+    // When the card last appeared (win::now_ms), read by the focus hook.
     static SHOWN_AT: Cell<u64> = const { Cell::new(0) };
 }
 
@@ -108,66 +140,55 @@ struct Looked {
     result: Lookup,
 }
 
+/// A result that wasn't found, or couldn't be looked up, and the word it
+/// was likely a typo of.
+struct Corrected {
+    id: u64,
+    place: Place,
+    word: String,
+    result: Lookup,
+    correction: Option<String>,
+}
+
+/// What the capture and lookup threads hand the UI thread.
+enum Event {
+    Captured(Captured),
+    Looked(Looked),
+    Corrected(Corrected),
+}
+
+/// Sends [`Event`]s to the UI thread. They go through a channel, and an
+/// empty WM_APP_EVENT wakes the thread to read it: a message can't carry
+/// them itself, as any app on the desktop can post one with any payload.
+#[derive(Clone)]
+struct Events {
+    tx: Sender<Event>,
+    /// The main window, as a number: HWND can't cross threads.
+    hwnd: isize,
+}
+
+impl Events {
+    fn send(&self, event: Event) {
+        if self.tx.send(event).is_ok() {
+            unsafe {
+                let hwnd = HWND(self.hwnd as _);
+                let _ = PostMessageW(Some(hwnd), WM_APP_EVENT, WPARAM(0), LPARAM(0));
+            }
+        }
+    }
+}
+
 /// What's typed in the search box.
 #[derive(Default)]
 struct Search {
-    text: String,
-    /// Where the caret is in `text`, in bytes.
-    caret: usize,
+    edit: LineEdit,
     title: &'static str,
     /// Whether the heading says why the last Enter did nothing.
     error: bool,
-    /// The first half of a character outside the BMP, waiting for the second.
-    high_surrogate: Option<u16>,
     /// The words offered under the field.
     suggestions: Vec<offline::Suggestion>,
     /// What they're picked from, read once something's typed.
     words: Option<offline::Words>,
-}
-
-impl Search {
-    fn push(&mut self, c: char) {
-        if !c.is_control() && self.text.chars().count() < SEARCH_MAX_CHARS {
-            self.text.insert(self.caret, c);
-            self.caret += c.len_utf8();
-        }
-    }
-
-    /// Where the caret is, in the UTF-16 units DirectWrite counts.
-    fn caret_utf16(&self) -> u32 {
-        self.text[..self.caret].encode_utf16().count() as u32
-    }
-
-    /// Where the character before the caret starts.
-    fn prev_char(&self) -> usize {
-        self.text[..self.caret]
-            .char_indices()
-            .next_back()
-            .map_or(0, |(i, _)| i)
-    }
-
-    /// Where the character after the caret ends.
-    fn next_char(&self) -> usize {
-        self.text[self.caret..]
-            .chars()
-            .next()
-            .map_or(self.caret, |c| self.caret + c.len_utf8())
-    }
-
-    /// Where the word before the caret starts, past any spaces after it.
-    fn prev_word(&self) -> usize {
-        let trimmed = self.text[..self.caret].trim_end();
-        trimmed.rfind(char::is_whitespace).map_or(0, |i| i + 1)
-    }
-
-    /// Where the next word starts, past the rest of this one and the
-    /// spaces after it, as Ctrl+Right goes elsewhere in Windows.
-    fn next_word(&self) -> usize {
-        let rest = &self.text[self.caret..];
-        let word = rest.find(char::is_whitespace).unwrap_or(rest.len());
-        let spaces = rest[word..].len() - rest[word..].trim_start().len();
-        self.caret + word + spaces
-    }
 }
 
 /// Where a lookup's answer goes.
@@ -175,8 +196,9 @@ impl Search {
 enum Place {
     /// A new card next to the selection.
     New(RECT),
-    /// The open card, in place of what it shows.
-    Same,
+    /// The open card, in place of what it shows, changing as the
+    /// transition says.
+    Same(Transition),
 }
 
 pub struct App {
@@ -187,13 +209,16 @@ pub struct App {
     menu: Option<Menu>,
     /// The settings window, while it's open.
     settings: Option<Settings>,
-    /// When the tray menu last started closing (GetTickCount64).
+    /// When the tray menu last started closing (win::now_ms).
     menu_closed_at: u64,
     /// The press on the tray icon that closed the menu; its release mustn't reopen it.
     swallow_tray_release: bool,
     tray: Tray,
     taskbar_created: u32,
     capture_thread: u32,
+    /// What the capture and lookup threads sent, and how they send it.
+    inbox: Receiver<Event>,
+    events: Events,
     request: u64,
     /// Online answers, most recently used last.
     cache: Vec<(String, Lookup)>,
@@ -225,45 +250,36 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
     };
     unsafe {
         let instance = HINSTANCE(GetModuleHandleW(None)?.0);
-        let class = WNDCLASSW {
-            lpfnWndProc: Some(main_proc),
-            hInstance: instance,
-            lpszClassName: w!("WinDict.Main"),
-            ..Default::default()
-        };
-        RegisterClassW(&class);
-        let popup_class = WNDCLASSW {
-            lpfnWndProc: Some(popup_proc),
-            hInstance: instance,
-            hCursor: LoadCursorW(None, IDC_ARROW)?,
-            lpszClassName: w!("WinDict.Popup"),
-            ..Default::default()
-        };
-        RegisterClassW(&popup_class);
-        let menu_class = WNDCLASSW {
-            lpfnWndProc: Some(menu_proc),
-            hInstance: instance,
-            hCursor: LoadCursorW(None, IDC_ARROW)?,
-            lpszClassName: w!("WinDict.Menu"),
-            ..Default::default()
-        };
-        RegisterClassW(&menu_class);
-        let settings_class = WNDCLASSW {
-            lpfnWndProc: Some(settings_proc),
-            hInstance: instance,
-            hIcon: LoadIconW(Some(instance), PCWSTR(tray::ICON_ID as usize as *const u16))
-                .unwrap_or_default(),
-            hCursor: LoadCursorW(None, IDC_ARROW)?,
-            lpszClassName: w!("WinDict.Settings"),
-            ..Default::default()
-        };
-        RegisterClassW(&settings_class);
+        let arrow = LoadCursorW(None, IDC_ARROW)?;
+        let icon = LoadIconW(Some(instance), PCWSTR(tray::ICON_ID as usize as *const u16))
+            .unwrap_or_default();
+        let classes: [(PCWSTR, WNDPROC, HCURSOR, HICON); 4] = [
+            (
+                MAIN_CLASS,
+                Some(main_proc),
+                HCURSOR::default(),
+                HICON::default(),
+            ),
+            (POPUP_CLASS, Some(popup_proc), arrow, HICON::default()),
+            (MENU_CLASS, Some(menu_proc), arrow, HICON::default()),
+            (SETTINGS_CLASS, Some(settings_proc), arrow, icon),
+        ];
+        for (name, proc, cursor, icon) in classes {
+            RegisterClassW(&WNDCLASSW {
+                lpfnWndProc: proc,
+                hInstance: instance,
+                hCursor: cursor,
+                hIcon: icon,
+                lpszClassName: name,
+                ..Default::default()
+            });
+        }
 
         // A hidden top-level window (not message-only: it must receive the
         // TaskbarCreated broadcast).
         let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
-            w!("WinDict.Main"),
+            MAIN_CLASS,
             w!("WinDict"),
             WS_POPUP,
             0,
@@ -285,7 +301,12 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
         // thread also owns the clipboard after a restore, so it must pump
         // messages (other apps send WM_DESTROYCLIPBOARD to the owner).
         let (ready, thread_id) = channel::<u32>();
-        let notify = hwnd.0 as isize;
+        let (tx, inbox) = channel();
+        let events = Events {
+            tx,
+            hwnd: hwnd.0 as isize,
+        };
+        let capture_events = events.clone();
         std::thread::spawn(move || {
             let capturer = Capturer::new();
             let mut msg = MSG::default();
@@ -297,11 +318,7 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
                     let id = msg.wParam.0 as u64;
                     let use_ui_automation = msg.lParam.0 != 0;
                     let selection = capturer.capture(use_ui_automation);
-                    post(
-                        notify,
-                        WM_APP_SELECTION,
-                        Box::new(Captured { id, selection }),
-                    );
+                    capture_events.send(Event::Captured(Captured { id, selection }));
                 } else {
                     let _ = TranslateMessage(&msg);
                     DispatchMessageW(&msg);
@@ -322,6 +339,8 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             tray,
             taskbar_created,
             capture_thread,
+            inbox,
+            events,
             request: 0,
             cache: Vec::new(),
             local: None,
@@ -361,16 +380,6 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
         });
     }
     Ok(())
-}
-
-/// Sends a boxed payload to the UI thread.
-fn post<T>(hwnd: isize, msg: u32, payload: Box<T>) {
-    let ptr = Box::into_raw(payload);
-    unsafe {
-        if PostMessageW(Some(HWND(hwnd as _)), msg, WPARAM(0), LPARAM(ptr as isize)).is_err() {
-            drop(Box::from_raw(ptr));
-        }
-    }
 }
 
 /// Runs `f` on the app state. Returns `None`, dropping the event, if the state
@@ -418,29 +427,11 @@ impl App {
 
     fn ensure_popup(&mut self) -> Option<&mut Popup> {
         if self.popup.is_none() {
-            let created = unsafe {
-                CreateWindowExW(
-                    WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
-                    w!("WinDict.Popup"),
-                    w!("WinDict"),
-                    WS_POPUP,
-                    0,
-                    0,
-                    0,
-                    0,
-                    None,
-                    None,
-                    GetModuleHandleW(None).ok().map(|m| HINSTANCE(m.0)),
-                    None,
-                )
-            };
-            let hwnd = created.ok()?;
-            match Popup::new(hwnd, self.compositor.clone(), self.theme()) {
+            let window =
+                Window::create(POPUP_CLASS, w!("WinDict"), FLYOUT_EX_STYLE, WS_POPUP).ok()?;
+            match Popup::new(window, self.compositor.clone(), self.theme()) {
                 Ok(p) => self.popup = Some(p),
                 Err(e) => {
-                    unsafe {
-                        let _ = DestroyWindow(hwnd);
-                    }
                     self.tray
                         .notify("WinDict couldn't draw its window", &e.message());
                     return None;
@@ -452,31 +443,13 @@ impl App {
 
     fn ensure_menu(&mut self) -> Option<&mut Menu> {
         if self.menu.is_none() {
-            let created = unsafe {
-                // Never takes the focus: the taskbar's overflow flyout closes
-                // as soon as something else is activated.
-                CreateWindowExW(
-                    WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
-                    w!("WinDict.Menu"),
-                    w!("WinDict"),
-                    WS_POPUP,
-                    0,
-                    0,
-                    0,
-                    0,
-                    None,
-                    None,
-                    GetModuleHandleW(None).ok().map(|m| HINSTANCE(m.0)),
-                    None,
-                )
-            };
-            let hwnd = created.ok()?;
-            match Menu::new(hwnd, self.compositor.clone(), self.theme()) {
+            // Never takes the focus: the taskbar's overflow flyout closes
+            // as soon as something else is activated.
+            let window =
+                Window::create(MENU_CLASS, w!("WinDict"), FLYOUT_EX_STYLE, WS_POPUP).ok()?;
+            match Menu::new(window, self.compositor.clone(), self.theme()) {
                 Ok(m) => self.menu = Some(m),
                 Err(e) => {
-                    unsafe {
-                        let _ = DestroyWindow(hwnd);
-                    }
                     self.tray
                         .notify("WinDict couldn't draw its menu", &e.message());
                     return None;
@@ -488,29 +461,16 @@ impl App {
 
     fn ensure_settings(&mut self, theme: Theme, values: Values) -> Option<&mut Settings> {
         if self.settings.is_none() {
-            let created = unsafe {
-                CreateWindowExW(
-                    WS_EX_NOREDIRECTIONBITMAP | WS_EX_APPWINDOW,
-                    w!("WinDict.Settings"),
-                    w!("WinDict Settings"),
-                    WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX,
-                    0,
-                    0,
-                    0,
-                    0,
-                    None,
-                    None,
-                    GetModuleHandleW(None).ok().map(|m| HINSTANCE(m.0)),
-                    None,
-                )
-            };
-            let hwnd = created.ok()?;
-            match Settings::new(hwnd, self.compositor.clone(), theme, values) {
+            let window = Window::create(
+                SETTINGS_CLASS,
+                w!("WinDict Settings"),
+                WS_EX_NOREDIRECTIONBITMAP | WS_EX_APPWINDOW,
+                WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX,
+            )
+            .ok()?;
+            match Settings::new(window, self.compositor.clone(), theme, values) {
                 Ok(s) => self.settings = Some(s),
                 Err(e) => {
-                    unsafe {
-                        let _ = DestroyWindow(hwnd);
-                    }
                     self.tray
                         .notify("WinDict couldn't draw its settings", &e.message());
                     return None;
@@ -546,6 +506,17 @@ impl App {
                 // Sent with every request so "Reload settings" applies it.
                 LPARAM(self.config.use_ui_automation as isize),
             );
+        }
+    }
+
+    /// Handles what the capture and lookup threads sent.
+    fn on_events(&mut self) {
+        while let Ok(event) = self.inbox.try_recv() {
+            match event {
+                Event::Captured(captured) => self.on_selection(captured),
+                Event::Looked(looked) => self.on_result(looked),
+                Event::Corrected(corrected) => self.on_corrected(corrected),
+            }
         }
     }
 
@@ -621,47 +592,17 @@ impl App {
         let Some(search) = self.search.as_mut() else {
             return;
         };
-        let high = search.high_surrogate.take();
-        match unit {
-            0x0D => {
+        match search.edit.type_unit(unit) {
+            Input::Edited => {}
+            Input::Enter => {
                 let picked = self.popup.as_ref().and_then(|p| p.suggestion());
                 return self.submit_search(picked);
             }
-            0x08 => {
-                let from = search.prev_char();
-                search.text.replace_range(from..search.caret, "");
-                search.caret = from;
-            }
-            // Ctrl+Backspace: the word before the caret.
-            0x7F => {
-                let from = search.prev_word();
-                search.text.replace_range(from..search.caret, "");
-                search.caret = from;
-            }
-            // Ctrl+V: the first line on the clipboard.
-            0x16 => {
+            Input::Paste => {
                 let pasted = selection::clipboard_text(hwnd).unwrap_or_default();
-                let line = pasted.lines().map(str::trim).find(|l| !l.is_empty());
-                for c in line.unwrap_or_default().chars() {
-                    search.push(if c.is_whitespace() { ' ' } else { c });
-                }
+                search.edit.paste(&pasted);
             }
-            0xD800..=0xDBFF => {
-                search.high_surrogate = Some(unit);
-                return;
-            }
-            0xDC00..=0xDFFF => {
-                let Some(high) = high else {
-                    return;
-                };
-                if let Some(Ok(c)) = char::decode_utf16([high, unit]).next() {
-                    search.push(c);
-                }
-            }
-            _ => match char::from_u32(unit as u32) {
-                Some(c) if !c.is_control() => search.push(c),
-                _ => return,
-            },
+            Input::Nothing => return,
         }
         self.refresh_search();
     }
@@ -673,43 +614,40 @@ impl App {
         let (Some(search), Some(popup)) = (self.search.as_mut(), self.popup.as_mut()) else {
             return;
         };
-        // The high bit (a negative state) means the key is down.
-        let held = |vk: VIRTUAL_KEY| unsafe { GetKeyState(vk.0 as i32) < 0 };
-        let ctrl = held(VK_CONTROL);
+        let ctrl = hotkey::is_held(VK_CONTROL);
         let down = match key {
             VK_DOWN => Some(true),
             VK_UP => Some(false),
-            VK_TAB => Some(!held(VK_SHIFT)),
+            VK_TAB => Some(!hotkey::is_held(VK_SHIFT)),
             _ => None,
         };
         if let Some(down) = down {
             let _ = popup.step_suggestion(down);
             return;
         }
-        let caret = match key {
-            VK_LEFT if ctrl => search.prev_word(),
-            VK_LEFT => search.prev_char(),
-            VK_RIGHT if ctrl => search.next_word(),
-            VK_RIGHT => search.next_char(),
-            VK_HOME => 0,
-            VK_END => search.text.len(),
+        let edit = &mut search.edit;
+        let motion = match key {
+            VK_LEFT if ctrl => Motion::WordBack,
+            VK_LEFT => Motion::CharBack,
+            VK_RIGHT if ctrl => Motion::WordForward,
+            VK_RIGHT => Motion::CharForward,
+            VK_HOME => Motion::Start,
+            VK_END => Motion::End,
             VK_DELETE => {
                 let to = if ctrl {
-                    search.next_word()
+                    Motion::WordForward
                 } else {
-                    search.next_char()
+                    Motion::CharForward
                 };
-                if to == search.caret {
-                    return;
+                if edit.delete(to) {
+                    self.refresh_search();
                 }
-                search.text.replace_range(search.caret..to, "");
-                return self.refresh_search();
+                return;
             }
             _ => return,
         };
-        if caret != search.caret {
-            search.caret = caret;
-            let _ = popup.set_query(&search.text, search.caret_utf16());
+        if edit.move_caret(motion) {
+            let _ = popup.set_query(edit.text(), edit.caret_utf16());
         }
     }
 
@@ -723,8 +661,8 @@ impl App {
         if std::mem::take(&mut search.error) {
             let _ = popup.set_search_title(search.title);
         }
-        let _ = popup.set_query(&search.text, search.caret_utf16());
-        let typed = search.text.trim_start().to_lowercase();
+        let _ = popup.set_query(search.edit.text(), search.edit.caret_utf16());
+        let typed = search.edit.text().trim_start().to_lowercase();
         let typed_chars = typed.chars().count();
         let suggest = typed_chars >= SUGGEST_AFTER;
         search.suggestions = if suggest {
@@ -758,7 +696,7 @@ impl App {
         };
         let picked_row = picked.filter(|&i| i < search.suggestions.len());
         let picked = picked_row.map(|i| &search.suggestions[i]);
-        let text = picked.map_or(&search.text, |s| &s.word);
+        let text = picked.map_or(search.edit.text(), |s| s.word.as_str());
         let complaint = match dictionary::normalize(text) {
             Ok(word) => {
                 self.search = None;
@@ -766,7 +704,7 @@ impl App {
                 if let Some(popup) = self.popup.as_mut() {
                     let _ = popup.pick_suggestion(picked_row);
                 }
-                return self.lookup(word, Place::Same);
+                return self.lookup(word, Place::Same(Transition::Replace));
             }
             Err(NormalizeError::Empty) => None,
             Err(NormalizeError::TooLong) if !search.error => {
@@ -786,16 +724,13 @@ impl App {
     /// Looks `word` up and shows the answer at `place`. The bundled
     /// dictionary answers instantly; the online one fills gaps.
     fn lookup(&mut self, word: String, place: Place) {
-        let (max_defs, max_syn) = (self.config.max_definitions, self.config.max_synonyms);
-        let examples = self.config.show_examples;
+        let detail = Detail {
+            senses: self.config.max_definitions,
+            synonyms: self.config.max_synonyms,
+            examples: self.config.show_examples,
+        };
         self.current = Some(word.clone());
-        self.local = offline::lookup(&word, max_defs, max_syn).map(|def| {
-            if examples {
-                def
-            } else {
-                def.without_examples()
-            }
-        });
+        self.local = offline::lookup(&word, detail);
         let online_key = match &self.local {
             Some(def) => def.word.to_lowercase(),
             None => word.clone(),
@@ -823,21 +758,14 @@ impl App {
             (None, None) => self.present_body(place, &word, None, Body::Loading),
         }
 
-        let (id, notify) = (self.request, self.hwnd.0 as isize);
+        let (id, events) = (self.request, self.events.clone());
         std::thread::spawn(move || {
-            let result = match dictionary::lookup_online(&online_key, max_defs, max_syn) {
-                Lookup::Found(def) if !examples => Lookup::Found(def.without_examples()),
-                result => result,
-            };
-            post(
-                notify,
-                WM_APP_RESULT,
-                Box::new(Looked {
-                    id,
-                    word: online_key,
-                    result,
-                }),
-            );
+            let result = online::lookup(&online_key, detail);
+            events.send(Event::Looked(Looked {
+                id,
+                word: online_key,
+                result,
+            }));
         });
     }
 
@@ -871,10 +799,14 @@ impl App {
                 let before = (local.phonetic.clone(), local.meanings.len());
                 let merged = dictionary::merge(local, Some(&looked.result));
                 if (merged.phonetic.clone(), merged.meanings.len()) != before {
-                    self.update(&looked.word, &Lookup::Found(merged), Transition::Refine);
+                    let place = Place::Same(Transition::Refine);
+                    self.present(place, &looked.word, &Lookup::Found(merged));
                 }
             }
-            None => self.update(&looked.word, &looked.result, Transition::Replace),
+            None => {
+                let place = Place::Same(Transition::Replace);
+                self.present(place, &looked.word, &looked.result);
+            }
         }
     }
 
@@ -911,62 +843,66 @@ impl App {
         }
     }
 
-    /// The word `word` was likely a typo of, when it wasn't found or couldn't
-    /// be looked up. Reads the whole word list (a few tens of ms), dropped
-    /// again straight after.
-    fn correction(word: &str, result: &Lookup) -> Option<String> {
+    /// Shows `result` for `word` at `place`. A word that wasn't found, or
+    /// couldn't be looked up, is shown once the word it was likely a typo of
+    /// is found, on a thread of its own: that reads the whole word list (a
+    /// few tens of ms), dropped again straight after.
+    fn present(&mut self, place: Place, word: &str, result: &Lookup) {
         if matches!(result, Lookup::Found(_)) {
-            return None;
+            return self.present_corrected(place, word, result, None);
         }
-        offline::Words::load().correct(word).map(str::to_string)
+        let (id, events) = (self.request, self.events.clone());
+        let (word, result) = (word.to_string(), result.clone());
+        std::thread::spawn(move || {
+            let correction = offline::Words::load().correct(&word).map(str::to_string);
+            events.send(Event::Corrected(Corrected {
+                id,
+                place,
+                word,
+                result,
+                correction,
+            }));
+        });
     }
 
-    fn present(&mut self, place: Place, word: &str, result: &Lookup) {
-        let correction = Self::correction(word, result);
-        let (title, phonetic, body) = Self::card_for(word, result, correction.as_deref());
+    fn on_corrected(&mut self, c: Corrected) {
+        let visible = self.popup.as_ref().is_some_and(|p| p.visible);
+        if c.id != self.request || (matches!(c.place, Place::Same(_)) && !visible) {
+            return;
+        }
+        self.present_corrected(c.place, &c.word, &c.result, c.correction.as_deref());
+    }
+
+    fn present_corrected(
+        &mut self,
+        place: Place,
+        word: &str,
+        result: &Lookup,
+        correction: Option<&str>,
+    ) {
+        let (title, phonetic, body) = Self::card_for(word, result, correction);
         self.present_body(place, title, phonetic, body);
     }
 
     fn present_body(&mut self, place: Place, title: &str, phonetic: Option<&str>, body: Body) {
         match place {
             Place::New(anchor) => self.show_body(anchor, title, phonetic, body, false),
-            Place::Same => {
+            Place::Same(transition) => {
                 let back = !self.history.is_empty();
-                if let Some(popup) = self.popup.as_mut() {
-                    let _ = popup.set_back(back);
+                let Some(popup) = self.popup.as_mut() else {
+                    return;
+                };
+                let _ = popup.set_back(back);
+                if popup
+                    .set_content(title, phonetic, body, transition)
+                    .is_err()
+                {
+                    return;
                 }
-                self.update_body(title, phonetic, body, Transition::Replace);
+                self.on_resized();
+                self.sync_link_keys();
             }
         }
-    }
-
-    fn update(&mut self, word: &str, result: &Lookup, transition: Transition) {
-        let correction = Self::correction(word, result);
-        let (title, phonetic, body) = Self::card_for(word, result, correction.as_deref());
-        self.update_body(title, phonetic, body, transition);
-    }
-
-    fn update_body(
-        &mut self,
-        title: &str,
-        phonetic: Option<&str>,
-        body: Body,
-        transition: Transition,
-    ) {
-        let Some(popup) = self.popup.as_mut() else {
-            return;
-        };
-        if popup
-            .set_content(title, phonetic, body, transition)
-            .is_err()
-        {
-            return;
-        }
-        CARD_RECT.set(popup.card_rect());
-        unsafe {
-            SetTimer(Some(self.hwnd), TIMER_SETTLE, SETTLE_MS, None);
-        }
-        self.sync_link_keys();
     }
 
     fn show_message(&mut self, anchor: Option<RECT>, title: &str, detail: &str, auto_hide: bool) {
@@ -1017,7 +953,7 @@ impl App {
                 SetTimer(Some(hwnd), TIMER_AUTOHIDE, AUTOHIDE_MS, None);
             }
         }
-        SHOWN_AT.set(unsafe { GetTickCount64() });
+        SHOWN_AT.set(win::now_ms());
         self.install_dismiss_hooks();
         self.sync_link_keys();
         unsafe {
@@ -1052,7 +988,7 @@ impl App {
         };
         let top = unsafe { GetAncestor(WindowFromPoint(center), GA_ROOT) };
         if top != popup.hwnd && selection::is_shell_flyout(top) {
-            SHOWN_AT.set(unsafe { GetTickCount64() });
+            SHOWN_AT.set(win::now_ms());
             selection::close_flyout();
         }
     }
@@ -1073,7 +1009,7 @@ impl App {
         }
         // Answers still on their way are for the word we're leaving.
         self.request += 1;
-        self.lookup(word, Place::Same);
+        self.lookup(word, Place::Same(Transition::Replace));
         self.sync_back_keys();
     }
 
@@ -1086,7 +1022,7 @@ impl App {
             return;
         };
         self.request += 1;
-        self.lookup(word, Place::Same);
+        self.lookup(word, Place::Same(Transition::Replace));
         self.sync_back_keys();
     }
 
@@ -1094,25 +1030,7 @@ impl App {
     /// go: otherwise they belong to the app underneath.
     fn sync_back_keys(&mut self) {
         let wanted = !self.history.is_empty();
-        if wanted == self.back_keys {
-            return;
-        }
-        self.back_keys = wanted;
-        unsafe {
-            if wanted {
-                let _ =
-                    RegisterHotKey(Some(self.hwnd), HOTKEY_BACK, MOD_NOREPEAT, VK_BACK.0 as u32);
-                let _ = RegisterHotKey(
-                    Some(self.hwnd),
-                    HOTKEY_BACK_ALT,
-                    MOD_ALT | MOD_NOREPEAT,
-                    VK_LEFT.0 as u32,
-                );
-            } else {
-                let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_BACK);
-                let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_BACK_ALT);
-            }
-        }
+        set_hotkeys(self.hwnd, BACK_KEYS, &mut self.back_keys, wanted);
     }
 
     /// Tab and Shift+Tab move between the card's links, and Enter opens the
@@ -1129,30 +1047,8 @@ impl App {
     }
 
     fn set_link_keys(&mut self, tab: bool, enter: bool) {
-        let hwnd = Some(self.hwnd);
-        unsafe {
-            if tab != self.link_keys {
-                self.link_keys = tab;
-                if tab {
-                    // Held down, Tab keeps moving, as it does everywhere else.
-                    let none = HOT_KEY_MODIFIERS::default();
-                    let _ = RegisterHotKey(hwnd, HOTKEY_NEXT_LINK, none, VK_TAB.0 as u32);
-                    let _ = RegisterHotKey(hwnd, HOTKEY_PREV_LINK, MOD_SHIFT, VK_TAB.0 as u32);
-                } else {
-                    let _ = UnregisterHotKey(hwnd, HOTKEY_NEXT_LINK);
-                    let _ = UnregisterHotKey(hwnd, HOTKEY_PREV_LINK);
-                }
-            }
-            if enter != self.open_key {
-                self.open_key = enter;
-                if enter {
-                    let key = VK_RETURN.0 as u32;
-                    let _ = RegisterHotKey(hwnd, HOTKEY_OPEN_LINK, MOD_NOREPEAT, key);
-                } else {
-                    let _ = UnregisterHotKey(hwnd, HOTKEY_OPEN_LINK);
-                }
-            }
-        }
+        set_hotkeys(self.hwnd, LINK_KEYS, &mut self.link_keys, tab);
+        set_hotkeys(self.hwnd, OPEN_KEY, &mut self.open_key, enter);
     }
 
     /// Tab or Shift+Tab: rings the next or previous link.
@@ -1180,16 +1076,7 @@ impl App {
         match target {
             Target::Word(word) => self.follow(&word),
             Target::Url(url) => {
-                unsafe {
-                    ShellExecuteW(
-                        None,
-                        w!("open"),
-                        &HSTRING::from(url),
-                        PCWSTR::null(),
-                        PCWSTR::null(),
-                        SW_SHOWNORMAL,
-                    );
-                }
+                win::shell_open(&HSTRING::from(url));
                 self.dismiss();
             }
         }
@@ -1250,13 +1137,7 @@ impl App {
                 }
             }
             TIMER_MENU_TEARDOWN if self.menu.as_ref().is_some_and(|m| !m.visible) => {
-                if let Some(m) = self.menu.take() {
-                    let hwnd = m.hwnd;
-                    drop(m);
-                    unsafe {
-                        let _ = DestroyWindow(hwnd);
-                    }
-                }
+                self.menu = None;
                 trim_working_set();
             }
             TIMER_HIDE => {
@@ -1272,22 +1153,11 @@ impl App {
             TIMER_SETTINGS_HIDE if self.settings.as_ref().is_some_and(|s| !s.visible) => {
                 if let Some(mut s) = self.settings.take() {
                     s.finish_hide();
-                    let hwnd = s.hwnd;
-                    drop(s);
-                    unsafe {
-                        let _ = DestroyWindow(hwnd);
-                    }
                 }
                 trim_working_set();
             }
             TIMER_TEARDOWN if self.popup.as_ref().is_some_and(|p| !p.visible) => {
-                if let Some(p) = self.popup.take() {
-                    let hwnd = p.hwnd;
-                    drop(p);
-                    unsafe {
-                        let _ = DestroyWindow(hwnd);
-                    }
-                }
+                self.popup = None;
                 trim_working_set();
             }
             _ => {}
@@ -1356,8 +1226,7 @@ impl App {
     /// must not open it again.
     fn on_tray_press(&mut self) {
         let closing = self.menu.as_ref().is_some_and(|m| m.visible)
-            || unsafe { GetTickCount64() }.saturating_sub(self.menu_closed_at)
-                < MENU_REOPEN_GUARD_MS;
+            || win::now_ms().saturating_sub(self.menu_closed_at) < MENU_REOPEN_GUARD_MS;
         self.swallow_tray_release = closing;
     }
 
@@ -1377,11 +1246,7 @@ impl App {
         let Some(menu) = self.ensure_menu() else {
             return;
         };
-        let mut cursor = POINT::default();
-        unsafe {
-            let _ = GetCursorPos(&mut cursor);
-        }
-        if let Err(e) = menu.show(cursor, theme, &hotkey, autostart::is_enabled()) {
+        if let Err(e) = menu.show(win::cursor_pos(), theme, &hotkey, autostart::is_enabled()) {
             self.tray
                 .notify("WinDict couldn't draw its menu", &e.message());
             return;
@@ -1391,7 +1256,7 @@ impl App {
             let _ = KillTimer(Some(self.hwnd), TIMER_MENU_HIDE);
             let _ = KillTimer(Some(self.hwnd), TIMER_MENU_TEARDOWN);
         }
-        SHOWN_AT.set(unsafe { GetTickCount64() });
+        SHOWN_AT.set(win::now_ms());
         self.install_dismiss_hooks();
     }
 
@@ -1401,7 +1266,7 @@ impl App {
             return;
         };
         let _ = menu.begin_hide();
-        self.menu_closed_at = unsafe { GetTickCount64() };
+        self.menu_closed_at = win::now_ms();
         unsafe {
             SetTimer(Some(self.hwnd), TIMER_MENU_HIDE, HIDE_DONE_MS, None);
         }
@@ -1444,19 +1309,19 @@ impl App {
         };
     }
 
-    fn run_menu_command(&mut self, command: u32) {
+    fn run_menu_command(&mut self, command: Command) {
         self.dismiss();
         self.on_command(command);
     }
 
-    fn on_command(&mut self, command: u32) {
+    fn on_command(&mut self, command: Command) {
         match command {
-            tray::ID_AUTOSTART => {
+            Command::Autostart => {
                 autostart::set(!autostart::is_enabled());
                 self.refresh_settings();
             }
-            tray::ID_SETTINGS => self.open_settings(),
-            tray::ID_RELOAD => {
+            Command::Settings => self.open_settings(),
+            Command::Reload => {
                 match config::load() {
                     Ok((config, _)) => self.config = config,
                     Err(e) => {
@@ -1475,11 +1340,10 @@ impl App {
                     );
                 }
             }
-            tray::ID_QUIT => unsafe {
+            Command::Quit => unsafe {
                 self.remove_dismiss_hooks();
                 PostQuitMessage(0);
             },
-            _ => {}
         }
     }
 
@@ -1487,15 +1351,8 @@ impl App {
     // Settings window
 
     fn settings_values(&self) -> Values {
-        let c = &self.config;
         Values {
-            hotkey: c.hotkey.clone(),
-            theme: c.theme,
-            max_definitions: c.max_definitions,
-            max_synonyms: c.max_synonyms,
-            show_examples: c.show_examples,
-            online_lookup: c.online_lookup,
-            use_ui_automation: c.use_ui_automation,
+            config: self.config.clone(),
             autostart: autostart::is_enabled(),
         }
     }
@@ -1519,7 +1376,7 @@ impl App {
         let Some(settings) = self.ensure_settings(theme, values.clone()) else {
             return;
         };
-        if let Err(e) = settings.show(cursor_pos(), theme, values) {
+        if let Err(e) = settings.show(win::cursor_pos(), theme, values) {
             self.tray
                 .notify("WinDict couldn't draw its settings", &e.message());
             return;
@@ -1573,11 +1430,11 @@ impl App {
             Change::OpenConfig => return open_config_file(),
             Change::Autostart(on) => return autostart::set(on),
             // The shortcut being replaced mustn't fire as it's pressed to keep it.
-            Change::Recording(true) => unsafe {
+            Change::RecordingStarted => unsafe {
                 let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_LOOKUP);
                 return;
             },
-            Change::Recording(false) => return self.register_hotkey(),
+            Change::RecordingStopped => return self.register_hotkey(),
             Change::Hotkey(hotkey) => {
                 let previous = std::mem::replace(&mut self.config.hotkey, hotkey);
                 if let Err(unbound) = self.bind_hotkey() {
@@ -1622,6 +1479,24 @@ impl App {
     }
 }
 
+/// Registers `keys` on `hwnd`, or unregisters them, as `wanted`; `on` says
+/// which they are.
+fn set_hotkeys(hwnd: HWND, keys: Keys, on: &mut bool, wanted: bool) {
+    if *on == wanted {
+        return;
+    }
+    *on = wanted;
+    for &(id, modifiers, vk) in keys {
+        unsafe {
+            let _ = if wanted {
+                RegisterHotKey(Some(hwnd), id, modifiers, vk.0 as u32)
+            } else {
+                UnregisterHotKey(Some(hwnd), id)
+            };
+        }
+    }
+}
+
 /// Why the shortcut couldn't be registered.
 enum Unbound {
     Invalid(String),
@@ -1629,27 +1504,15 @@ enum Unbound {
     Taken,
 }
 
-/// `anchor`, if a card can open next to it: about a line tall, on a screen.
+/// `anchor`, if a card can open next to it: some width, about a line tall,
+/// on a screen.
 fn usable_anchor(anchor: Option<RECT>) -> Option<RECT> {
-    anchor.filter(|r| unsafe {
-        r.right > r.left
-            && r.bottom > r.top
-            && r.bottom - r.top < 160
-            && !MonitorFromRect(r, MONITOR_DEFAULTTONULL).is_invalid()
-    })
-}
-
-fn cursor_pos() -> POINT {
-    let mut pt = POINT::default();
-    unsafe {
-        let _ = GetCursorPos(&mut pt);
-    }
-    pt
+    anchor.filter(|r| r.right > r.left && selection::is_line_sized(r))
 }
 
 fn anchor_or_cursor(anchor: Option<RECT>) -> RECT {
     usable_anchor(anchor).unwrap_or_else(|| {
-        let pt = cursor_pos();
+        let pt = win::cursor_pos();
         // Leave room for the pointer itself.
         RECT {
             left: pt.x,
@@ -1670,7 +1533,7 @@ fn anchor_or_centre(anchor: Option<RECT>, window: HWND) -> RECT {
                 y: (r.top + r.bottom) / 2,
             }
         } else {
-            cursor_pos()
+            win::cursor_pos()
         };
         popup::centred_anchor(near)
     })
@@ -1678,455 +1541,14 @@ fn anchor_or_centre(anchor: Option<RECT>, window: HWND) -> RECT {
 
 fn open_config_file() {
     let path = HSTRING::from(config::path().as_os_str());
-    unsafe {
-        let result = ShellExecuteW(
-            None,
-            w!("open"),
-            &path,
-            PCWSTR::null(),
-            PCWSTR::null(),
-            SW_SHOWNORMAL,
-        );
-        if result.0 as isize <= 32 {
-            ShellExecuteW(
-                None,
-                w!("open"),
-                w!("notepad.exe"),
-                &path,
-                PCWSTR::null(),
-                SW_SHOWNORMAL,
-            );
-        }
+    // No app is set for .json files: Notepad always is.
+    if !win::shell_open(&path) {
+        win::shell_run(&HSTRING::from("notepad.exe"), &path);
     }
 }
 
 fn trim_working_set() {
     unsafe {
         let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Window and hook procedures
-
-unsafe extern "system" fn main_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    match msg {
-        WM_HOTKEY => {
-            match wparam.0 as i32 {
-                HOTKEY_LOOKUP => with_app(|app| app.on_hotkey()),
-                HOTKEY_ESCAPE => with_app(|app| app.dismiss()),
-                HOTKEY_BACK | HOTKEY_BACK_ALT => with_app(|app| app.back()),
-                HOTKEY_NEXT_LINK => with_app(|app| app.step_link(true)),
-                HOTKEY_PREV_LINK => with_app(|app| app.step_link(false)),
-                HOTKEY_OPEN_LINK => with_app(|app| app.open_focused_link()),
-                _ => None,
-            };
-            LRESULT(0)
-        }
-        WM_APP_SELECTION => {
-            let captured = unsafe { Box::from_raw(lparam.0 as *mut Captured) };
-            with_app(|app| app.on_selection(*captured));
-            LRESULT(0)
-        }
-        WM_APP_RESULT => {
-            let looked = unsafe { Box::from_raw(lparam.0 as *mut Looked) };
-            with_app(|app| app.on_result(*looked));
-            LRESULT(0)
-        }
-        WM_APP_DISMISS => {
-            with_app(|app| app.dismiss());
-            LRESULT(0)
-        }
-        WM_APP_WHEEL => {
-            with_app(|app| {
-                app.popup
-                    .as_mut()
-                    .map(|p| p.scroll_by(wparam.0 as i16 as i32))
-            });
-            LRESULT(0)
-        }
-        WM_APP_CLICK => {
-            let (x, y) = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
-            with_app(|app| app.on_click(x, y));
-            LRESULT(0)
-        }
-        WM_APP_BACK => {
-            with_app(|app| app.back());
-            LRESULT(0)
-        }
-        WM_APP_CLOSE_SETTINGS => {
-            with_app(|app| app.close_settings());
-            LRESULT(0)
-        }
-        WM_TIMER => {
-            with_app(|app| app.on_timer(wparam.0));
-            LRESULT(0)
-        }
-        WM_APP_TRAY => {
-            let event = (lparam.0 & 0xFFFF) as u32;
-            match event {
-                WM_LBUTTONDOWN | WM_RBUTTONDOWN => {
-                    with_app(|app| app.on_tray_press());
-                }
-                // Either button opens the menu.
-                WM_LBUTTONUP | WM_RBUTTONUP => {
-                    with_app(|app| app.on_tray_release());
-                }
-                WM_CONTEXTMENU => {
-                    with_app(|app| app.open_menu());
-                }
-                _ => {}
-            }
-            LRESULT(0)
-        }
-        _ => {
-            let taskbar = with_app(|app| app.taskbar_created).unwrap_or(0);
-            if msg == taskbar && taskbar != 0 {
-                with_app(|app| app.tray.add());
-                return LRESULT(0);
-            }
-            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
-        }
-    }
-}
-
-unsafe extern "system" fn popup_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    match msg {
-        // Never steal focus from the app the user is reading in.
-        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
-        WM_MOUSEMOVE => {
-            // Ask for WM_MOUSELEAVE, to drop the hover when the pointer goes.
-            let mut track = TRACKMOUSEEVENT {
-                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                dwFlags: TME_LEAVE,
-                hwndTrack: hwnd,
-                dwHoverTime: 0,
-            };
-            unsafe {
-                let _ = TrackMouseEvent(&mut track);
-            }
-            let (x, y) = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
-            with_app(|app| app.popup.as_mut().map(|p| p.hover(Some((x, y)))));
-            LRESULT(0)
-        }
-        WM_MOUSELEAVE => {
-            with_app(|app| app.popup.as_mut().map(|p| p.hover(None)));
-            LRESULT(0)
-        }
-        WM_MOUSEWHEEL => {
-            let delta = (wparam.0 >> 16) & 0xFFFF;
-            unsafe {
-                let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_WHEEL, WPARAM(delta), LPARAM(0));
-            }
-            LRESULT(0)
-        }
-        WM_LBUTTONUP => {
-            unsafe {
-                let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_CLICK, WPARAM(0), lparam);
-            }
-            LRESULT(0)
-        }
-        // The mouse's back button.
-        WM_XBUTTONUP => {
-            if (wparam.0 >> 16) as u16 == XBUTTON1 {
-                unsafe {
-                    let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_BACK, WPARAM(0), LPARAM(0));
-                }
-            }
-            LRESULT(1)
-        }
-        // A hand over the links, a text cursor over the search field.
-        WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
-            let mut pt = POINT::default();
-            let located =
-                unsafe { GetCursorPos(&mut pt).is_ok() && ScreenToClient(hwnd, &mut pt).as_bool() };
-            let cursor = located
-                .then(|| {
-                    with_app(|app| {
-                        let popup = app.popup.as_ref()?;
-                        if popup.link_at(pt.x, pt.y).is_some() {
-                            Some(IDC_HAND)
-                        } else if popup.search_at(pt.x, pt.y) {
-                            Some(IDC_IBEAM)
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten()
-                })
-                .flatten();
-            match cursor {
-                Some(cursor) => {
-                    unsafe {
-                        if let Ok(cursor) = LoadCursorW(None, cursor) {
-                            SetCursor(Some(cursor));
-                        }
-                    }
-                    LRESULT(1)
-                }
-                None => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-            }
-        }
-        // Picking a suggestion, or moving the caret, in the search box.
-        WM_KEYDOWN => {
-            with_app(|app| app.on_key(VIRTUAL_KEY(wparam.0 as u16)));
-            LRESULT(0)
-        }
-        // Typing in the search box.
-        WM_CHAR => {
-            with_app(|app| app.on_char(wparam.0 as u16));
-            LRESULT(0)
-        }
-        // Alt+F4 while the search box has the keyboard: close the card, but
-        // keep the window for next time.
-        WM_CLOSE => {
-            unsafe {
-                let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_DISMISS, WPARAM(0), LPARAM(0));
-            }
-            LRESULT(0)
-        }
-        // We size ourselves for the target monitor's DPI already.
-        WM_DPICHANGED => LRESULT(0),
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
-}
-
-unsafe extern "system" fn menu_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    // Mouse messages carry client coordinates.
-    let (x, y) = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
-    match msg {
-        WM_MOUSEMOVE => {
-            // Ask for WM_MOUSELEAVE, to drop the highlight when the pointer goes.
-            let mut track = TRACKMOUSEEVENT {
-                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                dwFlags: TME_LEAVE,
-                hwndTrack: hwnd,
-                dwHoverTime: 0,
-            };
-            unsafe {
-                let _ = TrackMouseEvent(&mut track);
-            }
-            with_app(|app| app.menu_hover(Some((x, y))));
-            LRESULT(0)
-        }
-        WM_MOUSELEAVE => {
-            with_app(|app| app.menu_hover(None));
-            LRESULT(0)
-        }
-        WM_LBUTTONUP | WM_RBUTTONUP => {
-            with_app(|app| app.menu_click(x, y));
-            LRESULT(0)
-        }
-        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
-        WM_KEYDOWN => {
-            with_app(|app| app.menu_key(VIRTUAL_KEY(wparam.0 as u16)));
-            LRESULT(0)
-        }
-        // We size ourselves for the target monitor's DPI already.
-        WM_DPICHANGED => LRESULT(0),
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
-    }
-}
-
-unsafe extern "system" fn settings_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
-    // Mouse messages carry client coordinates (screen ones for WM_NCHITTEST).
-    let (x, y) = (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32);
-    let recording =
-        || with_app(|app| app.settings.as_ref().is_some_and(|s| s.recording())).unwrap_or(false);
-    let default = || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
-    match msg {
-        // The header drags the window.
-        WM_NCHITTEST => {
-            let hit = default();
-            let mut pt = POINT { x, y };
-            let caption = hit.0 == HTCLIENT as isize
-                && unsafe { ScreenToClient(hwnd, &mut pt).as_bool() }
-                && with_app(|app| {
-                    app.settings
-                        .as_ref()
-                        .is_some_and(|s| s.caption_at(pt.x, pt.y))
-                })
-                .unwrap_or(false);
-            if caption {
-                LRESULT(HTCAPTION as isize)
-            } else {
-                hit
-            }
-        }
-        WM_MOUSEMOVE => {
-            // Ask for WM_MOUSELEAVE, to put out the hover when the pointer goes.
-            let mut track = TRACKMOUSEEVENT {
-                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
-                dwFlags: TME_LEAVE,
-                hwndTrack: hwnd,
-                dwHoverTime: 0,
-            };
-            unsafe {
-                let _ = TrackMouseEvent(&mut track);
-            }
-            with_app(|app| app.in_settings(|s| s.hover(Some((x, y))).map(|_| None)));
-            LRESULT(0)
-        }
-        WM_MOUSELEAVE => {
-            with_app(|app| app.in_settings(|s| s.hover(None).map(|_| None)));
-            LRESULT(0)
-        }
-        WM_LBUTTONDOWN => {
-            unsafe { SetCapture(hwnd) };
-            with_app(|app| app.in_settings(|s| s.press(x, y)));
-            LRESULT(0)
-        }
-        WM_LBUTTONUP => {
-            unsafe {
-                let _ = ReleaseCapture();
-            }
-            with_app(|app| app.in_settings(|s| s.release(x, y)));
-            LRESULT(0)
-        }
-        WM_MOUSEWHEEL => {
-            let delta = (wparam.0 >> 16) as u16 as i16 as i32;
-            with_app(|app| app.in_settings(|s| s.wheel(delta).map(|_| None)));
-            LRESULT(0)
-        }
-        // A hand over the link.
-        WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
-            let mut pt = POINT::default();
-            let located =
-                unsafe { GetCursorPos(&mut pt).is_ok() && ScreenToClient(hwnd, &mut pt).as_bool() };
-            let link = located
-                && with_app(|app| app.settings.as_ref().is_some_and(|s| s.link_at(pt.x, pt.y)))
-                    .unwrap_or(false);
-            if !link {
-                return default();
-            }
-            unsafe {
-                if let Ok(cursor) = LoadCursorW(None, IDC_HAND) {
-                    SetCursor(Some(cursor));
-                }
-            }
-            LRESULT(1)
-        }
-        // While a shortcut is recorded every key is for it, Alt ones too;
-        // otherwise Alt+F4 and Alt+Space work as they do everywhere.
-        WM_KEYDOWN | WM_SYSKEYDOWN if msg == WM_KEYDOWN || recording() => {
-            let key = VIRTUAL_KEY(wparam.0 as u16);
-            with_app(|app| app.in_settings(|s| s.key(key)));
-            LRESULT(0)
-        }
-        WM_KEYUP | WM_SYSKEYUP if recording() => {
-            let key = VIRTUAL_KEY(wparam.0 as u16);
-            with_app(|app| app.in_settings(|s| s.key_up(key).map(|_| None)));
-            LRESULT(0)
-        }
-        WM_CHAR => LRESULT(0),
-        WM_SYSCHAR if recording() => LRESULT(0),
-        // Alt on its own: there's no menu bar to go to.
-        WM_SYSCOMMAND if (wparam.0 & 0xFFF0) as u32 == SC_KEYMENU && lparam.0 == 0 => LRESULT(0),
-        WM_ACTIVATE => {
-            if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE {
-                with_app(|app| app.in_settings(|s| s.deactivate()));
-            }
-            default()
-        }
-        // Alt+F4, or Close on the taskbar: the window fades out, and only
-        // then goes.
-        WM_CLOSE => {
-            unsafe {
-                let _ = PostMessageW(
-                    Some(MSG_HWND.get()),
-                    WM_APP_CLOSE_SETTINGS,
-                    WPARAM(0),
-                    LPARAM(0),
-                );
-            }
-            LRESULT(0)
-        }
-        // Dragged to a monitor with another scale: redrawn for it.
-        WM_DPICHANGED => {
-            let suggested = unsafe { *(lparam.0 as *const RECT) };
-            let dpi = (wparam.0 & 0xFFFF) as u32;
-            with_app(|app| app.in_settings(|s| s.rescale(dpi, suggested).map(|_| None)));
-            LRESULT(0)
-        }
-        // Light or dark mode, or the accent color, changed.
-        WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED => {
-            let colors = msg == WM_DWMCOLORIZATIONCOLORCHANGED
-                || (lparam.0 != 0
-                    && unsafe { PCWSTR(lparam.0 as *const u16).to_string() }
-                        .is_ok_and(|area| area == "ImmersiveColorSet"));
-            if colors {
-                with_app(|app| app.on_colors_changed());
-            }
-            default()
-        }
-        _ => default(),
-    }
-}
-
-unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code >= 0 {
-        let button_down = matches!(
-            wparam.0 as u32,
-            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
-        );
-        if button_down {
-            let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
-            let r = CARD_RECT.get();
-            let inside = info.pt.x >= r.left
-                && info.pt.x < r.right
-                && info.pt.y >= r.top
-                && info.pt.y < r.bottom;
-            if !inside {
-                unsafe {
-                    let _ =
-                        PostMessageW(Some(MSG_HWND.get()), WM_APP_DISMISS, WPARAM(0), LPARAM(0));
-                }
-            }
-        }
-    }
-    unsafe { CallNextHookEx(None, code, wparam, lparam) }
-}
-
-unsafe extern "system" fn focus_hook(
-    _: HWINEVENTHOOK,
-    _: u32,
-    hwnd: HWND,
-    _: i32,
-    _: i32,
-    _: u32,
-    _: u32,
-) {
-    // Ignore the foreground change from closing Start/Search just before showing.
-    if unsafe { GetTickCount64() }.saturating_sub(SHOWN_AT.get()) < 500 {
-        return;
-    }
-    // Nor the card itself taking the keyboard for the search box.
-    let mut pid = 0;
-    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-    if pid == unsafe { GetCurrentProcessId() } {
-        return;
-    }
-    unsafe {
-        let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_DISMISS, WPARAM(0), LPARAM(0));
     }
 }

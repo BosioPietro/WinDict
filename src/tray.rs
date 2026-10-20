@@ -1,15 +1,10 @@
-//! Notification-area icon. Its menu is drawn by `menu.rs`; the commands are numbered here.
+//! Notification-area icon. Its menu is drawn by `menu.rs`.
 
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::*;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-
-pub const ID_AUTOSTART: u32 = 10;
-pub const ID_SETTINGS: u32 = 11;
-pub const ID_RELOAD: u32 = 12;
-pub const ID_QUIT: u32 = 13;
 
 pub const ICON_ID: u32 = 1;
 

@@ -3,7 +3,7 @@
 use windows::core::{w, Interface, Result, HSTRING};
 use windows::Foundation::Size;
 use windows::Graphics::DirectX::{DirectXAlphaMode, DirectXPixelFormat};
-use windows::Win32::Foundation::{HMODULE, POINT};
+use windows::Win32::Foundation::{E_POINTER, HMODULE, POINT};
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::Direct3D::*;
@@ -705,7 +705,7 @@ impl Renderer {
         unsafe {
             let range = DWRITE_TEXT_RANGE {
                 startPosition: 0,
-                length: label.len() as u32,
+                length: utf16(label),
             };
             let _ = syn.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, range);
             for range in &ranges {
@@ -962,7 +962,7 @@ fn create_d3d_device() -> Result<ID3D11Device> {
                 None,
             )
         }
-        .map(|_| device.unwrap());
+        .and_then(|_| device.ok_or_else(|| windows::core::Error::from(E_POINTER)));
         if result.is_ok() {
             break;
         }

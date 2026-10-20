@@ -280,7 +280,6 @@ dependencies = [
  "serde",
  "serde_json",
  "windows",
- "windows-core",
  "windows-numerics",
 ]
 

@@ -115,6 +115,33 @@ impl Theme {
         }
     }
 
+    /// The line under a header, once what's below it has scrolled.
+    pub fn scroll_divider(&self) -> Color {
+        if self.dark {
+            argb(0x1F, 0xFF, 0xFF, 0xFF)
+        } else {
+            argb(0x14, 0x00, 0x00, 0x00)
+        }
+    }
+
+    /// The scrollbar's thumb.
+    pub fn thumb(&self) -> Color {
+        if self.dark {
+            argb(0x60, 0xFF, 0xFF, 0xFF)
+        } else {
+            argb(0x50, 0x00, 0x00, 0x00)
+        }
+    }
+
+    /// The line between groups of commands in the tray menu.
+    pub fn menu_separator(&self) -> Color {
+        if self.dark {
+            argb(0x24, 0xFF, 0xFF, 0xFF)
+        } else {
+            argb(0x1A, 0x00, 0x00, 0x00)
+        }
+    }
+
     /// A button's face, as on Windows 11 controls.
     pub fn control(&self) -> Color {
         if self.dark {

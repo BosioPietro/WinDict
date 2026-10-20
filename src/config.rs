@@ -1,6 +1,7 @@
 //! User settings, stored as JSON in `%APPDATA%\WinDict\config.json`.
 
-use std::path::PathBuf;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -60,22 +61,33 @@ pub fn path() -> PathBuf {
 /// Returns the config and whether this is the first run, or why the file
 /// couldn't be read as settings.
 pub fn load() -> Result<(Config, bool), String> {
-    let path = path();
-    match std::fs::read(&path) {
+    load_from(&path())
+}
+
+fn load_from(path: &Path) -> Result<(Config, bool), String> {
+    match std::fs::read(path) {
         Ok(bytes) => parse(&bytes).map(|config| (config, false)),
-        Err(_) => {
+        // Only a missing file is a first run: one that can't be read right
+        // now (locked, no access) mustn't be overwritten with the defaults.
+        Err(e) if e.kind() == ErrorKind::NotFound => {
             let config = Config::default();
-            let _ = save(&config);
+            let _ = save_to(path, &config);
             Ok((config, true))
         }
+        Err(e) => Err(format!("config.json: {e}")),
     }
 }
 
 /// Writes the settings where [`load`] reads them.
 pub fn save(config: &Config) -> Result<(), String> {
+    save_to(&path(), config)
+}
+
+fn save_to(path: &Path, config: &Config) -> Result<(), String> {
     let json = serde_json::to_string_pretty(config).map_err(|e| format!("config.json: {e}"))?;
-    std::fs::create_dir_all(dir())
-        .and_then(|_| std::fs::write(path(), json))
+    path.parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|_| std::fs::write(path, json))
         .map_err(|e| format!("config.json: {e}"))
 }
 
@@ -111,5 +123,23 @@ mod tests {
         let error = parse(b"{\n  \"hotkey\": \"Ctrl+D\"\n  \"theme\": \"dark\"\n}").unwrap_err();
         assert!(error.contains("line 3"), "{error}");
         assert!(parse(br#"{"theme": "purple"}"#).is_err());
+    }
+
+    #[test]
+    fn writes_defaults_only_when_missing() {
+        let dir = std::env::temp_dir().join(format!("windict-test-{}", std::process::id()));
+        let path = dir.join("config.json");
+        let _ = std::fs::remove_dir_all(&dir);
+        let (config, first_run) = load_from(&path).unwrap();
+        assert!(first_run);
+        assert_eq!(config.hotkey, "Ctrl+Alt+D");
+        assert!(path.exists());
+        assert!(!load_from(&path).unwrap().1);
+        // A path that can't be read as a file is an error, and stays as it is.
+        let unreadable = dir.join("folder");
+        std::fs::create_dir(&unreadable).unwrap();
+        assert!(load_from(&unreadable).is_err());
+        assert!(unreadable.is_dir());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

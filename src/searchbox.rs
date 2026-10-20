@@ -8,9 +8,10 @@ use windows::core::{Interface, Result, HSTRING};
 use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
-use crate::popup::{ts, v2, v3, Animator, Text, CARD_W, PAD_TOP, PAD_X, RESIZE_MS};
+use crate::popup::{CARD_W, PAD_TOP, PAD_X};
 use crate::render::{Face, Ink, Renderer, QUERY_SIZE, SUGGESTION_SIZE};
 use crate::theme::Theme;
+use crate::ui::{scale, ts, v2, v3, Animator, Text, RESIZE_MS};
 
 // Geometry, in DIPs.
 const TITLE_GAP: f32 = 10.0;
@@ -203,6 +204,8 @@ impl SearchBox {
 
     /// Lays the box out, empty, under `title`, and reveals it starting
     /// `delay` ms from now. Returns its height in pixels.
+    // The drawing context (renderer, animator, theme, scale) comes from the
+    // card that owns the box, like for its other methods, plus what to show.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open(
         &mut self,
@@ -333,11 +336,7 @@ impl SearchBox {
             Y: 1.0,
             Z: 1.0,
         })?;
-        let full = Vector3 {
-            X: 1.0,
-            Y: 1.0,
-            Z: 1.0,
-        };
+        let full = scale(1.0);
         let at = delay + REVEAL_STAGGER_MS + 80;
         anim.vector3(
             &self.underline,

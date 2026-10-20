@@ -7,6 +7,13 @@ rust-version = "1.88"
 description = "Tiny always-on Windows dictionary: press a hotkey, see the definition of the selected text."
 license = "MIT"
 
+# The tests are the library's: a test build of the executable would carry
+# its manifest, and the `uiaccess` one can't start unless installed.
+[[bin]]
+name = "windict"
+path = "src/main.rs"
+test = false
+
 [features]
 # Builds the variant that can show the card above Start/Search. It must be
 # signed and installed with scripts/install-uiaccess.ps1 to run.
@@ -16,7 +23,6 @@ uiaccess = []
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 windows-numerics = "0.3"
-windows-core = "0.62"
 miniz_oxide = "0.8"
 
 [dependencies.windows]

@@ -86,6 +86,35 @@ WinDict with it, installs it to `C:\Program Files\WinDict` and starts it. The
 certificate's private key is deleted right after signing, so it can never sign
 anything else. Run it again to update, or with `-Uninstall` to remove it.
 
+## Building from source
+
+WinDict needs Windows and a Rust toolchain (1.88 or newer).
+
+```powershell
+cargo build --release        # target\release\windict.exe
+cargo test                   # unit tests, including the bundled dictionary
+cargo clippy --all-targets -- -D warnings
+```
+
+`cargo build --features uiaccess` builds the UI access edition, which only
+starts once signed and installed (see above). The bundled dictionary,
+`data/english.wdict`, is generated from Open English WordNet by
+`tools/build_dict.py`.
+
+## How it works
+
+Everything runs on one UI thread, which owns the app state and its windows.
+Pressing the shortcut asks a capture thread for the selection: it reads it
+through UI Automation where the app supports that, and otherwise sends
+Ctrl+C and restores the clipboard afterwards. The word is looked up in the
+bundled dictionary at once, and online on a thread of its own when that adds
+something (a pronunciation, or a word the bundled one lacks).
+
+The card, the tray menu and the settings window are windows drawn by the
+Windows compositor (Windows.UI.Composition, with Direct2D and DirectWrite
+for text), so their animations stay smooth whatever the UI thread is doing.
+`src/main.rs` lists what each module is for.
+
 ## Credits
 
 Definitions from [Open English WordNet](https://en-word.net/) (CC BY 4.0,
