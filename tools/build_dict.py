@@ -47,6 +47,75 @@ def parse_gloss(gloss):
     return definition or gloss.strip(), examples
 
 
+def ends_in_consonant_y(word):
+    return len(word) > 2 and word[-1] == "y" and word[-2] not in "aeiou"
+
+
+def doubles(word):
+    """Whether `word` doubles its last letter before a suffix ("hop" → "hopping")."""
+    return (len(word) >= 3 and word[-1] not in "aeiouwxy" and word[-2] in "aeiou"
+            and word[-3] not in "aeiou")
+
+
+def s_form(word):
+    """A noun's plural or a verb's third person: "box" → "boxes", "city" → "cities"."""
+    if word.endswith(("s", "x", "z", "ch", "sh")):
+        return word + "es"
+    if ends_in_consonant_y(word):
+        return word[:-1] + "ies"
+    return word + "s"
+
+
+def noun_forms(word):
+    forms = [s_form(word)]
+    if word.endswith("man"):
+        forms.append(word[:-3] + "men")
+    return forms
+
+
+def verb_forms(word):
+    if word.endswith("e"):
+        past = word + "d"
+    elif ends_in_consonant_y(word):
+        past = word[:-1] + "ied"
+    else:
+        past = word + "ed"
+    if word.endswith("ie"):
+        gerund = word[:-2] + "ying"
+    elif word.endswith("e") and not word.endswith(("ee", "ye", "oe")):
+        gerund = word[:-1] + "ing"
+    else:
+        gerund = word + "ing"
+    return [s_form(word), past, gerund]
+
+
+def adjective_forms(word):
+    if word.endswith("e"):
+        return [word + "r", word + "st"]
+    if ends_in_consonant_y(word):
+        return [word[:-1] + "ier", word[:-1] + "iest"]
+    return [word + "er", word + "est"]
+
+
+def inflections(key, pos):
+    """The regular inflections of `key` as part of speech `pos`. Irregular
+    ones ("ran", "geese") come from WordNet's exception lists instead. Phrases
+    inflect their head: a noun's last word ("ice creams"), a verb's first
+    ("looking up"). Some forms don't exist ("runned"), but nobody types them."""
+    words = key.split(" ")
+    if pos == "n":
+        i, rules = len(words) - 1, noun_forms
+    elif pos == "v":
+        i, rules = 0, verb_forms
+    elif pos == "a" and len(words) == 1:
+        i, rules = 0, adjective_forms
+    else:
+        return []
+    if not (words[i].isalpha() and len(words[i]) >= 2):
+        return []
+    return [" ".join(words[:i] + [form] + words[i + 1:]) for form in rules(words[i])]
+
+
 def deflate(text):
     c = zlib.compressobj(9, zlib.DEFLATED, -15)
     return c.compress(text.encode("utf-8")) + c.flush()
@@ -111,6 +180,26 @@ def main(root, out):
                 continue
             entry = entries.setdefault(form, {"display": None, "redirects": [], "pos": [], "forms": []})
             entry["redirects"] += [b for b in bases if b not in entry["redirects"]]
+
+    # Regular inflections, for the words that aren't words of their own: a
+    # form of several words points at the one with the most senses first.
+    bases = {}  # form -> [(senses, base)]
+    for key, entry in list(entries.items()):
+        if entry["display"] != key:
+            continue  # only capitalised ("Paris")
+        senses = sum(total for _, total, _ in entry["pos"])
+        for pos, _, _ in entry["pos"]:
+            for form in inflections(key, pos):
+                if form != key and (senses, key) not in bases.setdefault(form, []):
+                    bases[form].append((senses, key))
+    for form, found in bases.items():
+        entry = entries.setdefault(form, {"display": None, "redirects": [], "pos": [], "forms": []})
+        if entry["pos"]:
+            continue
+        # "hoping" is from "hope", not "hop", which doubles its last letter.
+        keys = {b for _, b in found}
+        found.sort(key=lambda b: (doubles(b[1]) and b[1] + "e" in keys, -b[0]))
+        entry["redirects"] += [b for _, b in found if b not in entry["redirects"]]
 
     def entry_text(key, e):
         lines = [key]

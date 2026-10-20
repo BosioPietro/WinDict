@@ -295,28 +295,6 @@ struct Synset {
     examples: Vec<String>,
 }
 
-/// Suffix rules from WordNet's morphy: (suffix, replacement).
-const DETACHMENTS: &[(&str, &str)] = &[
-    ("ies", "y"),
-    ("ses", "s"),
-    ("xes", "x"),
-    ("zes", "z"),
-    ("ches", "ch"),
-    ("shes", "sh"),
-    ("men", "man"),
-    ("es", "e"),
-    ("es", ""),
-    ("s", ""),
-    ("ing", "e"),
-    ("ing", ""),
-    ("ed", "e"),
-    ("ed", ""),
-    ("est", "e"),
-    ("est", ""),
-    ("er", "e"),
-    ("er", ""),
-];
-
 impl<'a> Dict<'a> {
     fn open(data: &'a [u8]) -> Option<Dict<'a>> {
         if data.len() < HEADER || &data[..4] != b"WDIC" {
@@ -394,7 +372,6 @@ impl<'a> Dict<'a> {
         entry
             .redirects
             .into_iter()
-            .chain(inflection_bases(word))
             .find(|base| self.defined(base).is_some())
     }
 }
@@ -473,7 +450,7 @@ impl Dict<'_> {
                     .map(|b| format!("Also a form of \u{201C}{b}\u{201D}"));
                 return build(&candidate, &entry, note);
             }
-            // An irregular form ("ran", "geese"): show its base.
+            // An inflected form ("ran", "walked"): show its base.
             for base in &entry.redirects {
                 if let Some(base_entry) = self.defined(base) {
                     return build(
@@ -482,16 +459,6 @@ impl Dict<'_> {
                         Some(format!("Base form of \u{201C}{word}\u{201D}")),
                     );
                 }
-            }
-        }
-        // Regular inflections ("cats", "walked", "faster").
-        for candidate in inflection_bases(word) {
-            if let Some(entry) = self.defined(&candidate) {
-                return build(
-                    &candidate,
-                    &entry,
-                    Some(format!("Base form of \u{201C}{word}\u{201D}")),
-                );
             }
         }
         None
@@ -572,36 +539,6 @@ fn spellings(word: &str) -> Vec<String> {
     ] {
         if !out.contains(&v) {
             out.push(v);
-        }
-    }
-    out
-}
-
-fn inflection_bases(word: &str) -> Vec<String> {
-    // For phrases, inflect the first word ("looking up") and the last ("ice creams").
-    let words: Vec<&str> = word.split(' ').collect();
-    let mut out = Vec::new();
-    let mut push = |candidate: String| {
-        if candidate != word && !candidate.is_empty() && !out.contains(&candidate) {
-            out.push(candidate);
-        }
-    };
-    let positions = if words.len() > 1 {
-        vec![0, words.len() - 1]
-    } else {
-        vec![0]
-    };
-    for (suffix, replacement) in DETACHMENTS {
-        for &i in &positions {
-            let Some(stem) = words[i].strip_suffix(suffix) else {
-                continue;
-            };
-            if stem.chars().count() >= 2 {
-                let base = format!("{stem}{replacement}");
-                let mut w = words.clone();
-                w[i] = &base;
-                push(w.join(" "));
-            }
         }
     }
     out
@@ -694,6 +631,12 @@ mod tests {
         assert_eq!(find("cats").word, "cat");
         assert_eq!(find("walked").word, "walk");
         assert!(find("walked").note.unwrap().contains("walked"));
+        assert_eq!(find("cities").word, "city");
+        assert_eq!(find("hoping").word, "hope");
+        assert_eq!(find("taller").word, "tall");
+        // Phrases inflect their head: a noun's last word, a verb's first.
+        assert_eq!(find("ice creams").word, "ice cream");
+        assert_eq!(find("looking up").word, "look up");
         // "stopped" is also an adjective in its own right.
         let stopped = find("stopped");
         assert_eq!(stopped.word, "stopped");
@@ -706,19 +649,6 @@ mod tests {
         assert!(lookup("", DETAIL).is_none());
         assert!(lookup("zzzzzzzzz", DETAIL).is_none());
         assert!(lookup("a", DETAIL).is_some());
-    }
-
-    #[test]
-    fn guesses_inflection_bases() {
-        let bases = inflection_bases("cities");
-        assert_eq!(bases[0], "city");
-        assert!(bases.contains(&"citie".to_string()));
-        // Phrases inflect their first and last words.
-        assert!(inflection_bases("looking up").contains(&"look up".to_string()));
-        assert!(inflection_bases("ice creams").contains(&"ice cream".to_string()));
-        // Stems need at least two letters.
-        assert!(inflection_bases("is").is_empty());
-        assert!(!inflection_bases("bed").contains(&"b".to_string()));
     }
 
     #[test]
