@@ -21,6 +21,7 @@ mod app;
 mod autostart;
 mod config;
 mod dictionary;
+mod dicts;
 mod hotkey;
 mod http;
 mod menu;

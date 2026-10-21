@@ -69,21 +69,25 @@ impl Settings {
             self.show_knob(sw)?;
         }
         let from = self.pill_from.take();
-        self.show_theme(false)?;
+        for choice in CHOICES {
+            self.show_choice(choice, false)?;
+        }
         // The theme changed with a click on the pill's way over: it carries on here.
-        if let (Some(from), Some(view)) = (from, &self.view) {
-            let pill = &view.theme.pill;
-            pill.SetOffset(view.theme.rest[from])?;
-            self.pill_from = Some(from);
-            self.show_theme(true)?;
+        if let (Some((choice, from)), Some(view)) = (from, &self.view) {
+            let v = &view.choices[choice as usize];
+            v.pill.SetOffset(v.rest[from])?;
+            self.pill_from = Some((choice, from));
+            self.show_choice(choice, true)?;
             self.pill_from = None;
         }
         for counter in COUNTERS {
             self.show_count(counter, None)?;
         }
         self.show_caps(false)?;
-        let (text, error) = self.detail.clone();
-        self.show_detail(&text, error, false)?;
+        for note in NOTES {
+            let (text, error) = self.notes[note as usize].clone();
+            self.show_note(note, &text, error, false)?;
+        }
         self.show_recording()?;
         self.show_hover(self.hovered)?;
         self.ring_shown = false;
@@ -281,7 +285,16 @@ impl Settings {
                 .into_iter()
                 .collect::<Option<_>>()
                 .ok_or_else(missing)?,
-            theme: parts.theme.ok_or_else(missing)?,
+            choices: parts
+                .choices
+                .into_iter()
+                .collect::<Option<_>>()
+                .ok_or_else(missing)?,
+            notes: parts
+                .notes
+                .into_iter()
+                .collect::<Option<_>>()
+                .ok_or_else(missing)?,
             counters: parts
                 .counters
                 .into_iter()
@@ -327,7 +340,7 @@ impl Settings {
                 hover.SetOpacity(0.0)?;
                 Some(hover)
             }
-            Control::Theme | Control::Counter(_) => None,
+            Control::Choice(_) | Control::Counter(_) => None,
         };
 
         let room = GROUP_W - 2.0 * ROW_PAD - spec.control.width() - CONTROL_GAP;
@@ -342,6 +355,20 @@ impl Settings {
         title.visual.SetOffset(v3(px(ROW_PAD), text_y))?;
         let detail_at = v3(px(ROW_PAD), text_y + title_size.Y + px(DETAIL_GAP));
         detail.visual.SetOffset(detail_at)?;
+        // A description that changes cross-fades from the one before.
+        let note = match spec.control {
+            Control::Shortcut => Some(Note::Shortcut),
+            Control::Choice(Choice::Language) => Some(Note::Language),
+            _ => None,
+        };
+        if let Some(note) = note {
+            parts.notes[note as usize] = Some(NoteView {
+                text: detail,
+                old: Text::new(c, group)?,
+                at: detail_at,
+                w: room,
+            });
+        }
 
         let right = row.w - px(ROW_PAD);
         let middle = row.y + row.h / 2.0;
@@ -355,7 +382,6 @@ impl Settings {
                 let x = right - px(EDIT_W);
                 edit.visual
                     .SetOffset(v3(x, (middle - size.Y / 2.0).round()))?;
-                let old_detail = Text::new(c, group)?;
                 let old_caps = Text::new(c, group)?;
                 let caps = Text::new(c, group)?;
                 // Rings the row, breathing, while a new shortcut is awaited.
@@ -386,10 +412,6 @@ impl Settings {
                     caps_right: x - px(CAPS_GAP),
                     caps_middle: middle,
                     caps_rest: v3(0.0, 0.0),
-                    detail,
-                    old_detail,
-                    detail_at,
-                    detail_w: room,
                     ring,
                 });
             }
@@ -405,16 +427,16 @@ impl Settings {
                     ..view
                 });
             }
-            Control::Theme => {
-                let (view, at, segments) = self.build_theme(group, right, middle)?;
+            Control::Choice(choice) => {
+                let (view, at, segments) = self.build_choice(choice, group, right, middle)?;
                 for (i, segment) in segments.into_iter().enumerate() {
-                    parts.hits.push((Hit::Theme(i), place(segment)));
+                    parts.hits.push((Hit::Choice(choice, i), place(segment)));
                 }
                 let radius = px(SEGMENT_RADIUS) + outset;
                 parts
                     .stops
-                    .push((Stop::Theme, place(at).outset(outset), radius));
-                parts.theme = Some(view);
+                    .push((Stop::Choice(choice), place(at).outset(outset), radius));
+                parts.choices[choice as usize] = Some(view);
             }
             Control::Counter(counter) => {
                 let (view, at, buttons) = self.build_counter(group, right, middle)?;
@@ -482,14 +504,15 @@ impl Settings {
         Ok((view, track))
     }
 
-    /// The choice of themes ending at `right` and centred on `middle`, in
-    /// `group`. Returns it, its bounds and each option's.
-    fn build_theme(
+    /// `choice`'s options side by side, ending at `right` and centred on
+    /// `middle`, in `group`. Returns it, its bounds and each option's.
+    fn build_choice(
         &self,
+        choice: Choice,
         group: &ContainerVisual,
         right: f32,
         middle: f32,
-    ) -> Result<(ThemeView, Rect, Vec<Rect>)> {
+    ) -> Result<(ChoiceView, Rect, Vec<Rect>)> {
         let (c, r, t, s) = (
             &self.anim.compositor,
             &self.renderer,
@@ -498,7 +521,8 @@ impl Settings {
         );
         let px = |dip: f32| (dip * s).round();
         let (segment, h) = (px(SEGMENT_W), px(SEGMENT_H));
-        let n = THEMES.len() as f32;
+        let names = choice.names();
+        let n = names.len() as f32;
         let at = Rect {
             x: right - n * segment,
             y: (middle - h / 2.0).round(),
@@ -533,7 +557,7 @@ impl Settings {
         let mut labels = Vec::new();
         let mut segments = Vec::new();
         let mut rest = Vec::new();
-        for (i, (_, name)) in THEMES.iter().enumerate() {
+        for (i, name) in names.into_iter().enumerate() {
             let x = i as f32 * segment;
             let label = Text::new(c, &root)?;
             let line =
@@ -551,7 +575,7 @@ impl Settings {
             });
             rest.push(v3(x + inset, inset));
         }
-        Ok((ThemeView { pill, labels, rest }, at, segments))
+        Ok((ChoiceView { pill, labels, rest }, at, segments))
     }
 
     /// A number between − and + buttons, ending at `right` and centred on
@@ -688,7 +712,8 @@ fn outline(
 struct Parts {
     shortcut: Option<ShortcutView>,
     switches: [Option<SwitchView>; 4],
-    theme: Option<ThemeView>,
+    choices: [Option<ChoiceView>; 2],
+    notes: [Option<NoteView>; 2],
     counters: [Option<CounterView>; 2],
     hits: Vec<(Hit, Rect)>,
     stops: Vec<(Stop, Rect, f32)>,

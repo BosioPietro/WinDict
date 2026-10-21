@@ -1,0 +1,158 @@
+//! The dictionaries other than English, which are downloaded when they're
+//! chosen. They're kept in the `dictionaries` release on GitHub, named after
+//! what's in them, and only the very files listed here are taken: a new
+//! version of one comes with a new version of the app.
+
+use std::io::Write;
+
+use windows::Win32::Security::Cryptography::{BCryptHash, BCRYPT_SHA256_ALG_HANDLE};
+
+use crate::http;
+use crate::offline;
+
+pub struct Download {
+    /// As the `language` setting names it.
+    pub language: &'static str,
+    /// As the settings show it, in the language itself.
+    pub name: &'static str,
+    file: &'static str,
+    size: u64,
+    sha256: &'static str,
+}
+
+pub const DOWNLOADS: &[Download] = &[Download {
+    language: "it",
+    name: "Italiano",
+    file: "it-caf16c6d0c49.wdict",
+    size: 8_413_024,
+    sha256: "caf16c6d0c49272bdcbe61861997b4c27b26c20392000cfe397a99d705aff2e2",
+}];
+
+const HOST: &str = "github.com";
+const RELEASE: &str = "/BosioPietro/WinDict/releases/download/dictionaries/";
+
+pub fn find(language: &str) -> Option<&'static Download> {
+    DOWNLOADS.iter().find(|d| d.language == language)
+}
+
+/// Makes sure `download` is in its place, as it should be: if it isn't,
+/// it's downloaded, telling `progress` how far it's got, in percent. Errors
+/// are short, to fit under the setting.
+pub fn install(download: &Download, mut progress: impl FnMut(u32)) -> Result<(), String> {
+    let dir = offline::dicts_dir();
+    let path = dir.join(format!("{}.wdict", download.language));
+    if std::fs::read(&path).is_ok_and(|bytes| download.matches(&bytes)) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&dir).map_err(unsaved)?;
+    // Fetched beside it, and moved in place once it's all there and right:
+    // the one in use, if any, keeps working until then.
+    let part = path.with_extension("wdict.part");
+    let result = fetch(download, &part, &mut progress)
+        .and_then(|()| std::fs::rename(&part, &path).map_err(unsaved));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&part);
+    }
+    result
+}
+
+fn fetch(
+    download: &Download,
+    part: &std::path::Path,
+    progress: &mut impl FnMut(u32),
+) -> Result<(), String> {
+    let mut file = std::fs::File::create(part).map_err(unsaved)?;
+    let mut bytes = Vec::with_capacity(download.size as usize);
+    let mut shown = 0;
+    let path = format!("{RELEASE}{}", download.file);
+    let status = http::fetch(HOST, &path, |chunk| {
+        bytes.extend_from_slice(chunk);
+        if bytes.len() as u64 > download.size {
+            return Err(DAMAGED.into());
+        }
+        let percent = (bytes.len() as u64 * 100 / download.size.max(1)) as u32;
+        if percent != shown {
+            shown = percent;
+            progress(percent);
+        }
+        Ok(())
+    })
+    .map_err(|e| if e == DAMAGED { e } else { OFFLINE.into() })?;
+    if status != 200 {
+        return Err(format!("The download failed ({status})."));
+    }
+    if !download.matches(&bytes) {
+        return Err(DAMAGED.into());
+    }
+    file.write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(unsaved)
+}
+
+const OFFLINE: &str = "Couldn\u{2019}t connect. Try again later.";
+const DAMAGED: &str = "The download was damaged. Try again.";
+
+fn unsaved(e: std::io::Error) -> String {
+    format!("Couldn\u{2019}t save it: {}", e.kind())
+}
+
+impl Download {
+    fn matches(&self, bytes: &[u8]) -> bool {
+        bytes.len() as u64 == self.size && sha256(bytes).is_some_and(|h| hex(&h) == self.sha256)
+    }
+}
+
+fn sha256(bytes: &[u8]) -> Option<[u8; 32]> {
+    let mut hash = [0u8; 32];
+    unsafe { BCryptHash(BCRYPT_SHA256_ALG_HANDLE, None, bytes, &mut hash) }
+        .is_ok()
+        .then_some(hash)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hashes() {
+        let empty = sha256(b"").map(|h| hex(&h));
+        assert_eq!(
+            empty.as_deref(),
+            Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        );
+        let abc = sha256(b"abc").map(|h| hex(&h));
+        assert_eq!(
+            abc.as_deref(),
+            Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        );
+    }
+
+    #[test]
+    fn lists_files_by_what_is_in_them() {
+        for d in DOWNLOADS {
+            assert_eq!(d.sha256.len(), 64, "{}", d.language);
+            assert_eq!(d.file, format!("{}-{}.wdict", d.language, &d.sha256[..12]));
+            assert_ne!(d.language, "en");
+        }
+        assert!(find("it").is_some());
+        assert!(find("en").is_none());
+    }
+
+    #[test]
+    fn takes_only_the_file_listed() {
+        let d = Download {
+            language: "xx",
+            name: "X",
+            file: "xx.wdict",
+            size: 3,
+            sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        };
+        assert!(d.matches(b"abc"));
+        assert!(!d.matches(b"abd"));
+        assert!(!d.matches(b"abcd"));
+    }
+}

@@ -1,0 +1,13 @@
+The dictionaries WinDict downloads for languages other than English are built
+from Wiktionary, by its contributors:
+
+  Italiano: Wikizionario, the Italian Wiktionary (https://it.wiktionary.org),
+  as extracted by wiktextract (https://kaikki.org/itwiktionary/).
+
+Wiktionary's text is available under the Creative Commons Attribution-ShareAlike
+4.0 International License (https://creativecommons.org/licenses/by-sa/4.0/),
+and so is each dictionary built from it.
+
+Changes: the entries were limited to the dictionary's language, cut down to
+their definitions, examples, synonyms, opposites and inflected forms, and
+converted into WinDict's format by tools/build_wiktionary.py.

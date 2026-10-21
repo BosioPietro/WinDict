@@ -63,6 +63,25 @@ fn session() -> Result<&'static Handle, String> {
 
 /// Performs `GET https://{host}{path}` and returns the status code and body.
 pub fn get(host: &str, path: &str) -> Result<(u32, Vec<u8>), String> {
+    let mut body = Vec::new();
+    let status = fetch(host, path, |chunk| {
+        body.extend_from_slice(chunk);
+        if body.len() > MAX_BODY {
+            return Err("The dictionary response was unexpectedly large.".into());
+        }
+        Ok(())
+    })?;
+    Ok((status, body))
+}
+
+/// Performs `GET https://{host}{path}`, following redirects, and hands the
+/// body to `sink` as it arrives, which can stop it with an error. Returns
+/// the status code.
+pub fn fetch(
+    host: &str,
+    path: &str,
+    mut sink: impl FnMut(&[u8]) -> Result<(), String>,
+) -> Result<u32, String> {
     let offline = || "Couldn't reach the dictionary. Check your connection.".to_string();
     unsafe {
         let session = session()?;
@@ -102,7 +121,6 @@ pub fn get(host: &str, path: &str) -> Result<(u32, Vec<u8>), String> {
         )
         .map_err(|_| offline())?;
 
-        let mut body = Vec::new();
         let mut chunk = vec![0u8; CHUNK];
         loop {
             let mut read = 0u32;
@@ -116,11 +134,8 @@ pub fn get(host: &str, path: &str) -> Result<(u32, Vec<u8>), String> {
             if read == 0 {
                 break;
             }
-            body.extend_from_slice(&chunk[..read as usize]);
-            if body.len() > MAX_BODY {
-                return Err("The dictionary response was unexpectedly large.".into());
-            }
+            sink(&chunk[..read as usize])?;
         }
-        Ok((status, body))
+        Ok(status)
     }
 }

@@ -25,7 +25,8 @@ links in order, and Enter opens the one that's ringed.
 - About 2 MB of memory while idle and 4 MB while a card is open.
 - An English dictionary (Open English WordNet, about 150,000 words and
   phrases) is built into the executable, so most lookups never touch the
-  network and take under a millisecond.
+  network and take under a millisecond. Italian (from Wikizionario, about
+  75,000 words) is downloaded, once, when it's chosen in the settings.
 - The online dictionary is only used for pronunciations and for words the
   built-in one doesn't have. It can be turned off.
 - A single executable written in Rust against the native Windows APIs. No
@@ -61,7 +62,7 @@ by hand, use **Open config.json** at the bottom of the settings window, then
 | `max_synonyms` | `6` | Synonyms per part of speech; `0` hides them. |
 | `show_examples` | `true` | Example sentences under the senses. |
 | `online_lookup` | `true` | `false` keeps WinDict fully offline. |
-| `language` | `"en"` | The dictionary's language. English is built in; another is read from `%LOCALAPPDATA%\WinDict\dicts\<language>.wdict`. |
+| `language` | `"en"` | `"en"` or `"it"`. English is built in; Italian is downloaded to `%LOCALAPPDATA%\WinDict\dicts\it.wdict`. |
 | `use_ui_automation` | `true` | Read selections without touching the clipboard where apps allow it. |
 
 ## Showing the card above the Start menu
@@ -102,6 +103,18 @@ starts once signed and installed (see above). The bundled dictionary,
 `data/english.wdict`, is generated from Open English WordNet by
 `tools/build_dict.py`.
 
+The other dictionaries are built from Wiktionary extracts by
+`tools/build_wiktionary.py`, and published in the `dictionaries`
+pre-release under the name it prints. The app only downloads the files
+`src/dicts.rs` lists, by size and SHA-256, so a new build of one goes out
+with a new version of the app:
+
+```powershell
+python tools/build_wiktionary.py raw-wiktextract-data.jsonl.gz it it.wdict
+copy it.wdict it-<hash>.wdict   # the name printed
+gh release upload dictionaries it-<hash>.wdict
+```
+
 ## How it works
 
 Everything runs on one UI thread, which owns the app state and its windows.
@@ -122,4 +135,7 @@ Definitions from [Open English WordNet](https://en-word.net/) (CC BY 4.0,
 derived from Princeton WordNet; see `data/LICENSE-WordNet.txt`) and
 [Wiktionary](https://www.wiktionary.org/), via
 [dictionaryapi.dev](https://dictionaryapi.dev) with a direct Wiktionary
-fallback. WinDict is MIT licensed.
+fallback. The Italian dictionary is built from
+[Wikizionario](https://it.wiktionary.org/) through
+[wiktextract](https://kaikki.org/itwiktionary/) (CC BY-SA 4.0; see
+`data/LICENSE-Wiktionary.txt`). WinDict is MIT licensed.

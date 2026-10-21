@@ -26,6 +26,7 @@ the same order, joined by '|', each joined by '\\t'), the definition, then
 examples.
 """
 
+import hashlib
 import struct
 import unicodedata
 import zlib
@@ -89,8 +90,8 @@ def write(out, entries, synsets, antonyms, info):
 
     header_len = 28 + 12 * len(entry_blocks) + 8 * len(synset_blocks)
     key_area = b"".join(b[0].encode("utf-8") + b"\0" for b in entry_blocks)
-    info = "\n".join(f"{k}={v}" for k, v in info.items()).encode("utf-8")
-    data_base = header_len + len(key_area) + len(info)
+    info_text = "\n".join(f"{k}={v}" for k, v in info.items()).encode("utf-8")
+    data_base = header_len + len(key_area) + len(info_text)
     data = bytearray()
     entry_table, synset_table = [], []
     key_off = header_len
@@ -106,13 +107,17 @@ def write(out, entries, synsets, antonyms, info):
 
     with open(out, "wb") as f:
         f.write(b"WDIC" + struct.pack("<IIIIII", 4, len(entry_blocks), len(synset_blocks), SYNSETS_PER_BLOCK,
-                                      header_len + len(key_area), len(info)))
+                                      header_len + len(key_area), len(info_text)))
         for t in entry_table:
             f.write(struct.pack("<III", *t))
         for t in synset_table:
             f.write(struct.pack("<II", *t))
         f.write(key_area)
-        f.write(info)
+        f.write(info_text)
         f.write(data)
     pairs = sum(len(a) for s in antonyms for a in s)
     print(f"{len(keys)} entries, {len(synsets)} synsets, {pairs} antonyms, {data_base + len(data)} bytes")
+    with open(out, "rb") as f:
+        sha256 = hashlib.sha256(f.read()).hexdigest()
+    # As src/dicts.rs lists it, for a dictionary that's downloaded.
+    print(f'file: "{info["language"]}-{sha256[:12]}.wdict", size: {data_base + len(data)}, sha256: "{sha256}"')

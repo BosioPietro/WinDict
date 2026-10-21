@@ -17,6 +17,7 @@ use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
 use crate::config::{Config, ThemeMode};
+use crate::dicts;
 use crate::hotkey::{self, held_modifiers, is_modifier, Hotkey};
 use crate::popup;
 use crate::render::{Align, Face, Ink, Layout, Renderer};
@@ -65,7 +66,6 @@ const VALUE_W: f32 = 40.0;
 /// How wide each control is, for the description beside it to stay clear.
 const SHORTCUT_W: f32 = 150.0;
 const COUNTER_W: f32 = 2.0 * STEP_SIZE + VALUE_W;
-const THEME_W: f32 = 3.0 * SEGMENT_W;
 const EDIT_W: f32 = 16.0;
 const CAPS_GAP: f32 = 8.0;
 const FOCUS_OUTSET: f32 = 3.0;
@@ -109,6 +109,7 @@ const MINUS_GLYPH: &str = "\u{E738}";
 const PLUS_GLYPH: &str = "\u{E710}";
 
 const SHORTCUT_DETAIL: &str = "Looks up the selected word";
+const LANGUAGE_DETAIL: &str = "The dictionary words are looked up in";
 const RECORDING_DETAIL: &str = "Press the new shortcut, or Esc to cancel";
 const RECORDING_HINT: &str = "Press keys";
 const NEEDS_MODIFIER: &str = "Hold Ctrl, Alt or Win with the key";
@@ -134,6 +135,8 @@ pub enum Change {
     RecordingStopped,
     Hotkey(String),
     Theme(ThemeMode),
+    /// A language's code, like "en".
+    Language(String),
     MaxDefinitions(usize),
     MaxSynonyms(usize),
     ShowExamples(bool),
@@ -191,13 +194,55 @@ const THEMES: [(ThemeMode, &str); 3] = [
     (ThemeMode::Dark, "Dark"),
 ];
 
+/// A setting chosen from a few options, side by side.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Choice {
+    Theme,
+    Language,
+}
+
+const CHOICES: [Choice; 2] = [Choice::Theme, Choice::Language];
+
+impl Choice {
+    fn names(self) -> Vec<&'static str> {
+        match self {
+            Choice::Theme => THEMES.iter().map(|(_, name)| *name).collect(),
+            Choice::Language => languages().map(|(_, name)| name).collect(),
+        }
+    }
+}
+
+/// The languages there are dictionaries for: their codes, and names.
+fn languages() -> impl Iterator<Item = (&'static str, &'static str)> {
+    std::iter::once(("en", "English")).chain(dicts::DOWNLOADS.iter().map(|d| (d.language, d.name)))
+}
+
+/// A setting's description that can change to say what's going on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Note {
+    Shortcut,
+    Language,
+}
+
+const NOTES: [Note; 2] = [Note::Shortcut, Note::Language];
+
+impl Note {
+    fn usual(self) -> &'static str {
+        match self {
+            Note::Shortcut => SHORTCUT_DETAIL,
+            Note::Language => LANGUAGE_DETAIL,
+        }
+    }
+}
+
 /// What's under the pointer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Hit {
     Close,
     Shortcut,
     Switch(Switch),
-    Theme(usize),
+    /// One of a choice's options.
+    Choice(Choice, usize),
     /// A counter's down (false) or up (true) button.
     Step(Counter, bool),
     Config,
@@ -208,7 +253,7 @@ enum Hit {
 enum Stop {
     Shortcut,
     Switch(Switch),
-    Theme,
+    Choice(Choice),
     Counter(Counter),
     Config,
 }
@@ -219,7 +264,7 @@ impl Hit {
             Hit::Close => None,
             Hit::Shortcut => Some(Stop::Shortcut),
             Hit::Switch(sw) => Some(Stop::Switch(sw)),
-            Hit::Theme(_) => Some(Stop::Theme),
+            Hit::Choice(choice, _) => Some(Stop::Choice(choice)),
             Hit::Step(counter, _) => Some(Stop::Counter(counter)),
             Hit::Config => Some(Stop::Config),
         }
@@ -230,7 +275,7 @@ impl Hit {
 enum Control {
     Shortcut,
     Switch(Switch),
-    Theme,
+    Choice(Choice),
     Counter(Counter),
 }
 
@@ -239,7 +284,7 @@ impl Control {
         match self {
             Control::Shortcut => SHORTCUT_W,
             Control::Switch(_) => SWITCH_W,
-            Control::Theme => THEME_W,
+            Control::Choice(choice) => choice.names().len() as f32 * SEGMENT_W,
             Control::Counter(_) => COUNTER_W,
         }
     }
@@ -274,7 +319,11 @@ const SECTIONS: &[(&str, &[Row])] = &[
     (
         "Card",
         &[
-            row("Theme", "Card and menu colors", Control::Theme),
+            row(
+                "Theme",
+                "Card and menu colors",
+                Control::Choice(Choice::Theme),
+            ),
             row(
                 "Definitions",
                 "Senses shown per part of speech",
@@ -295,6 +344,11 @@ const SECTIONS: &[(&str, &[Row])] = &[
     (
         "Lookup",
         &[
+            row(
+                "Language",
+                LANGUAGE_DETAIL,
+                Control::Choice(Choice::Language),
+            ),
             row(
                 "Online dictionary",
                 "For pronunciations, and words the built-in one lacks",
@@ -375,7 +429,7 @@ struct SwitchView {
     hover: SpriteVisual,
 }
 
-struct ThemeView {
+struct ChoiceView {
     pill: ContainerVisual,
     labels: Vec<SpriteVisual>,
     /// Where the pill sits over each option.
@@ -406,11 +460,14 @@ struct ShortcutView {
     caps_right: f32,
     caps_middle: f32,
     caps_rest: Vector3,
-    detail: Text,
-    old_detail: Text,
-    detail_at: Vector3,
-    detail_w: f32,
     ring: ShapeVisual,
+}
+
+struct NoteView {
+    text: Text,
+    old: Text,
+    at: Vector3,
+    w: f32,
 }
 
 struct View {
@@ -432,7 +489,9 @@ struct View {
     shortcut: ShortcutView,
     /// In the order of [`SWITCHES`] and [`COUNTERS`].
     switches: Vec<SwitchView>,
-    theme: ThemeView,
+    /// In the order of [`CHOICES`] and [`NOTES`].
+    choices: Vec<ChoiceView>,
+    notes: Vec<NoteView>,
     counters: Vec<CounterView>,
     /// Where things can be clicked, in the scroller.
     hits: Vec<(Hit, Rect)>,
@@ -467,10 +526,11 @@ pub struct Settings {
     recording: bool,
     /// The modifiers held while recording.
     preview: HOT_KEY_MODIFIERS,
-    /// The shortcut's description, and whether it says something went wrong.
-    detail: (String, bool),
-    /// The option the theme's pill is leaving, while it glides over.
-    pill_from: Option<usize>,
+    /// What the descriptions that change say, and whether it's that
+    /// something went wrong, in the order of [`NOTES`].
+    notes: [(String, bool); 2],
+    /// The choice whose pill is gliding over, and the option it's leaving.
+    pill_from: Option<(Choice, usize)>,
     scroll: f32,
     pub visible: bool,
     /// Last, so it goes after everything shown on it.
@@ -510,7 +570,7 @@ impl Settings {
             ring_shown: false,
             recording: false,
             preview: HOT_KEY_MODIFIERS(0),
-            detail: (SHORTCUT_DETAIL.into(), false),
+            notes: NOTES.map(|note| (note.usual().into(), false)),
             pill_from: None,
             scroll: 0.0,
             visible: false,
@@ -528,7 +588,7 @@ impl Settings {
         (self.theme, self.scale, self.values) = (theme, s, values);
         (self.hovered, self.pressed, self.focus) = (None, None, None);
         (self.ring, self.recording, self.scroll) = (false, false, 0.0);
-        self.detail = (SHORTCUT_DETAIL.into(), false);
+        self.notes = NOTES.map(|note| (note.usual().into(), false));
         self.frame.apply_theme(&self.renderer, &theme, s)?;
         self.replace_view(false)?;
         self.fit(work)?;
@@ -652,14 +712,14 @@ impl Settings {
             (VK_SPACE | VK_RETURN, Some(Stop::Shortcut)) => self.activate(Hit::Shortcut)?,
             (VK_SPACE | VK_RETURN, Some(Stop::Switch(sw))) => self.activate(Hit::Switch(sw))?,
             (VK_SPACE | VK_RETURN, Some(Stop::Config)) => self.activate(Hit::Config)?,
-            (VK_LEFT | VK_RIGHT, Some(Stop::Theme)) => {
-                let at = self.theme_index();
+            (VK_LEFT | VK_RIGHT, Some(Stop::Choice(choice))) => {
+                let at = self.chosen(choice);
                 let next = if key == VK_RIGHT {
-                    (at + 1).min(THEMES.len() - 1)
+                    (at + 1).min(choice.names().len() - 1)
                 } else {
                     at.saturating_sub(1)
                 };
-                self.choose_theme(next)?
+                self.choose(choice, next)?
             }
             (VK_LEFT | VK_DOWN | VK_SUBTRACT | VK_OEM_MINUS, Some(Stop::Counter(c))) => {
                 self.step(c, false)?
@@ -702,7 +762,20 @@ impl Settings {
         self.values.config.hotkey = hotkey.to_owned();
         self.show_caps(true)?;
         self.shake_caps()?;
-        self.set_detail(why, true)
+        self.set_note(Note::Shortcut, why, true)
+    }
+
+    /// Shows `language` as the one chosen, and the language's description
+    /// as `note` says (how a download is going, or why it failed), or as
+    /// usual.
+    pub fn show_language(&mut self, language: &str, note: Option<(&str, bool)>) -> Result<()> {
+        if self.values.config.language != language {
+            self.pill_from = Some((Choice::Language, self.chosen(Choice::Language)));
+            self.values.config.language = language.to_owned();
+            self.show_choice(Choice::Language, true)?;
+        }
+        let (text, error) = note.unwrap_or((LANGUAGE_DETAIL, false));
+        self.set_note(Note::Language, text, error)
     }
 
     /// Switches to `theme`, cross-fading everything.
@@ -710,7 +783,9 @@ impl Settings {
         let same = (theme.dark, theme.transparency, theme.accent)
             == (self.theme.dark, self.theme.transparency, self.theme.accent);
         if same {
-            self.pill_from = None;
+            self.pill_from = self
+                .pill_from
+                .filter(|(choice, _)| *choice != Choice::Theme);
             return Ok(());
         }
         self.theme = theme;
@@ -722,7 +797,7 @@ impl Settings {
     /// Shows `values` changed from elsewhere, cross-fading to them.
     pub fn refresh(&mut self, theme: Theme, values: Values) -> Result<()> {
         (self.values, self.recording) = (values, false);
-        self.detail = (SHORTCUT_DETAIL.into(), false);
+        self.notes[Note::Shortcut as usize] = (SHORTCUT_DETAIL.into(), false);
         self.theme = theme;
         let (anim, renderer, s) = (&self.anim, &self.renderer, self.scale);
         self.frame.fade_theme(anim, renderer, &theme, s, THEME_MS)?;
@@ -805,7 +880,7 @@ impl Settings {
                 self.show_switch(sw, true)?;
                 Some(change)
             }
-            Hit::Theme(i) => self.choose_theme(i)?,
+            Hit::Choice(choice, i) => self.choose(choice, i)?,
             Hit::Step(counter, up) => self.step(counter, up)?,
         })
     }
@@ -826,22 +901,37 @@ impl Settings {
         }
     }
 
-    fn theme_index(&self) -> usize {
-        THEMES
-            .iter()
-            .position(|(mode, _)| *mode == self.values.config.theme)
-            .unwrap_or(0)
+    /// Which of `choice`'s options is chosen.
+    fn chosen(&self, choice: Choice) -> usize {
+        let config = &self.values.config;
+        match choice {
+            Choice::Theme => THEMES.iter().position(|(mode, _)| *mode == config.theme),
+            Choice::Language => languages().position(|(code, _)| code == config.language),
+        }
+        .unwrap_or(0)
     }
 
-    fn choose_theme(&mut self, i: usize) -> Result<Option<Change>> {
-        let mode = THEMES[i].0;
-        if mode == self.values.config.theme {
+    fn choose(&mut self, choice: Choice, i: usize) -> Result<Option<Change>> {
+        if i == self.chosen(choice) {
             return Ok(None);
         }
-        self.pill_from = Some(self.theme_index());
-        self.values.config.theme = mode;
-        self.show_theme(true)?;
-        Ok(Some(Change::Theme(mode)))
+        self.pill_from = Some((choice, self.chosen(choice)));
+        let change = match choice {
+            Choice::Theme => {
+                let mode = THEMES[i].0;
+                self.values.config.theme = mode;
+                Change::Theme(mode)
+            }
+            Choice::Language => {
+                let Some((code, _)) = languages().nth(i) else {
+                    return Ok(None);
+                };
+                self.values.config.language = code.to_owned();
+                Change::Language(code.to_owned())
+            }
+        };
+        self.show_choice(choice, true)?;
+        Ok(Some(change))
     }
 
     /// Counts `counter` up or down one. At either end, the number shakes.
@@ -878,7 +968,7 @@ impl Settings {
         self.recording = true;
         self.preview = held_modifiers();
         self.show_caps(false)?;
-        self.set_detail(RECORDING_DETAIL, false)?;
+        self.set_note(Note::Shortcut, RECORDING_DETAIL, false)?;
         self.show_recording()
     }
 
@@ -886,7 +976,7 @@ impl Settings {
     fn stop_recording(&mut self) -> Result<()> {
         self.recording = false;
         self.show_caps(true)?;
-        self.set_detail(SHORTCUT_DETAIL, false)?;
+        self.set_note(Note::Shortcut, SHORTCUT_DETAIL, false)?;
         self.show_recording()
     }
 
@@ -913,7 +1003,7 @@ impl Settings {
         };
         if let Some(complaint) = complaint {
             self.shake_caps()?;
-            self.set_detail(complaint, true)?;
+            self.set_note(Note::Shortcut, complaint, true)?;
             return Ok(None);
         }
         let text = Hotkey { modifiers, vk }.to_string();
@@ -1123,16 +1213,16 @@ impl Settings {
         anim.vector3(knob, "Scale", k, KNOB_MS / 2, 0, &anim.decelerate)
     }
 
-    /// Glides the pill to the chosen theme, and brightens its name.
-    fn show_theme(&self, animate: bool) -> Result<()> {
+    /// Glides `choice`'s pill to the chosen option, and brightens its name.
+    fn show_choice(&self, choice: Choice, animate: bool) -> Result<()> {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let (v, anim) = (&view.theme, &self.anim);
-        let chosen = self.theme_index();
+        let (v, anim) = (&view.choices[choice as usize], &self.anim);
+        let chosen = self.chosen(choice);
         let rest = v.rest[chosen];
         match (animate, self.pill_from) {
-            (true, Some(from)) if from != chosen => {
+            (true, Some((c, from))) if c == choice && from != chosen => {
                 anim.vector3(&v.pill, "Offset", rest, PILL_MS, 0, &anim.overshoot)?;
                 // It stretches as it goes, and settles as it arrives.
                 let stretch = anim.compositor.CreateVector3KeyFrameAnimation()?;
@@ -1152,18 +1242,18 @@ impl Settings {
                 v.pill.SetScale(scale(1.0))?;
             }
         }
-        self.show_theme_labels()
+        self.show_choice_labels(choice)
     }
 
-    fn show_theme_labels(&self) -> Result<()> {
+    fn show_choice_labels(&self, choice: Choice) -> Result<()> {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let (anim, chosen) = (&self.anim, self.theme_index());
-        for (i, label) in view.theme.labels.iter().enumerate() {
+        let (anim, chosen) = (&self.anim, self.chosen(choice));
+        for (i, label) in view.choices[choice as usize].labels.iter().enumerate() {
             let opacity = if i == chosen {
                 1.0
-            } else if self.hovered == Some(Hit::Theme(i)) {
+            } else if self.hovered == Some(Hit::Choice(choice, i)) {
                 0.85
             } else {
                 0.6
@@ -1270,26 +1360,27 @@ impl Settings {
         self.anim.shake(&v.caps.visual, v.caps_rest, self.scale)
     }
 
-    /// Changes the shortcut's description, cross-fading to the new one.
-    fn set_detail(&mut self, text: &str, error: bool) -> Result<()> {
-        if (text, error) == (self.detail.0.as_str(), self.detail.1) {
+    /// Changes a setting's description, cross-fading to the new one.
+    fn set_note(&mut self, note: Note, text: &str, error: bool) -> Result<()> {
+        let now = &self.notes[note as usize];
+        if (text, error) == (now.0.as_str(), now.1) {
             return Ok(());
         }
-        self.detail = (text.to_owned(), error);
-        self.show_detail(text, error, true)
+        self.notes[note as usize] = (text.to_owned(), error);
+        self.show_note(note, text, error, true)
     }
 
-    fn show_detail(&mut self, text: &str, error: bool, animate: bool) -> Result<()> {
+    fn show_note(&mut self, note: Note, text: &str, error: bool, animate: bool) -> Result<()> {
         let (r, anim, t, s) = (&self.renderer, &self.anim, &self.theme, self.scale);
         let Some(view) = self.view.as_mut() else {
             return Ok(());
         };
-        let v = &mut view.shortcut;
-        std::mem::swap(&mut v.detail, &mut v.old_detail);
+        let v = &mut view.notes[note as usize];
+        std::mem::swap(&mut v.text, &mut v.old);
         let ink = if error { Ink::Critical } else { Ink::Secondary };
-        let line = r.layout_line(text, Face::Small, ink, v.detail_w)?;
-        v.detail.show(r, &line, s, t)?;
-        let (new, old, rest) = (&v.detail.visual, &v.old_detail.visual, v.detail_at);
+        let line = r.layout_line(text, Face::Small, ink, v.w)?;
+        v.text.show(r, &line, s, t)?;
+        let (new, old, rest) = (&v.text.visual, &v.old.visual, v.at);
         Animator::stop(new, &["Opacity", "Offset"]);
         if animate {
             new.SetOpacity(0.0)?;
@@ -1302,7 +1393,7 @@ impl Settings {
             new.SetOffset(rest)?;
             Animator::stop(old, &["Opacity"]);
             old.SetOpacity(0.0)?;
-            v.old_detail.clear();
+            v.old.clear();
             Ok(())
         }
     }
@@ -1344,7 +1435,7 @@ impl Settings {
                 fade(&view.switches[sw as usize].hover)?;
                 self.show_knob(sw)
             }
-            Some(Hit::Theme(_)) => self.show_theme_labels(),
+            Some(Hit::Choice(choice, _)) => self.show_choice_labels(choice),
             Some(Hit::Step(counter, up)) => {
                 fade(&view.counters[counter as usize].buttons[up as usize].hover)
             }
