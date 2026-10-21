@@ -844,7 +844,14 @@ impl App {
                 let order = offline::languages();
                 let merged = dictionary::merge(local, Some(&looked.result), &order);
                 if measure(&merged) != before {
-                    let place = Place::Same(Transition::Refine);
+                    // Another language's part is new content, perhaps above
+                    // what's being read: it fades in rather than snapping.
+                    let transition = if merged.others.len() != before.2 {
+                        Transition::Replace
+                    } else {
+                        Transition::Refine
+                    };
+                    let place = Place::Same(transition);
                     self.present(place, &looked.word, &Lookup::Found(merged));
                 }
             }
