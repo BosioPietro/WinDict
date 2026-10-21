@@ -14,11 +14,11 @@ use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::Vector3;
 
-use crate::render::{Body, Face, Ink, Link, Renderer, Target, WORD_SIZE};
+use crate::render::{Body, Face, Ink, Link, Mark, Renderer, Target, WORD_SIZE};
 use crate::searchbox::SearchBox;
 use crate::theme::Theme;
 use crate::ui::{
-    self, attach, cubic_bezier, monitor_at, scale, text_sprite, ts, v2, v3, Animator, Frame,
+    self, attach, blink, cubic_bezier, monitor_at, scale, text_sprite, ts, v2, v3, Animator, Frame,
     MARGIN, RESIZE_MS, SCROLL_EASE,
 };
 use crate::win::Window;
@@ -172,6 +172,15 @@ pub struct Popup {
     header_h: f32,
     /// How far the word is indented for the back button, in DIPs.
     header_indent: f32,
+    /// Keeps the clickable area at its largest while the card's height
+    /// keeps changing, as setting it repaints the window.
+    region_hold: bool,
+    /// The clickable area last set, so an unchanged one isn't set again,
+    /// which repaints the whole window.
+    region: std::cell::Cell<(i32, i32, i32, i32, i32)>,
+    /// What the heading was last drawn from, to tell a refinement that
+    /// leaves it alone.
+    header_key: (String, Option<String>, u32),
     body_h: f32,
     scroll: f32,
     scroll_anim: Option<ScrollAnim>,
@@ -220,6 +229,9 @@ struct Content {
     /// Rings the link Tab moved to; inside `visual`, so it scrolls with it.
     focus: ShapeVisual,
     focus_brush: CompositionColorBrush,
+    /// The caret in the language box being typed in; inside `visual` too.
+    caret: SpriteVisual,
+    caret_brush: CompositionColorBrush,
     /// The first of the focused link's rectangles in `links`.
     focused: Option<usize>,
 }
@@ -238,6 +250,11 @@ impl Content {
         focus.SetOffset(v3(-RING_ROOM, -RING_ROOM))?;
         focus.SetSize(v2(2.0 * RING_ROOM, 2.0 * RING_ROOM))?;
         visual.Children()?.InsertAtTop(&focus)?;
+        let caret = c.CreateSpriteVisual()?;
+        let caret_brush = c.CreateColorBrush()?;
+        caret.SetBrush(&caret_brush)?;
+        caret.SetOpacity(0.0)?;
+        visual.Children()?.InsertAtTop(&caret)?;
         Ok(Content {
             host,
             visual,
@@ -245,8 +262,23 @@ impl Content {
             links: Vec::new(),
             focus,
             focus_brush: c.CreateColorBrush()?,
+            caret,
+            caret_brush,
             focused: None,
         })
+    }
+
+    /// Puts the caret at `mark`, blinking, or takes it away.
+    fn show_caret(&self, c: &Compositor, mark: Option<Mark>, s: f32) -> Result<()> {
+        Animator::stop(&self.caret, &["Opacity"]);
+        let Some(m) = mark else {
+            return self.caret.SetOpacity(0.0);
+        };
+        self.caret
+            .SetSize(v2((m.width * s).round().max(1.0), (m.height * s).round()))?;
+        self.caret
+            .SetOffset(v3((m.x * s).round(), (m.y * s).round()))?;
+        blink(c, &self.caret)
     }
 
     /// The rectangles of the link starting at `start`: more than one when
@@ -710,6 +742,9 @@ impl Popup {
             card_h: 0.0,
             header_h: 0.0,
             header_indent: 0.0,
+            region_hold: false,
+            region: Default::default(),
+            header_key: Default::default(),
             body_h: 0.0,
             scroll: 0.0,
             scroll_anim: None,
@@ -878,7 +913,17 @@ impl Popup {
             self.renderer
                 .layout_header(word, phonetic, content_w - room, indent)?;
         let body_layout = self.renderer.layout_body(&body, content_w, PAD_BOTTOM)?;
-        let header_surface = self.renderer.draw(&header_layout, s, &self.theme)?;
+        let key = (
+            word.to_owned(),
+            phonetic.map(str::to_owned),
+            (content_w - room + indent).to_bits(),
+        );
+        let header_same = std::mem::replace(&mut self.header_key, key.clone()) == key;
+        // An unchanged heading keeps the surface it has, so it can't flicker.
+        let header_surface = match self.header.surface.clone().filter(|_| header_same) {
+            Some(surface) => surface,
+            None => self.renderer.draw(&header_layout, s, &self.theme)?,
+        };
         let body_surface = self.renderer.draw(&body_layout, s, &self.theme)?;
 
         let header_h = (PAD_TOP + header_layout.height + HEADER_GAP) * s;
@@ -916,7 +961,7 @@ impl Popup {
         Animator::stop(&header.visual, &["Opacity"]);
         Animator::stop(&header.back, &["Opacity"]);
         header.back.SetOpacity(0.0)?;
-        if let (Transition::Refine, Some(old)) = (transition, old_header) {
+        if let (Transition::Refine, Some(old), false) = (transition, old_header, header_same) {
             header.back_brush.SetSurface(&old)?;
             header.back.SetSize(header.visual.Size()?)?;
             header.back.SetOffset(v3(PAD_X * s, PAD_TOP * s))?;
@@ -975,6 +1020,7 @@ impl Popup {
         let content = &self.content;
         content.brush.SetSurface(&body_surface)?;
         content.visual.SetSize(v2(content_w * s, body_h))?;
+        content.show_caret(&self.anim.compositor, body_layout.caret, s)?;
         Animator::stop(&content.visual, &["Offset", "Opacity"]);
         Animator::stop(&content.host, &["Offset"]);
 
@@ -1454,9 +1500,11 @@ impl Popup {
 
     fn apply_theme(&mut self) -> Result<()> {
         let t = self.theme;
+        self.header_key = Default::default();
         self.frame.apply_theme(&self.renderer, &t, self.scale)?;
         self.loader.brush.SetColor(t.accent)?;
         self.content.focus_brush.SetColor(t.focus())?;
+        self.content.caret_brush.SetColor(t.accent)?;
         self.back.apply_theme(&self.renderer, &t, self.scale)?;
         self.translate.apply_theme(&self.renderer, &t, self.scale)?;
         self.scroll_chrome.apply_theme(&t)
@@ -1469,7 +1517,9 @@ impl Popup {
         self.card_h = card_h;
         let offset = v3(MARGIN * s, self.frame_y());
         let host_size = v2(w, (card_h - self.header_h).max(0.0));
-        if animate {
+        if animate && (old_h - card_h).abs() <= 0.5 {
+            // The same height: any resize under way is already headed there.
+        } else if animate {
             self.set_region(old_h, card_h);
             self.frame.resize(&self.anim, w, card_h, offset, s, true)?;
             self.anim
@@ -1486,17 +1536,35 @@ impl Popup {
 
     /// Limits the window's clickable area to the card plus its shadow, so the
     /// transparent rest of the window doesn't swallow clicks.
+    pub fn hold_region(&mut self, hold: bool) {
+        self.region_hold = hold;
+    }
+
     fn set_region(&self, h1: f32, h2: f32) {
         let s = self.scale;
         let m = MARGIN * s;
         let window_h = (self.window.bottom - self.window.top) as f32;
         let w = (self.window.right - self.window.left) as f32;
-        let h = h1.max(h2);
+        let h = if self.region_hold {
+            MAX_CARD_H * s
+        } else {
+            h1.max(h2)
+        };
         let (top, bottom) = if self.grow_up {
             (window_h - 2.0 * m - h, window_h)
         } else {
             (0.0, h + 2.0 * m)
         };
+        let rect = (
+            top as i32,
+            bottom.ceil() as i32,
+            w as i32,
+            self.window.left,
+            self.window.top,
+        );
+        if self.region.replace(rect) == rect {
+            return;
+        }
         unsafe {
             let region = CreateRectRgn(0, top as i32, w as i32, bottom.ceil() as i32);
             if SetWindowRgn(self.hwnd, Some(region), self.visible) == 0 {

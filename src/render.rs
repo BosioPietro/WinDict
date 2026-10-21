@@ -88,7 +88,8 @@ enum Paint {
     Field,
     /// Behind the language Enter picks.
     Highlight,
-    Accent,
+    /// The accent, as thick as the rings round focused controls.
+    Focus,
     /// The scrollbar's thumb.
     Thumb,
 }
@@ -157,6 +158,18 @@ pub struct Layout {
     pub height: f32,
     /// Clickable areas, in DIPs relative to the layout.
     pub links: Vec<Link>,
+    /// The caret of the language box being typed in, which the consumer
+    /// draws itself so that it can blink.
+    pub caret: Option<Mark>,
+}
+
+/// A rectangle in a layout, in DIPs.
+#[derive(Clone, Copy)]
+pub struct Mark {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 impl Layout {
@@ -234,6 +247,16 @@ pub struct Picker<'a> {
     pub highlight: Option<usize>,
 }
 
+impl Picker<'_> {
+    /// How much shorter the list is than with all its rows shown, in DIPs.
+    pub fn spare(&self) -> f32 {
+        let total = self.matches.len();
+        let first = self.first.min(total);
+        let shown = (first + PICKER_ROWS).min(total) - first;
+        (PICKER_ROWS - shown.max(1)) as f32 * ROW_H
+    }
+}
+
 /// How many languages the list shows at once; the rest scroll.
 pub const PICKER_ROWS: usize = 7;
 
@@ -279,12 +302,15 @@ const ROW_H: f32 = 32.0;
 /// Room for a flag or a code's cap, so the names line up.
 const BADGE_W: f32 = 24.0;
 const CARET_W: f32 = 1.5;
+/// The outline of a box being typed in.
+const FOCUS_STROKE: f32 = 2.0;
 
 /// A layout being built top to bottom.
 #[derive(Default)]
 struct Stack {
     items: Vec<Item>,
     links: Vec<Link>,
+    caret: Option<Mark>,
     /// Top of the current line.
     y: f32,
 }
@@ -493,6 +519,7 @@ impl Renderer {
             width,
             height,
             links: Vec::new(),
+            caret: None,
         })
     }
 
@@ -516,6 +543,7 @@ impl Renderer {
             width: width.max(w + 4.0),
             height,
             links: Vec::new(),
+            caret: None,
         };
         Ok((layout, w, caret))
     }
@@ -540,6 +568,7 @@ impl Renderer {
             width: w + 4.0,
             height,
             links: Vec::new(),
+            caret: None,
         };
         Ok((layout, w, caret))
     }
@@ -594,6 +623,7 @@ impl Renderer {
             width: x + width,
             height,
             links: Vec::new(),
+            caret: None,
         })
     }
 
@@ -630,6 +660,7 @@ impl Renderer {
             width: x.max(1.0),
             height,
             links: Vec::new(),
+            caret: None,
         })
     }
 
@@ -655,6 +686,7 @@ impl Renderer {
             width,
             height,
             links: Vec::new(),
+            caret: None,
         })
     }
 
@@ -687,6 +719,7 @@ impl Renderer {
             width,
             height,
             links: Vec::new(),
+            caret: None,
         })
     }
 
@@ -722,6 +755,7 @@ impl Renderer {
             width: x.max(1.0),
             height,
             links: Vec::new(),
+            caret: None,
         })
     }
 
@@ -734,6 +768,7 @@ impl Renderer {
             width: width.ceil() + 1.0,
             height,
             links: Vec::new(),
+            caret: None,
         })
     }
 
@@ -850,6 +885,7 @@ impl Renderer {
             width,
             height: out.y + bottom_padding,
             links: out.links,
+            caret: out.caret,
         })
     }
 
@@ -1125,6 +1161,7 @@ impl Renderer {
             width,
             height: out.y,
             links: out.links,
+            caret: out.caret,
         })
     }
 
@@ -1182,7 +1219,7 @@ impl Renderer {
             radius: CONTROL_RADIUS,
             fill: Some(Paint::Control),
             stroke: Some(if picker.is_some() {
-                Paint::Accent
+                Paint::Focus
             } else {
                 Paint::ControlStroke
             }),
@@ -1258,14 +1295,11 @@ impl Renderer {
             ink,
             accents: Vec::new(),
         });
-        out.items.push(Item::Shape {
+        out.caret = Some(Mark {
             x: left + caret_x.round(),
             y: line_y + hit.top,
             width: CARET_W,
             height: hit.height,
-            radius: 0.0,
-            fill: Some(Paint::Accent),
-            stroke: None,
         });
         Ok(())
     }
@@ -1681,12 +1715,16 @@ impl Renderer {
                                 Paint::ControlStroke => to_d2d(theme.control_stroke()),
                                 Paint::Field => to_d2d(theme.field()),
                                 Paint::Highlight => to_d2d(theme.highlight()),
-                                Paint::Accent => theme.accent_d2d(),
+                                Paint::Focus => theme.accent_d2d(),
                                 Paint::Thumb => to_d2d(theme.thumb()),
                             })
                         };
-                        // Inset by half the hairline, so it lands on whole pixels.
-                        let half = 0.5 / scale;
+                        // Inset by half the stroke, so it lands on whole pixels.
+                        let stroke_w = match stroke {
+                            Some(Paint::Focus) => (FOCUS_STROKE * scale).round() / scale,
+                            _ => 1.0 / scale,
+                        };
+                        let half = stroke_w / 2.0;
                         let shape = D2D1_ROUNDED_RECT {
                             rect: D2D_RECT_F {
                                 left: x + half,
@@ -1701,7 +1739,7 @@ impl Renderer {
                             dc.FillRoundedRectangle(&shape, &paint(*p)?);
                         }
                         if let Some(p) = stroke {
-                            dc.DrawRoundedRectangle(&shape, &paint(*p)?, 1.0 / scale, None);
+                            dc.DrawRoundedRectangle(&shape, &paint(*p)?, stroke_w, None);
                         }
                     }
                 }

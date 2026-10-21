@@ -9,6 +9,9 @@ use windows::UI::Color;
 use windows::UI::Composition::*;
 use windows_numerics::Vector3;
 
+use crate::theme::rgb;
+use crate::ui::RESIZE_MS;
+
 use super::*;
 
 impl Settings {
@@ -41,6 +44,122 @@ impl Settings {
         Ok(())
     }
 
+    /// Builds the view afresh for what the default languages show to have
+    /// changed. The parts that moved glide from where they were as the card
+    /// resizes, and the old view fades away over the new one, so that what
+    /// stayed the same stays put.
+    pub(super) fn slide_view(&mut self) -> Result<()> {
+        let children = self.frame.card.Children()?;
+        if let Some(old) = self.fading.take() {
+            children.Remove(&old)?;
+        }
+        let view = self.build()?;
+        let old = self.view.replace(view);
+        self.restore()?;
+        let (Some(old), Some(view)) = (old, &self.view) else {
+            return Ok(());
+        };
+        let anim = &self.anim;
+        for ((part, rest), (_, was)) in view.reveal.iter().zip(&old.reveal) {
+            if (was.X, was.Y) != (rest.X, rest.Y) {
+                Animator::stop(part, &["Offset"]);
+                part.SetOffset(*was)?;
+                anim.vector3(part, "Offset", *rest, EXPAND_MS, 0, &anim.decelerate)?;
+            }
+        }
+        children.Remove(&old.content)?;
+        children.InsertAtTop(&old.content)?;
+        anim.scalar(
+            &old.content,
+            "Opacity",
+            0.0,
+            SLIDE_FADE_MS,
+            0,
+            &anim.decelerate,
+        )?;
+        self.fading = Some(old.content);
+        Ok(())
+    }
+
+    /// Shows the default languages' boxes afresh in the view as it is, when
+    /// they keep their height: the rest of the window isn't touched, so it
+    /// can't flicker. Returns whether it could.
+    pub(super) fn refresh_boxes(&mut self) -> Result<bool> {
+        let (layout, slack) = self.layout_languages()?;
+        let (s, c) = (self.scale, &self.anim.compositor);
+        let Some(view) = &mut self.view else {
+            return Ok(false);
+        };
+        let boxes = &view.boxes;
+        if layout.caret.is_some() != boxes.caret.is_some() {
+            return Ok(false);
+        }
+        boxes.text.show(&self.renderer, &layout, s, &self.theme)?;
+        if let (Some(m), Some(caret)) = (layout.caret, &boxes.caret) {
+            caret.SetOffset(v3((m.x * s).round(), (m.y * s).round()))?;
+            caret.SetSize(v2((m.width * s).round().max(1.0), (m.height * s).round()))?;
+            ui::blink(c, caret)?;
+        }
+        let (at, group_at) = (boxes.at, boxes.group_at);
+        view.hits.retain(|(hit, _)| !matches!(hit, Hit::Pick(_)));
+        let matches = self.picking.as_ref().map(|p| &p.matches);
+        for link in &layout.links {
+            let Target::Pick(code) = &link.target else {
+                continue;
+            };
+            let found = matches.and_then(|m| m.iter().position(|c| c == code));
+            if let Some(i) = found {
+                let rect = Rect {
+                    x: at.X + link.x * s,
+                    y: at.Y + link.y * s,
+                    w: link.width * s,
+                    h: link.height * s,
+                }
+                .offset(group_at);
+                view.hits.push((Hit::Pick(i), rect));
+            }
+        }
+        let moved = view.languages.slack != slack;
+        view.languages.slack = slack;
+        if moved {
+            self.show_slack(true)?;
+        }
+        Ok(true)
+    }
+
+    /// Shows the rows after the languages as far up as the list of matches
+    /// being short leaves them.
+    pub(super) fn show_slack(&self, animate: bool) -> Result<()> {
+        let Some(view) = &self.view else {
+            return Ok(());
+        };
+        let (spare, slack) = (&view.spare, view.languages.slack);
+        let shift = v3(0.0, -slack);
+        let size = v2(spare.size.X, spare.size.Y - slack);
+        let edge = v2(size.X - 1.0, size.Y - 1.0);
+        let anim = &self.anim;
+        if animate {
+            for part in [&spare.tail, &spare.below] {
+                anim.vector3(part, "Offset", shift, RESIZE_MS, 0, &anim.decelerate)?;
+            }
+            anim.vector2(&spare.bg, "Size", size, RESIZE_MS)?;
+            anim.vector2(&spare.clip, "Size", size, RESIZE_MS)?;
+            anim.vector2(&spare.border, "Size", edge, RESIZE_MS)?;
+        } else {
+            for part in [&spare.tail, &spare.below] {
+                Animator::stop(part, &["Offset"]);
+                part.SetOffset(shift)?;
+            }
+            Animator::stop(&spare.bg, &["Size"]);
+            spare.bg.SetSize(size)?;
+            Animator::stop(&spare.clip, &["Size"]);
+            spare.clip.SetSize(size)?;
+            Animator::stop(&spare.border, &["Size"]);
+            spare.border.SetSize(edge)?;
+        }
+        Ok(())
+    }
+
     /// Sizes the card to its content, as far as the `work` area allows.
     pub(super) fn fit(&mut self, work: RECT) -> Result<()> {
         let Some(view) = &self.view else {
@@ -52,6 +171,7 @@ impl Settings {
         let w = (CARD_W * s).round();
         let h = (view.header_h + view.height(self.open)).min(room).ceil();
         self.card = (w, h);
+        self.room = room;
         let m = (MARGIN * s).round();
         self.frame.resize(&self.anim, w, h, v3(m, m), s, false)?;
         view.body.SetSize(v2(w, h - view.header_h))?;
@@ -97,6 +217,7 @@ impl Settings {
         }
         self.show_open(false)?;
         self.show_recording()?;
+        self.show_slack(false)?;
         self.show_hover(self.hovered)?;
         self.ring_shown = false;
         self.show_focus(false)?;
@@ -185,15 +306,21 @@ impl Settings {
         let scroller = container(c, &body, v3(0.0, 0.0))?;
 
         let (group_x, group_w, row_h) = (px(GROUP_X), card_w - 2.0 * px(GROUP_X), px(ROW_H));
-        let languages_layout = self.layout_languages()?;
-        let translate_h =
-            px(TRANSLATE_HEAD) + (languages_layout.height * s).ceil() + px(TRANSLATE_FOOT);
+        let (languages_layout, slack) = self.layout_languages()?;
+        let translate_h = px(TRANSLATE_HEAD)
+            + (languages_layout.height * s).ceil()
+            + slack
+            + px(TRANSLATE_FOOT);
         let mut parts = Parts::default();
         let mut list = None;
         let mut y = 0.0;
+        // What the groups go in: after the languages row's, what slides up.
+        let mut parent = scroller.clone();
+        let mut spare = None;
+        let mut slack_y = 0.0;
         for (i, (name, rows)) in SECTIONS.iter().enumerate() {
             y += if i == 0 { px(2.0) } else { px(SECTION_GAP) };
-            let label = Text::new(c, &scroller)?;
+            let label = Text::new(c, &parent)?;
             let caps = r.layout_label(name, Ink::Accent, 300.0)?;
             let label_size = label.show(r, &caps, s, t)?;
             let at = v3(px(LABEL_X), y);
@@ -220,7 +347,7 @@ impl Settings {
             } else {
                 0.0
             };
-            let group = container(c, &scroller, group_at)?;
+            let group = container(c, &parent, group_at)?;
             let bounds = Rect {
                 w: group_w,
                 h: group_h,
@@ -235,8 +362,9 @@ impl Settings {
             clip.SetSize(bounds.size())?;
             clip.SetCornerRadius(v2(px(GROUP_RADIUS), px(GROUP_RADIUS)))?;
             group.SetClip(&c.CreateGeometricClipWithGeometry(&clip)?)?;
-            rounded(c, &group, open, 0.0, t.group())?;
+            let (bg, _) = rounded(c, &group, open, 0.0, t.group())?;
             let mut row_y = 0.0;
+            let mut tail: Option<ContainerVisual> = None;
             for (j, spec) in rows.iter().enumerate() {
                 let row = Rect {
                     x: 0.0,
@@ -246,7 +374,20 @@ impl Settings {
                 };
                 row_y += heights[j];
                 let divided = j > 0;
-                self.build_row(&mut parts, &group, group_at, spec, row, divided)?;
+                let host = tail.as_ref().unwrap_or(&group);
+                self.build_row(
+                    &mut parts,
+                    host,
+                    group_at,
+                    spec,
+                    row,
+                    divided,
+                    &languages_layout,
+                )?;
+                if matches!(spec.control, Control::Translate) {
+                    slack_y = group_at.Y + row.y + row.h;
+                    tail = Some(container(c, &group, v3(0.0, 0.0))?);
+                }
             }
             let built = match listed {
                 true => Some(self.build_list(&mut parts, &group, group_at, group_h, group_w)?),
@@ -254,6 +395,18 @@ impl Settings {
             };
             let (_, border) = outline(c, &group, open, px(GROUP_RADIUS), t.group_stroke())?;
             border.SetSize(v2(bounds.w - 1.0, bounds.h - 1.0))?;
+            if let Some(tail) = tail {
+                let below = container(c, &scroller, v3(0.0, 0.0))?;
+                parent = below.clone();
+                spare = Some(SpareView {
+                    tail,
+                    below,
+                    bg,
+                    clip: clip.clone(),
+                    border: border.clone(),
+                    size: bounds.size(),
+                });
+            }
             if let Some((visual, items)) = built {
                 let list_y = group_at.Y + group_h;
                 list = Some((
@@ -273,7 +426,7 @@ impl Settings {
         // The footer: a way to the file behind it all.
         y += px(FOOTER_GAP);
         let footer_at = v3(0.0, y);
-        let footer = container(c, &scroller, footer_at)?;
+        let footer = container(c, &parent, footer_at)?;
         let link = Text::new(c, &footer)?;
         let link_size = link.show(r, &r.layout_link(CONFIG_LINK)?, s, t)?;
         let link_at = Rect {
@@ -309,6 +462,8 @@ impl Settings {
             items,
             footer,
             footer_at,
+            slack,
+            slack_y,
         };
 
         // The ring around what the keyboard is on, gliding from stop to stop.
@@ -337,6 +492,7 @@ impl Settings {
         thumb.SetClip(&c.CreateGeometricClipWithGeometry(&thumb_clip)?)?;
         thumb.SetOpacity(0.0)?;
         content.Children()?.InsertAtTop(&thumb)?;
+        let tip = self.build_tip(&content)?;
 
         Ok(View {
             content,
@@ -349,6 +505,7 @@ impl Settings {
             divider,
             thumb,
             thumb_clip,
+            tip,
             reveal,
             shortcut: parts.shortcut.ok_or_else(missing)?,
             switches: parts
@@ -373,6 +530,8 @@ impl Settings {
                 .ok_or_else(missing)?,
             field: parts.field.ok_or_else(missing)?,
             translate_at: parts.translate.ok_or_else(missing)?,
+            spare: spare.ok_or_else(missing)?,
+            boxes: parts.boxes.ok_or_else(missing)?,
             hits: parts.hits,
             stops: parts.stops,
             ring,
@@ -497,6 +656,7 @@ impl Settings {
         spec: &Row,
         row: Rect,
         divided: bool,
+        languages: &Layout,
     ) -> Result<()> {
         let (c, r, t, s) = (
             &self.anim.compositor,
@@ -513,7 +673,7 @@ impl Settings {
             rounded(c, group, line, 0.0, t.separator())?;
         }
         if matches!(spec.control, Control::Translate) {
-            return self.build_translate(parts, group, group_at, spec, row);
+            return self.build_translate(parts, group, group_at, spec, row, languages);
         }
         // Rows that are clicked as a whole light up under the pointer.
         let hover = match spec.control {
@@ -694,8 +854,8 @@ impl Settings {
         group_at: Vector3,
         spec: &Row,
         row: Rect,
+        languages: &Layout,
     ) -> Result<()> {
-        let languages = &self.layout_languages()?;
         let (c, r, t, s) = (
             &self.anim.compositor,
             &self.renderer,
@@ -719,6 +879,29 @@ impl Settings {
         boxes.show(r, languages, s, t)?;
         let at = v3(px(ROW_PAD), row.y + px(TRANSLATE_HEAD));
         boxes.visual.SetOffset(at)?;
+        let mut blinker = None;
+        if let Some(m) = languages.caret {
+            let caret = rounded(
+                c,
+                &boxes.visual.cast::<ContainerVisual>()?,
+                Rect {
+                    x: (m.x * s).round(),
+                    y: (m.y * s).round(),
+                    w: (m.width * s).round().max(1.0),
+                    h: (m.height * s).round(),
+                },
+                0.0,
+                t.accent,
+            )?;
+            ui::blink(c, &caret.0)?;
+            blinker = Some(caret.0);
+        }
+        parts.boxes = Some(BoxesView {
+            text: boxes,
+            caret: blinker,
+            at,
+            group_at,
+        });
         let place = |rect: Rect| rect.offset(group_at);
         for link in &languages.links {
             let rect = place(Rect {
@@ -877,6 +1060,43 @@ impl Settings {
         Ok((ChoiceView { pill, labels, rest }, at, segments))
     }
 
+    /// The info tooltip, over everything and out of sight, in `parent`.
+    fn build_tip(&self, parent: &ContainerVisual) -> Result<TipView> {
+        let (c, r, t, s) = (
+            &self.anim.compositor,
+            &self.renderer,
+            &self.theme,
+            self.scale,
+        );
+        let px = |dip: f32| (dip * s).round();
+        let pad = px(TIP_PAD);
+        let layout = r.layout_line(EMAIL_TIP, Face::Small, Ink::Primary, TIP_W - 2.0 * TIP_PAD)?;
+        let text_size = v2((layout.width * s).ceil(), (layout.height * s).ceil());
+        let face = Rect {
+            w: text_size.X + 2.0 * pad,
+            h: text_size.Y + 2.0 * pad,
+            ..Rect::default()
+        };
+        let root = container(c, parent, v3(0.0, 0.0))?;
+        root.SetSize(face.size())?;
+        root.SetOpacity(0.0)?;
+        let radius = px(TIP_RADIUS);
+        let fill = if t.dark {
+            rgb(0x2C, 0x2C, 0x2C)
+        } else {
+            rgb(0xFA, 0xFA, 0xFA)
+        };
+        rounded(c, &root, face, radius, fill)?;
+        outline(c, &root, face, radius, t.border())?;
+        let text = Text::new(c, &root)?;
+        text.show(r, &layout, s, t)?;
+        text.visual.SetOffset(v3(pad, pad))?;
+        Ok(TipView {
+            root,
+            size: face.size(),
+        })
+    }
+
     /// A text field ending at `right` and centred on `middle`, in `group`.
     /// Returns it, with where its text goes in `group`, and its bounds.
     fn build_field(
@@ -917,12 +1137,19 @@ impl Settings {
         };
         rounded(c, &root, line, 0.0, t.strong_stroke())?;
         let thick = px(FIELD_LINE).max(1.0);
+        // The accent line runs along the bottom and up the corners with the
+        // outline, so that it doesn't stop short of it.
+        let accent = container(c, &root, v3(0.0, 0.0))?;
+        accent.SetSize(face.size())?;
+        let (corners, _) = outline(c, &accent, face, radius, t.accent)?;
+        corners.SetClip(&c.CreateInsetClipWithInsets(0.0, (h - radius).max(0.0), 0.0, 0.0)?)?;
         let line = Rect {
+            x: radius,
             y: h - thick,
+            w: w - 2.0 * radius,
             h: thick,
-            ..face
         };
-        let (accent, _) = rounded(c, &root, line, 0.0, t.accent)?;
+        rounded(c, &accent, line, 0.0, t.accent)?;
         accent.SetOpacity(0.0)?;
 
         let pad = px(FIELD_PAD);
@@ -1090,6 +1317,7 @@ struct Parts {
     field: Option<FieldView>,
     /// The languages row's hover and chevron.
     languages: Option<(SpriteVisual, SpriteVisual)>,
+    boxes: Option<BoxesView>,
     hits: Vec<(Hit, Rect)>,
     stops: Vec<(Stop, Rect, f32)>,
 }

@@ -167,6 +167,24 @@ pub fn text_sprite(c: &Compositor) -> Result<(SpriteVisual, CompositionSurfaceBr
     Ok((sprite, brush))
 }
 
+/// How long a caret takes to blink once.
+pub const BLINK_MS: u64 = 1060;
+
+/// Makes `caret` blink: solid for the first half of each cycle, hidden for
+/// the rest, starting solid now.
+pub fn blink(c: &Compositor, caret: &SpriteVisual) -> Result<()> {
+    let a = c.CreateScalarKeyFrameAnimation()?;
+    a.InsertKeyFrame(0.0, 1.0)?;
+    a.InsertKeyFrame(0.49, 1.0)?;
+    a.InsertKeyFrame(0.5, 0.0)?;
+    a.InsertKeyFrame(0.99, 0.0)?;
+    a.InsertKeyFrame(1.0, 1.0)?;
+    a.SetDuration(ts(BLINK_MS))?;
+    a.SetIterationBehavior(AnimationIterationBehavior::Forever)?;
+    caret.SetOpacity(1.0)?;
+    caret.StartAnimation(&HSTRING::from("Opacity"), &a)
+}
+
 /// A line of text and the brush that shows it.
 pub struct Text {
     pub visual: SpriteVisual,

@@ -11,9 +11,11 @@
 
 mod view;
 
+use std::time::Instant;
+
 use windows::core::{Result, HSTRING};
 use windows::Win32::Foundation::*;
-use windows::Win32::UI::Controls::TTM_SETMAXTIPWIDTH;
+use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
@@ -29,7 +31,9 @@ use crate::popup;
 use crate::render::{Align, Face, Ink, Layout, Picker, Renderer, Side, Target, PICKER_ROWS};
 use crate::selection;
 use crate::theme::Theme;
-use crate::ui::{self, scale, ts, v2, v3, Animator, Frame, Text, MARGIN};
+use crate::ui::{
+    self, cubic_bezier, scale, ts, v2, v3, Animator, Frame, Text, MARGIN, SCROLL_EASE,
+};
 use crate::win::Window;
 
 // Geometry, in DIPs.
@@ -57,7 +61,7 @@ const FOOTER_GAP: f32 = 16.0;
 const PAD_BOTTOM: f32 = 18.0;
 const SCREEN_GAP: f32 = 16.0;
 /// The tallest the card grows before it scrolls.
-const MAX_CARD_H: f32 = 520.0;
+const MAX_CARD_H: f32 = 580.0;
 const SWITCH_W: f32 = 40.0;
 const SWITCH_H: f32 = 20.0;
 const KNOB: f32 = 12.0;
@@ -86,6 +90,12 @@ const INFO_GAP: f32 = 6.0;
 const INFO_W: f32 = 16.0;
 /// How wide the info tooltip grows before wrapping.
 const TIP_W: f32 = 300.0;
+const TIP_PAD: f32 = 10.0;
+const TIP_RADIUS: f32 = 6.0;
+/// Between the info symbol and its tooltip.
+const TIP_GAP: f32 = 6.0;
+/// How far the tooltip rises from as it appears.
+const TIP_DRIFT: f32 = 4.0;
 /// The default languages' row: the room for its name and description above
 /// the boxes, and under them.
 const TRANSLATE_PAD: f32 = 12.0;
@@ -140,14 +150,19 @@ const DETAIL_MS: u64 = 200;
 const FOCUS_MS: u64 = 200;
 const PRESS_MS: u64 = 90;
 const SCROLL_MS: u64 = 180;
+/// The pointer rests on the info symbol this long before its tooltip shows.
+const TIP_DELAY_MS: u64 = 400;
+const TIP_MS: u64 = 160;
+const TIP_HIDE_MS: u64 = 100;
 const THEME_MS: u64 = 300;
+/// How long the old view takes to fade away as the languages change.
+const SLIDE_FADE_MS: u64 = 180;
 /// As long as the card takes to grow or shrink.
 const EXPAND_MS: u64 = ui::RESIZE_MS;
 /// Once the card has shrunk, the window does.
 const SETTLE_MS: u32 = ui::RESIZE_MS as u32 + 60;
 const TIMER_SETTLE: usize = 1;
 const BREATHE_MS: u64 = 1600;
-const CARET_BLINK_MS: u64 = 1060;
 
 // Segoe Fluent Icons and Segoe MDL2 Assets.
 const CLOSE_GLYPH: &str = "\u{E8BB}";
@@ -172,8 +187,6 @@ const EMAIL_TIP: &str = "MyMemory, the translator used when Google Translate can
     It\u{2019}s sent only to MyMemory, with the words translated.";
 /// The longest an email address can be.
 const MAX_EMAIL_CHARS: usize = 254;
-/// The info tooltip, among the window's tooltips.
-const TOOL_INFO: usize = 1;
 
 /// What the settings window shows: the settings, and whether WinDict
 /// starts with Windows, which is kept in the registry instead.
@@ -603,12 +616,18 @@ struct LanguageView {
     status_middle: f32,
 }
 
+/// The info tooltip.
+struct TipView {
+    root: ContainerVisual,
+    size: Vector2,
+}
+
 /// The email field.
 struct FieldView {
     /// Lightens the field under the pointer.
     hover: SpriteVisual,
     /// The accent line along the bottom, shown while typing.
-    accent: SpriteVisual,
+    accent: ContainerVisual,
     /// What's typed, scrolling inside the field to keep the caret in view.
     text: Text,
     caret: SpriteVisual,
@@ -639,6 +658,10 @@ struct LanguagesView {
     /// rests with the list shut.
     footer: ContainerVisual,
     footer_at: Vector3,
+    /// How much shorter the languages row is than with the list full, and
+    /// where, with it full, what it moves up starts.
+    slack: f32,
+    slack_y: f32,
 }
 
 impl LanguagesView {
@@ -646,14 +669,17 @@ impl LanguagesView {
     /// `open` says, or nothing if it's in the `listed` and that's shut.
     /// What's in the list is where it is with the list open.
     fn place(&self, rect: Rect, listed: bool, open: bool) -> Option<Rect> {
-        match (listed, open) {
-            (true, false) => None,
-            (false, true) if rect.y >= self.list_y => Some(Rect {
-                y: rect.y + self.list_h,
-                ..rect
-            }),
-            _ => Some(rect),
+        if listed && !open {
+            return None;
         }
+        let mut y = rect.y;
+        if !listed && open && rect.y >= self.list_y {
+            y += self.list_h;
+        }
+        if rect.y >= self.slack_y {
+            y -= self.slack;
+        }
+        Some(Rect { y, ..rect })
     }
 }
 
@@ -671,6 +697,7 @@ struct View {
     divider: SpriteVisual,
     thumb: SpriteVisual,
     thumb_clip: CompositionRoundedRectangleGeometry,
+    tip: TipView,
     /// What rises in as the window opens, and where each rests.
     reveal: Vec<(Visual, Vector3)>,
     shortcut: ShortcutView,
@@ -683,6 +710,9 @@ struct View {
     counters: Vec<CounterView>,
     /// The default languages' row, in the scroller.
     translate_at: Rect,
+    spare: SpareView,
+    /// The boxes of the default languages, to draw again in place.
+    boxes: BoxesView,
     /// Where things can be clicked, in the scroller.
     hits: Vec<(Hit, Rect)>,
     /// Where Tab stops, and the corner radius of the ring there, in the scroller.
@@ -695,7 +725,7 @@ struct View {
 impl View {
     /// The height of everything below the header with the list as `open` says.
     fn height(&self, open: bool) -> f32 {
-        self.content_h + if open { self.languages.list_h } else { 0.0 }
+        self.content_h + if open { self.languages.list_h } else { 0.0 } - self.languages.slack
     }
 
     /// Where things can be clicked, with the list as `open` says.
@@ -713,6 +743,28 @@ impl View {
             Some((stop, self.languages.place(rect, listed, open)?, radius))
         })
     }
+}
+
+/// The default languages' boxes in the view, and where they sit.
+struct BoxesView {
+    text: Text,
+    caret: Option<SpriteVisual>,
+    /// In the group, and the group in the scroller.
+    at: Vector3,
+    group_at: Vector3,
+}
+
+/// What slides up as the list of matches gets shorter: the rows after the
+/// languages in their group, the groups after it, and the group's own
+/// background and outline.
+struct SpareView {
+    tail: ContainerVisual,
+    below: ContainerVisual,
+    bg: SpriteVisual,
+    clip: CompositionRoundedRectangleGeometry,
+    border: CompositionRoundedRectangleGeometry,
+    /// The group's size with the list full.
+    size: Vector2,
 }
 
 pub struct Settings {
@@ -758,10 +810,14 @@ pub struct Settings {
     email_shift: f32,
     /// Whether the window is the active one, for the caret to show.
     active: bool,
-    tooltip: Option<HWND>,
     scroll: f32,
+    /// Where the running scroll started, and when.
+    scroll_anim: Option<(f32, Instant)>,
     pub visible: bool,
     /// Last, so it goes after everything shown on it.
+    /// The tallest the card gets, in pixels. The window is made for that,
+    /// so that it never resizes under the blurred background.
+    room: f32,
     _window: Window,
 }
 
@@ -808,9 +864,10 @@ impl Settings {
             email,
             email_shift: 0.0,
             active: true,
-            tooltip: popup::create_tooltip(hwnd, EMAIL_TIP, TOOL_INFO),
             scroll: 0.0,
+            scroll_anim: None,
             visible: false,
+            room: 0.0,
             _window: window,
         })
     }
@@ -825,15 +882,12 @@ impl Settings {
         (self.theme, self.scale, self.values) = (theme, s, values);
         (self.hovered, self.pressed, self.focus) = (None, None, None);
         (self.ring, self.recording, self.scroll) = (false, false, 0.0);
+        self.scroll_anim = None;
         self.notes = NOTES.map(|note| (note.usual(&self.values), false));
         (self.open, self.picking) = (false, None);
         self.downloads.fill(None);
         self.email = LineEdit::new(&self.values.config.mymemory_email, MAX_EMAIL_CHARS);
         (self.email_shift, self.active) = (0.0, true);
-        if let Some(tooltip) = self.tooltip {
-            let w = (TIP_W * s).round() as isize;
-            unsafe { SendMessageW(tooltip, TTM_SETMAXTIPWIDTH, None, Some(LPARAM(w))) };
-        }
         unsafe {
             let _ = KillTimer(Some(self.hwnd), TIMER_SETTLE);
         }
@@ -842,12 +896,14 @@ impl Settings {
         self.fit(work)?;
 
         let m = (MARGIN * s).round();
-        let (w, h) = (
-            (self.card.0 + 2.0 * m) as i32,
-            (self.card.1 + 2.0 * m) as i32,
-        );
+        let gap = (SCREEN_GAP * s).round();
+        let w = (self.card.0 + 2.0 * m) as i32;
+        let h = (self.room + 2.0 * m) as i32;
         let left = (work.left + work.right - w) / 2;
-        let top = (work.top + work.bottom - h) / 2;
+        let centred = (work.top + work.bottom - (self.card.1 + 2.0 * m) as i32) / 2;
+        let top = centred
+            .min(work.bottom - gap as i32 - h + m as i32)
+            .max(work.top + gap as i32 - m as i32);
 
         // Rises out of the middle, a little small and low.
         let root = &self.root;
@@ -863,6 +919,7 @@ impl Settings {
         unsafe {
             let _ = SetWindowPos(self.hwnd, Some(HWND_TOP), left, top, w, h, SWP_SHOWWINDOW);
         }
+        self.set_region(self.card.1);
         self.visible = true;
 
         self.anim.fade_in(root, FADE_IN_MS, SHOW_MS)?;
@@ -919,7 +976,6 @@ impl Settings {
     /// The pointer moved to a point in window pixels, or left.
     pub fn hover(&mut self, point: Option<(i32, i32)>) -> Result<()> {
         let hit = point.and_then(|(x, y)| self.hit_at(x, y));
-        self.sync_tooltip();
         self.set_hovered(hit)
     }
 
@@ -937,6 +993,17 @@ impl Settings {
         }
         if hit == Some(Hit::Email) {
             self.place_caret(x)?;
+        }
+        // A click away from the open box shuts its list.
+        let away = !matches!(
+            hit,
+            Some(Hit::Select(_) | Hit::Pick(_) | Hit::Swap)
+        );
+        if away {
+            if let Some(side) = self.picking.take().map(|p| p.side) {
+                self.focus = hit.and_then(Hit::stop).or(Some(Stop::Select(side)));
+                self.relayout()?;
+            }
         }
         self.show_focus(false)?;
         self.set_pressed(hit)?;
@@ -1140,18 +1207,7 @@ impl Settings {
         };
         view.body
             .SetSize(v2(self.card.0, self.card.1 - view.header_h))?;
-        let m = (MARGIN * self.scale).round();
-        unsafe {
-            let _ = SetWindowPos(
-                self.hwnd,
-                None,
-                0,
-                0,
-                (self.card.0 + 2.0 * m) as i32,
-                (self.card.1 + 2.0 * m) as i32,
-                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-            );
-        }
+        self.set_region(self.card.1);
         Ok(())
     }
 
@@ -1193,6 +1249,7 @@ impl Settings {
         }
         let scroll = self.scroll / self.scale * s;
         (self.scale, self.scroll) = (s, 0.0);
+        self.scroll_anim = None;
         self.frame.apply_theme(&self.renderer, &self.theme, s)?;
         self.replace_view(false)?;
         let centre = POINT {
@@ -1209,10 +1266,11 @@ impl Settings {
                 suggested.left,
                 suggested.top,
                 (self.card.0 + 2.0 * m) as i32,
-                (self.card.1 + 2.0 * m) as i32,
+                (self.room + 2.0 * m) as i32,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
+        self.set_region(self.card.1);
         let center = Vector3 {
             X: m + self.card.0 / 2.0,
             Y: m + self.card.1 / 2.0,
@@ -1306,7 +1364,10 @@ impl Settings {
 
     /// The boxes of the default languages, with the list under the one
     /// being picked.
-    fn layout_languages(&self) -> Result<Layout> {
+    /// Returns them with how much shorter they are than with the list
+    /// full, in pixels: the view is built for the full list, and what comes
+    /// after slides up by that much.
+    fn layout_languages(&self) -> Result<(Layout, f32)> {
         let picker = self.picking.as_ref().map(|p| Picker {
             side: p.side,
             query: p.query.text(),
@@ -1318,14 +1379,22 @@ impl Settings {
         let width = GROUP_W - 2.0 * ROW_PAD;
         let config = &self.values.config;
         let (from, to) = (&config.translate_from, &config.translate_to);
-        self.renderer
-            .layout_languages(from, to, picker.as_ref(), width)
+        let layout = self
+            .renderer
+            .layout_languages(from, to, picker.as_ref(), width)?;
+        let spare = picker.as_ref().map_or(0.0, Picker::spare);
+        let s = self.scale;
+        let slack = ((layout.height + spare) * s).ceil() - (layout.height * s).ceil();
+        Ok((layout, slack))
     }
 
     /// Builds the window's view again, for what the default languages show
     /// to have changed, which can change the height of the row too.
     fn relayout(&mut self) -> Result<()> {
-        self.replace_view(false)?;
+        if self.refresh_boxes()? {
+            return self.refit();
+        }
+        self.slide_view()?;
         self.refit()
     }
 
@@ -1563,6 +1632,19 @@ impl Settings {
         self.show_focus(true)
     }
 
+    /// Limits the window's clickable area to the top `card_h` pixels of the
+    /// card, and its shadow, so the transparent rest swallows no clicks.
+    fn set_region(&self, card_h: f32) {
+        let m = (MARGIN * self.scale).round();
+        let (w, h) = (self.card.0 + 2.0 * m, card_h + 2.0 * m);
+        unsafe {
+            let region = CreateRectRgn(0, 0, w as i32, h.ceil() as i32);
+            if SetWindowRgn(self.hwnd, Some(region), self.visible) == 0 {
+                let _ = DeleteObject(region.into());
+            }
+        }
+    }
+
     /// Sizes the card to what's in it now, gliding there. A window that
     /// grows does at once, moving up if it has to to stay on the screen;
     /// one that shrinks waits for the card to ([`Settings::settle`]).
@@ -1571,15 +1653,7 @@ impl Settings {
             return Ok(());
         };
         let s = self.scale;
-        let mut window = RECT::default();
-        unsafe { GetWindowRect(self.hwnd, &mut window)? };
-        let (work, _) = ui::monitor_at(POINT {
-            x: (window.left + window.right) / 2,
-            y: (window.top + window.bottom) / 2,
-        });
-        let gap = (SCREEN_GAP * s).round();
-        let room = ((work.bottom - work.top) as f32 - 2.0 * gap).min((MAX_CARD_H * s).round());
-        let h = (view.header_h + view.height(self.open)).min(room).ceil();
+        let h = (view.header_h + view.height(self.open)).min(self.room).ceil();
         let old = self.card.1;
         if h == old {
             return Ok(());
@@ -1595,34 +1669,12 @@ impl Settings {
         })?;
         if h > old {
             view.body.SetSize(v2(self.card.0, h - view.header_h))?;
-            let window_h = (h + 2.0 * m) as i32;
-            let lowest = work.bottom - gap as i32 - (h + m) as i32;
-            let top = window.top.min(lowest).max(work.top + gap as i32 - m as i32);
-            unsafe {
-                let _ = KillTimer(Some(self.hwnd), TIMER_SETTLE);
-                let _ = SetWindowPos(
-                    self.hwnd,
-                    None,
-                    window.left,
-                    top,
-                    window.right - window.left,
-                    window_h,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-            }
-            // Moved up: the card stays put on the screen, and glides up.
-            let up = (window.top - top) as f32;
-            if up > 0.0 {
-                let anim = &self.anim;
-                Animator::stop(&self.root, &["Offset"]);
-                self.root.SetOffset(v3(0.0, up))?;
-                let rest = v3(0.0, 0.0);
-                anim.vector3(&self.root, "Offset", rest, EXPAND_MS, 0, &anim.decelerate)?;
-            }
-        } else {
-            unsafe {
-                SetTimer(Some(self.hwnd), TIMER_SETTLE, SETTLE_MS, None);
-            }
+        }
+        // The window is already as tall as the card gets: only what is
+        // clickable follows, once a smaller card has finished shrinking.
+        self.set_region(old.max(h));
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_SETTLE, SETTLE_MS, None);
         }
         let scroll = self.scroll.min(self.max_scroll());
         self.scroll_to(scroll)?;
@@ -1790,6 +1842,9 @@ impl Settings {
             return Ok(());
         }
         let old = std::mem::replace(&mut self.hovered, hit);
+        if old == Some(Hit::Info) || hit == Some(Hit::Info) {
+            self.show_tip(hit == Some(Hit::Info))?;
+        }
         self.show_hover(old)?;
         self.show_hover(hit)?;
         // Over the list of languages, the highlight moves along.
@@ -1852,24 +1907,50 @@ impl Settings {
         )
     }
 
+    /// The scroll position on screen right now, following the running
+    /// animation.
+    fn visible_scroll(&self) -> f32 {
+        let Some((from, started)) = self.scroll_anim else {
+            return self.scroll;
+        };
+        let t = started.elapsed().as_secs_f32() * 1000.0 / SCROLL_MS as f32;
+        if t >= 1.0 {
+            return self.scroll;
+        }
+        from + (self.scroll - from) * cubic_bezier(SCROLL_EASE, t)
+    }
+
+    /// Scrolls to `to`, starting from where the content is on screen now,
+    /// not from the last target, which would lag behind the wheel.
     fn scroll_to(&mut self, to: f32) -> Result<()> {
         let to = to.clamp(0.0, self.max_scroll()).round();
         if to == self.scroll {
             return Ok(());
         }
+        let from = self.visible_scroll();
         self.scroll = to;
+        self.scroll_anim = Some((from, Instant::now()));
+        self.show_tip(false)?;
         if let Some(view) = &self.view {
-            let (anim, rest) = (&self.anim, v3(0.0, -to));
-            anim.vector3(
-                &view.scroller,
-                "Offset",
-                rest,
-                SCROLL_MS,
-                0,
-                &anim.decelerate,
-            )?;
+            self.glide(&view.scroller, v3(0.0, -from), v3(0.0, -to))?;
         }
         self.show_scroll(true)
+    }
+
+    /// Moves `visual` from `from` to `to` the way scrolling does.
+    fn glide(
+        &self,
+        visual: &impl windows::core::Interface,
+        from: Vector3,
+        to: Vector3,
+    ) -> Result<()> {
+        let a = self.anim.compositor.CreateVector3KeyFrameAnimation()?;
+        a.InsertKeyFrame(0.0, from)?;
+        a.InsertKeyFrameWithEasingFunction(1.0, to, &self.anim.scroll_ease)?;
+        a.SetDuration(ts(SCROLL_MS))?;
+        visual
+            .cast::<CompositionObject>()?
+            .StartAnimation(&HSTRING::from("Offset"), &a)
     }
 
     /// Scrolls just enough to show `rect`, in the scroller.
@@ -1907,7 +1988,13 @@ impl Settings {
         let (top, thumb) = ui::thumb_span(viewport, content_h, self.scroll, max, s);
         let x = ui::size_thumb(&view.thumb, &view.thumb_clip, self.card.0, thumb, s)?;
         let to = v3(x, view.header_h + top);
-        if animate {
+        let started = self
+            .scroll_anim
+            .filter(|(_, at)| at.elapsed().as_millis() < SCROLL_MS as u128);
+        if let (true, Some((from, _))) = (animate, started) {
+            let (from_top, _) = ui::thumb_span(viewport, content_h, from, max, s);
+            self.glide(&view.thumb, v3(x, view.header_h + from_top), to)?;
+        } else if animate {
             anim.vector3(&view.thumb, "Offset", to, SCROLL_MS, 0, &anim.decelerate)?;
         } else {
             Animator::stop(&view.thumb, &["Offset"]);
@@ -2213,38 +2300,60 @@ impl Settings {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let a = self.anim.compositor.CreateScalarKeyFrameAnimation()?;
-        a.InsertKeyFrame(0.0, 1.0)?;
-        a.InsertKeyFrame(0.49, 1.0)?;
-        a.InsertKeyFrame(0.5, 0.0)?;
-        a.InsertKeyFrame(0.99, 0.0)?;
-        a.InsertKeyFrame(1.0, 1.0)?;
-        a.SetDuration(ts(CARET_BLINK_MS))?;
-        a.SetIterationBehavior(AnimationIterationBehavior::Forever)?;
-        let caret = &view.field.caret;
-        caret.SetOpacity(1.0)?;
-        caret.StartAnimation(&HSTRING::from("Opacity"), &a)
+        ui::blink(&self.anim.compositor, &view.field.caret)
     }
 
-    /// Keeps the info tooltip over the info symbol, wherever it's scrolled
-    /// to, and away while that's under the header.
-    fn sync_tooltip(&self) {
-        let (Some(tooltip), Some(view)) = (self.tooltip, &self.view) else {
-            return;
+    /// Shows the info tooltip under the info symbol, rising in a moment
+    /// after the pointer settles on it, or sends it away.
+    fn show_tip(&self, on: bool) -> Result<()> {
+        let Some(view) = &self.view else {
+            return Ok(());
         };
-        let m = (MARGIN * self.scale).round();
-        let rect = view
+        let (anim, tip, s) = (&self.anim, &view.tip, self.scale);
+        Animator::stop(&tip.root, &["Opacity", "Offset"]);
+        let info = view
             .hits(self.open)
             .find(|(hit, _)| *hit == Hit::Info)
-            .map(|(_, r)| r.offset(v3(m, m + view.header_h - self.scroll)))
-            .filter(|r| r.y >= m + view.header_h)
-            .map_or(RECT::default(), |r| RECT {
-                left: r.x as i32,
-                top: r.y as i32,
-                right: (r.x + r.w) as i32,
-                bottom: (r.y + r.h) as i32,
-            });
-        popup::set_tooltip_rect(tooltip, self.hwnd, TOOL_INFO, rect);
+            .map(|(_, rect)| rect)
+            // Not while the symbol is under the header.
+            .filter(|rect| rect.y >= self.scroll);
+        let (true, Some(info)) = (on, info) else {
+            return anim.scalar(&tip.root, "Opacity", 0.0, TIP_HIDE_MS, 0, &anim.accelerate);
+        };
+        let (w, h) = (tip.size.X, tip.size.Y);
+        let gap = (TIP_GAP * s).round();
+        let margin = (GROUP_X * s).round();
+        let top = view.header_h + info.y - self.scroll;
+        let below = top + info.h + gap;
+        let y = if below + h <= self.card.1 - margin {
+            below
+        } else {
+            top - gap - h
+        };
+        let x = (info.x + (info.w - w) / 2.0)
+            .min(self.card.0 - margin - w)
+            .max(margin);
+        let rest = v3(x, y);
+        let drift = (TIP_DRIFT * s).round();
+        if tip.root.Opacity()? < 0.05 {
+            tip.root.SetOffset(v3(x, y + drift))?;
+        }
+        anim.scalar(
+            &tip.root,
+            "Opacity",
+            1.0,
+            TIP_MS,
+            TIP_DELAY_MS,
+            &anim.decelerate,
+        )?;
+        anim.vector3(
+            &tip.root,
+            "Offset",
+            rest,
+            TIP_MS,
+            TIP_DELAY_MS,
+            &anim.decelerate,
+        )
     }
 
     /// Fills the boxes of the languages used, and empties the others'.

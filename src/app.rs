@@ -1432,6 +1432,7 @@ impl App {
             state,
             picker,
         };
+        popup.hold_region(t.picking.is_some());
         let _ = popup.set_back(true);
         let _ = popup.set_translate(false);
         let body = Body::Translation(card);
@@ -1854,6 +1855,12 @@ impl App {
         }
         if let Some(target) = self.popup.as_ref().and_then(|p| p.link_at(x, y)).cloned() {
             self.open_link(target);
+        } else if self.picking().is_some() {
+            // A click away from the list shuts it.
+            if let Some(t) = self.translating.as_mut() {
+                t.picking = None;
+            }
+            self.show_translation(Transition::Refine, None);
         }
     }
 
