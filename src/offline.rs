@@ -867,7 +867,8 @@ fn spellings(word: &str) -> Vec<String> {
 }
 
 /// "a domesticated canid" → "A domesticated canid."
-fn sentence(text: &str) -> String {
+/// A definition as a sentence: capitalised, with a full stop.
+pub fn sentence(text: &str) -> String {
     let mut chars = text.chars();
     let mut out: String = match chars.next() {
         Some(c) => c.to_uppercase().chain(chars).collect(),

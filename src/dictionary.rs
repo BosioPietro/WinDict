@@ -95,6 +95,8 @@ impl Detail {
 }
 
 pub const WIKTIONARY: &str = "Wiktionary";
+/// The Italian Wiktionary, as the Italian dictionary also credits it.
+pub const WIKIZIONARIO: &str = "Wikizionario";
 
 #[derive(Clone, Debug)]
 pub struct Meaning {
@@ -187,8 +189,10 @@ fn fill(local: &mut Definition, online: &Definition) {
             used = true;
         }
     }
-    if used && !local.sources.contains(&WIKTIONARY) {
-        local.sources.push(WIKTIONARY);
+    for &source in online.sources.iter().filter(|_| used) {
+        if !local.sources.contains(&source) {
+            local.sources.push(source);
+        }
     }
 }
 
@@ -197,6 +201,10 @@ pub fn source_url(source: &str, word: &str) -> Option<String> {
     match source {
         WIKTIONARY => Some(format!(
             "https://en.wiktionary.org/wiki/{}",
+            percent_encode(&word.replace(' ', "_"))
+        )),
+        WIKIZIONARIO => Some(format!(
+            "https://it.wiktionary.org/wiki/{}",
             percent_encode(&word.replace(' ', "_"))
         )),
         _ => crate::offline::link(source, word),
@@ -355,6 +363,10 @@ mod tests {
         assert_eq!(
             source_url(WORDNET, "ice cream").as_deref(),
             Some("https://en-word.net/lemma/ice%20cream")
+        );
+        assert_eq!(
+            source_url(WIKIZIONARIO, "a priori").as_deref(),
+            Some("https://it.wiktionary.org/wiki/a_priori")
         );
         assert_eq!(source_url("Elsewhere", "x"), None);
     }

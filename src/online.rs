@@ -1,6 +1,6 @@
 //! The online dictionaries: the Free Dictionary API
 //! (https://dictionaryapi.dev, built from Wiktionary), with Wiktionary's own
-//! API as a fallback.
+//! API as a fallback, and for Italian, Wikizionario (`wikizionario`).
 
 use std::sync::mpsc;
 use std::thread;
@@ -12,21 +12,27 @@ use crate::dictionary::{
     self, percent_encode, Definition, Detail, Lookup, Meaning, Sense, MAX_ANTONYMS, WIKTIONARY,
 };
 use crate::http;
+use crate::wikizionario;
 
-/// How long the Free Dictionary API gets to answer alone before Wiktionary
-/// is asked too.
+/// How long the first source for a language gets to answer alone before
+/// the second is asked too.
 const FALLBACK_DELAY: Duration = Duration::from_millis(500);
 
 /// Asks the Free Dictionary API first. If it hasn't produced a definition
 /// within `FALLBACK_DELAY` (or fails or has no entry sooner), Wiktionary is
 /// asked as well, and the first definition to arrive wins. The Free
 /// Dictionary API is built from Wiktionary, so once Wiktionary has no entry
-/// the word isn't waited on any longer. The Free Dictionary API only has
-/// English: the other `languages` are only looked for in Wiktionary, all
-/// at once, while English is.
+/// the word isn't waited on any longer. Italian is the same with
+/// Wikizionario's extract and its pages. The other `languages` are only
+/// looked for in English Wiktionary, all at once, while those two are.
 pub fn lookup(word: &str, detail: Detail, languages: &[String]) -> Lookup {
-    let others: Vec<String> = languages.iter().filter(|l| *l != "en").cloned().collect();
-    let english = languages.iter().any(|l| l == "en").then(|| {
+    let others: Vec<String> = languages
+        .iter()
+        .filter(|l| *l != "en" && *l != "it")
+        .cloned()
+        .collect();
+    let has = |language: &str| languages.iter().any(|l| l == language);
+    let english = has("en").then(|| {
         let (w1, w2) = (word.to_string(), word.to_string());
         thread::spawn(move || {
             race(
@@ -36,12 +42,22 @@ pub fn lookup(word: &str, detail: Detail, languages: &[String]) -> Lookup {
             )
         })
     });
+    let italian = has("it").then(|| {
+        let (w1, w2) = (word.to_string(), word.to_string());
+        thread::spawn(move || {
+            race(
+                move || wikizionario::lookup_extract(&w1, detail.senses, detail.synonyms),
+                move || wikizionario::lookup_page(&w2, detail.senses, detail.synonyms),
+                FALLBACK_DELAY,
+            )
+        })
+    });
     let mut results = Vec::new();
     if !others.is_empty() {
         results.push(lookup_wiktionary(word, detail.senses, &others));
     }
-    if let Some(english) = english {
-        results.push(english.join().unwrap_or(Lookup::NotFound));
+    for language in [italian, english].into_iter().flatten() {
+        results.push(language.join().unwrap_or(Lookup::NotFound));
     }
     match together(results, languages) {
         Lookup::Found(def) => Lookup::Found(detail.apply(Definition {
@@ -158,7 +174,7 @@ fn lookup_wiktionary(word: &str, max_senses: usize, languages: &[String]) -> Loo
 }
 
 /// GETs `path` and parses a successful response with `parse`.
-fn fetch(host: &str, path: &str, parse: impl FnOnce(&[u8]) -> Option<Definition>) -> Lookup {
+pub fn fetch(host: &str, path: &str, parse: impl FnOnce(&[u8]) -> Option<Definition>) -> Lookup {
     match http::get(host, path) {
         Ok((200, body)) => parse(&body).map_or(Lookup::NotFound, Lookup::Found),
         Ok((404, _)) => Lookup::NotFound,
@@ -263,7 +279,7 @@ fn parse_wiktionary(
 
 /// Removes tags from the HTML snippets Wiktionary returns and decodes the
 /// few entities that show up in them.
-fn strip_html(html: &str) -> String {
+pub fn strip_html(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut in_tag = false;
     for c in html.chars() {

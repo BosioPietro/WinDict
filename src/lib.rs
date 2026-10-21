@@ -9,7 +9,8 @@
 //!   settings, and the window procedures that feed them.
 //! - `selection`: reads the selected text (UI Automation, else the clipboard).
 //! - `dictionary`: entries as the card shows them; `offline` (the bundled
-//!   WordNet) and `online` (Free Dictionary API, Wiktionary over `http`) fill them.
+//!   WordNet) and `online` (Free Dictionary API, Wiktionary, and
+//!   `wikizionario` for Italian, over `http`) fill them.
 //! - `popup` (the card, with `searchbox`), `menu` and `settings`: the windows,
 //!   each a composition visual tree built from `ui`, drawn by `render` in
 //!   the colors of `theme`.
@@ -35,6 +36,7 @@ mod settings;
 mod theme;
 mod tray;
 mod ui;
+mod wikizionario;
 mod win;
 
 use windows::core::w;

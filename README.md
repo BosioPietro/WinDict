@@ -135,7 +135,8 @@ Definitions from [Open English WordNet](https://en-word.net/) (CC BY 4.0,
 derived from Princeton WordNet; see `data/LICENSE-WordNet.txt`) and
 [Wiktionary](https://www.wiktionary.org/), via
 [dictionaryapi.dev](https://dictionaryapi.dev) with a direct Wiktionary
-fallback. The Italian dictionary is built from
+fallback. The Italian dictionary, and Italian lookups online, are from
 [Wikizionario](https://it.wiktionary.org/) through
-[wiktextract](https://kaikki.org/itwiktionary/) (CC BY-SA 4.0; see
+[wiktextract](https://kaikki.org/itwiktionary/), with Wikizionario's own
+API as a fallback (CC BY-SA 4.0; see
 `data/LICENSE-Wiktionary.txt`). WinDict is MIT licensed.
