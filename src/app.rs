@@ -143,6 +143,8 @@ thread_local! {
     static MSG_HWND: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) };
     // When the card last appeared (win::now_ms), read by the focus hook.
     static SHOWN_AT: Cell<u64> = const { Cell::new(0) };
+    // Where the pointer last moved over the card, on screen (GetMessagePos).
+    static POINTER_AT: Cell<Option<u32>> = const { Cell::new(None) };
 }
 
 struct Captured {

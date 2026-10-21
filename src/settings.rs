@@ -159,8 +159,7 @@ const EMAIL_PLACEHOLDER: &str = "name@example.com";
 /// Over the info symbol by the email field.
 const EMAIL_TIP: &str = "MyMemory, the translator used when Google Translate can\u{2019}t \
     be reached, allows 5,000 characters a day, or 50,000 with an email address. \
-    It\u{2019}s sent only to MyMemory, with the words translated, and never to \
-    WinDict\u{2019}s developer.";
+    It\u{2019}s sent only to MyMemory, with the words translated.";
 /// The longest an email address can be.
 const MAX_EMAIL_CHARS: usize = 254;
 /// The info tooltip, among the window's tooltips.

@@ -1,6 +1,7 @@
 //! Quick translation of the word on the card: Google Translate's dictionary
-//! (the keyless `gtx` endpoint), which groups the translations by part of
-//! speech, with MyMemory (https://mymemory.translated.net) as a fallback,
+//! (the endpoint translate.google.com asks), which groups the translations
+//! by part of speech, then the older keyless `gtx` endpoint should that
+//! fail, and MyMemory (https://mymemory.translated.net) as a last fallback,
 //! asked with the word's first definition for context.
 
 use serde::Deserialize;
@@ -10,6 +11,9 @@ use crate::dictionary::percent_encode;
 use crate::http;
 
 const GOOGLE_HOST: &str = "translate.googleapis.com";
+const GOOGLE_WEB_HOST: &str = "translate-pa.googleapis.com";
+/// The key translate.google.com itself sends, in its page for anyone.
+const GOOGLE_WEB_KEY: &str = "AIzaSyDLEeFI5OtFBwYBIoK_jj5m32rZK5CkCXA";
 const MYMEMORY_HOST: &str = "api.mymemory.translated.net";
 pub const GOOGLE: &str = "Google Translate";
 pub const MYMEMORY: &str = "MyMemory";
@@ -218,7 +222,7 @@ pub fn pick(found: &[&str], enabled: &[String], default: (&str, &str)) -> Direct
 }
 
 /// Translates `word` between the languages of `direction`: Google first,
-/// then MyMemory, told what the word means by `context` (its first
+/// the website's endpoint and then gtx, then MyMemory, told what the word means by `context` (its first
 /// definition), and `email`, if given, for its larger allowance.
 pub fn translate(
     word: &str,
@@ -227,10 +231,9 @@ pub fn translate(
     context: Option<&str>,
     email: &str,
 ) -> Result<Translation, String> {
-    match google(word, from, to) {
-        Ok(translation) => Ok(translation),
-        Err(_) => mymemory(word, from, to, context, email),
-    }
+    google_web(word, from, to)
+        .or_else(|_| google(word, from, to))
+        .or_else(|_| mymemory(word, from, to, context, email))
 }
 
 fn get(host: &str, path: &str) -> Result<Vec<u8>, String> {
@@ -255,6 +258,69 @@ fn google(word: &str, from: &str, to: &str) -> Result<Translation, String> {
     );
     let body = get(GOOGLE_HOST, &path)?;
     parse_google(&body).ok_or_else(|| "Google Translate had no translation.".into())
+}
+
+/// The endpoint translate.google.com asks, with its dictionary. Its model
+/// knows rarer words ("crateful") that gtx's leaves as they are.
+fn google_web(word: &str, from: &str, to: &str) -> Result<Translation, String> {
+    let path = format!(
+        "/v1/translate?params.client=gtx&query.source_language={}&query.target_language={}\
+         &query.display_language=en-US&query.text={}&key={GOOGLE_WEB_KEY}\
+         &data_types=TRANSLATION&data_types=BILINGUAL_DICTIONARY_FULL",
+        percent_encode(from),
+        percent_encode(to),
+        percent_encode(word)
+    );
+    let body = get(GOOGLE_WEB_HOST, &path)?;
+    parse_google_web(&body).ok_or_else(|| "Google Translate had no translation.".into())
+}
+
+/// Reads the website endpoint's answer: the translation, then the
+/// dictionary, as [`parse_google`] does gtx's.
+fn parse_google_web(body: &[u8]) -> Option<Translation> {
+    let json: Value = serde_json::from_slice(body).ok()?;
+    let text = json.get("translation")?.as_str()?.trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    let groups = json
+        .get("bilingualDictionary")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            let part_of_speech = entry.get("pos")?.as_str()?.to_lowercase();
+            let terms: Vec<Term> = entry
+                .get("entry")?
+                .as_array()?
+                .iter()
+                .filter_map(|term| {
+                    let text = term.get("word")?.as_str()?.to_string();
+                    let back = term
+                        .get("reverseTranslation")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .take(MAX_BACK)
+                        .map(str::to_string)
+                        .collect();
+                    Some(Term { text, back })
+                })
+                .take(MAX_TERMS)
+                .collect();
+            (!terms.is_empty()).then_some(Group {
+                part_of_speech,
+                terms,
+            })
+        })
+        .collect();
+    Some(Translation {
+        text,
+        context: None,
+        groups,
+        source: GOOGLE,
+    })
 }
 
 /// Reads gtx's nested arrays: the translated sentences first, then the
@@ -497,6 +563,19 @@ mod tests {
         assert!(t.groups.is_empty());
         assert!(parse_google(br#"[[],null,"en"]"#).is_none());
         assert!(parse_google(b"<html>").is_none());
+    }
+
+    #[test]
+    fn reads_google_web() {
+        let body = br#"{"translation":"incarnare","bilingualDictionary":[{"pos":"verb","entry":[{"word":"incarnare","reverseTranslation":["embody","incarnate"],"score":0.23}],"baseForm":"embody"}],"sourceLanguage":"en"}"#;
+        let t = parse_google_web(body).unwrap();
+        assert_eq!(t.text, "incarnare");
+        assert_eq!(t.groups[0].part_of_speech, "verb");
+        assert_eq!(t.groups[0].terms[0].back, ["embody", "incarnate"]);
+        let plain = parse_google_web(br#"{"translation":"cassa piena","sentences":[]}"#).unwrap();
+        assert_eq!(plain.text, "cassa piena");
+        assert!(plain.groups.is_empty());
+        assert!(parse_google_web(br#"{"error":{"code":403}}"#).is_none());
     }
 
     #[test]

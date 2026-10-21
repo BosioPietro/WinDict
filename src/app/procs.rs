@@ -104,11 +104,18 @@ pub(super) unsafe extern "system" fn popup_proc(
         WM_MOUSEMOVE => {
             // Ask for WM_MOUSELEAVE, to drop the hover when the pointer goes.
             win::track_mouse_leave(hwnd);
+            // Windows also sends one when the card changes under a pointer
+            // that stays put: that mustn't pick the suggestion it lands on.
+            let at = unsafe { GetMessagePos() };
+            if POINTER_AT.replace(Some(at)) == Some(at) {
+                return LRESULT(0);
+            }
             let (x, y) = win::lparam_point(lparam);
             with_app(|app| app.hover_card(Some((x, y))));
             LRESULT(0)
         }
         WM_MOUSELEAVE => {
+            POINTER_AT.set(None);
             with_app(|app| app.hover_card(None));
             LRESULT(0)
         }
