@@ -467,14 +467,19 @@ impl Settings {
         };
 
         // The ring around what the keyboard is on, gliding from stop to stop.
-        let ring = c.CreateShapeVisual()?;
-        ring.SetSize(v2(card_w, content_h + list_h))?;
+        // Drawn through a mask, like the controls: a shape would be jagged
+        // in the scroller. The mask is a nine-grid, to stretch as it glides.
+        let ring = c.CreateSpriteVisual()?;
         ring.SetOpacity(0.0)?;
-        let ring_geometry = c.CreateRoundedRectangleGeometry()?;
-        let shape = c.CreateSpriteShapeWithGeometry(&ring_geometry)?;
-        shape.SetStrokeBrush(&c.CreateColorBrushWithColor(t.focus())?)?;
-        shape.SetStrokeThickness(px(FOCUS_STROKE).max(1.0))?;
-        ring.Shapes()?.Append(&shape)?;
+        let ring_source = c.CreateSurfaceBrush()?;
+        ring_source.SetStretch(CompositionStretch::Fill)?;
+        let ring_grid = c.CreateNineGridBrush()?;
+        ring_grid.SetSource(&ring_source)?;
+        let ring_brush = c.CreateColorBrushWithColor(t.focus())?;
+        let ring_mask = c.CreateMaskBrush()?;
+        ring_mask.SetSource(&ring_brush)?;
+        ring_mask.SetMask(&ring_grid)?;
+        ring.SetBrush(&ring_mask)?;
         scroller.Children()?.InsertAtTop(&ring)?;
 
         // The thumb, shown when it scrolls.
@@ -530,7 +535,9 @@ impl Settings {
             hits: parts.hits,
             stops: parts.stops,
             ring,
-            ring_geometry,
+            ring_source,
+            ring_grid,
+            ring_radius: Cell::new(-1.0),
             languages,
         })
     }

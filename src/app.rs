@@ -1725,6 +1725,7 @@ impl App {
                 self.dismiss();
             }
             Target::Translate => self.translate(),
+            Target::Back => self.back(),
             Target::Language(_) | Target::Swap | Target::Pick(_) | Target::Confirm => {
                 self.steer_translation(target)
             }

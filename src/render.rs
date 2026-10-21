@@ -230,6 +230,8 @@ pub enum Target {
     Word(String),
     /// The card's translate button: turns it into the word's translation.
     Translate,
+    /// The card's back button.
+    Back,
     /// Lists the languages to translate from, or into.
     Language(Side),
     /// Translates the other way.

@@ -10,7 +10,7 @@ use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
-use windows_numerics::Vector3;
+use windows_numerics::{Vector2, Vector3};
 
 use crate::render::{Body, Face, Ink, Link, Mark, Renderer, Target, WORD_SIZE};
 use crate::searchbox::SearchBox;
@@ -55,8 +55,9 @@ const SWAP_TOOL: usize = 3;
 /// The ring around the link Tab moved to, as on Windows 11 controls.
 const FOCUS_STROKE: f32 = 2.0;
 const FOCUS_RADIUS: f32 = 4.0;
-/// How far, in pixels, rings can reach past the definition's edges.
-const RING_ROOM: f32 = 16.0;
+/// How long the ring takes to glide to the next link, and to fade.
+const FOCUS_MS: u64 = 200;
+const FOCUS_FADE_MS: u64 = 100;
 /// Room kept above and below a link Tab scrolls into view, clear of the
 /// body's fades.
 const FOCUS_MARGIN: f32 = 20.0;
@@ -158,6 +159,9 @@ pub struct Popup {
     back: IconButton,
     translate: IconButton,
     search: SearchBox,
+    glide: SpriteVisual,
+    glide_source: CompositionSurfaceBrush,
+    glide_grid: CompositionNineGridBrush,
 
     theme: Theme,
     scale: f32,
@@ -219,6 +223,21 @@ impl Header {
     }
 }
 
+/// Somewhere Tab stops in the card.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Stop {
+    Translate,
+    /// The link starting at this index in the body's links.
+    Link(usize),
+    Back,
+}
+
+impl Stop {
+    fn is_button(self) -> bool {
+        !matches!(self, Stop::Link(_))
+    }
+}
+
 /// The scrolling part of the card: a clipped host below the header, and the
 /// rendered definition inside it.
 struct Content {
@@ -229,8 +248,17 @@ struct Content {
     brush: CompositionSurfaceBrush,
     links: Vec<Link>,
     /// Rings the link Tab moved to; inside `visual`, so it scrolls with it.
-    focus: ShapeVisual,
+    focus: ContainerVisual,
     focus_brush: CompositionColorBrush,
+    /// The rings, one for each of the link's rectangles, kept to glide from
+    /// link to link; the ones not in use are faded out.
+    rings: Vec<SpriteVisual>,
+    /// The mask they all show through, stretched by its corners' radius.
+    ring_source: CompositionSurfaceBrush,
+    ring_grid: CompositionNineGridBrush,
+    ring_mask: CompositionMaskBrush,
+    /// Whether a link was ringed last, for the ring to glide from.
+    ring_shown: bool,
     /// The caret in the language box being typed in; inside `visual` too.
     caret: SpriteVisual,
     caret_brush: CompositionColorBrush,
@@ -263,12 +291,7 @@ impl Content {
         swap_shape.SetFillBrush(&swap_brush)?;
         swap.Shapes()?.Append(&swap_shape)?;
         visual.Children()?.InsertAtTop(&swap)?;
-        // Reaches past the definition's edges, which would clip the rings
-        // of links at them.
-        let focus = c.CreateShapeVisual()?;
-        focus.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
-        focus.SetOffset(v3(-RING_ROOM, -RING_ROOM))?;
-        focus.SetSize(v2(2.0 * RING_ROOM, 2.0 * RING_ROOM))?;
+        let focus = c.CreateContainerVisual()?;
         visual.Children()?.InsertAtTop(&focus)?;
         let caret = c.CreateSpriteVisual()?;
         let caret_brush = c.CreateColorBrush()?;
@@ -276,6 +299,14 @@ impl Content {
         caret.SetOpacity(0.0)?;
         visual.Children()?.InsertAtTop(&caret)?;
         let fade = ScrollFade::new(c, card, &host)?;
+        let focus_brush = c.CreateColorBrush()?;
+        let ring_source = c.CreateSurfaceBrush()?;
+        ring_source.SetStretch(CompositionStretch::Fill)?;
+        let ring_grid = c.CreateNineGridBrush()?;
+        ring_grid.SetSource(&ring_source)?;
+        let ring_mask = c.CreateMaskBrush()?;
+        ring_mask.SetSource(&focus_brush)?;
+        ring_mask.SetMask(&ring_grid)?;
         Ok(Content {
             host,
             fade,
@@ -283,7 +314,12 @@ impl Content {
             brush,
             links: Vec::new(),
             focus,
-            focus_brush: c.CreateColorBrush()?,
+            focus_brush,
+            rings: Vec::new(),
+            ring_source,
+            ring_grid,
+            ring_mask,
+            ring_shown: false,
             caret,
             caret_brush,
             focused: None,
@@ -489,7 +525,20 @@ impl IconButton {
 
     fn set_focused(&mut self, focused: bool) -> Result<()> {
         self.focused = focused;
+        Animator::stop(&self.ring, &["Opacity"]);
         self.ring.SetOpacity(if focused { 1.0 } else { 0.0 })
+    }
+
+    /// Rings the button `delay` ms from now.
+    fn reveal(&mut self, anim: &Animator, delay: u64) -> Result<()> {
+        self.focused = true;
+        if delay == 0 {
+            Animator::stop(&self.ring, &["Opacity"]);
+            return self.ring.SetOpacity(1.0);
+        }
+        Animator::stop(&self.ring, &["Opacity"]);
+        self.ring.SetOpacity(0.0)?;
+        anim.scalar(&self.ring, "Opacity", 1.0, 1, delay, &anim.decelerate)
     }
 
     /// Back at rest, shown or not without animating, for a new card.
@@ -746,6 +795,19 @@ impl Popup {
         let loader = Loader::new(c, &content.host, &theme)?;
         let scroll_chrome = ScrollChrome::new(c, &frame.card)?;
         let search = SearchBox::new(c, &frame.card)?;
+        // A ring gliding between a button and a link, over everything: they
+        // aren't in the same space, nor does one scroll and the other not.
+        let glide = c.CreateSpriteVisual()?;
+        glide.SetOpacity(0.0)?;
+        let glide_source = c.CreateSurfaceBrush()?;
+        glide_source.SetStretch(CompositionStretch::Fill)?;
+        let glide_grid = c.CreateNineGridBrush()?;
+        glide_grid.SetSource(&glide_source)?;
+        let glide_mask = c.CreateMaskBrush()?;
+        glide_mask.SetSource(&content.focus_brush)?;
+        glide_mask.SetMask(&glide_grid)?;
+        glide.SetBrush(&glide_mask)?;
+        frame.card.Children()?.InsertAtTop(&glide)?;
 
         Ok(Popup {
             hwnd,
@@ -761,6 +823,9 @@ impl Popup {
             back,
             translate,
             search,
+            glide,
+            glide_source,
+            glide_grid,
             theme,
             scale: 1.0,
             grow_up: false,
@@ -974,11 +1039,13 @@ impl Popup {
         };
         self.content.links = body_layout.links.clone();
         if kept == Some(Target::Translate) && self.translate.shown {
-            self.focus_translate()?;
+            self.focus_translate(0)?;
+        } else if kept == Some(Target::Back) && self.back.shown {
+            self.focus_back(0)?;
         } else {
             let links = &self.content.links;
             let focused = kept.and_then(|t| links.iter().position(|l| l.target == t));
-            self.focus_link(focused)?;
+            self.focus_link(focused, 0)?;
         }
 
         // Header: on a refinement, cross-fade from the old rendering so only
@@ -1313,60 +1380,148 @@ impl Popup {
             .map(|l| &l.target)
     }
 
-    /// Whether the card has links, or the translate button, to Tab through.
+    /// Whether the card has links, or buttons, to Tab through.
     pub fn has_links(&self) -> bool {
-        self.translate.shown || !self.content.links.is_empty()
+        self.translate.shown || self.back.shown || !self.content.links.is_empty()
     }
 
     /// The link, or button, Tab moved to, if any.
     pub fn focused_link(&self) -> Option<&Target> {
         static TRANSLATE: Target = Target::Translate;
+        static BACK: Target = Target::Back;
         if self.translate.focused {
             return Some(&TRANSLATE);
+        }
+        if self.back.focused {
+            return Some(&BACK);
         }
         self.content.focused.map(|i| &self.content.links[i].target)
     }
 
-    /// Moves the keyboard focus to the next link, or the previous one,
-    /// going round from the last to the first, and scrolls it into view.
-    /// The translate button comes first, as it does reading the card.
-    pub fn step_link(&mut self, forward: bool) -> Result<()> {
-        // `None` for the translate button.
-        let mut stops: Vec<Option<usize>> = Vec::new();
-        if self.translate.shown {
-            stops.push(None);
+    /// Where Tab is, if anywhere.
+    fn current_stop(&self) -> Option<Stop> {
+        if self.translate.focused {
+            Some(Stop::Translate)
+        } else if self.back.focused {
+            Some(Stop::Back)
+        } else {
+            self.content.focused.map(Stop::Link)
         }
-        stops.extend(self.content.stops().into_iter().map(Some));
+    }
+
+    /// Moves the keyboard focus to the next stop, or the previous one,
+    /// going round from the last to the first, and scrolls it into view.
+    /// The translate button comes first, as it does reading the card, and
+    /// the back button last, so Tab doesn't start on it.
+    pub fn step_link(&mut self, forward: bool) -> Result<()> {
+        let mut stops = Vec::new();
+        if self.translate.shown {
+            stops.push(Stop::Translate);
+        }
+        stops.extend(self.content.stops().into_iter().map(Stop::Link));
+        if self.back.shown {
+            stops.push(Stop::Back);
+        }
         if stops.is_empty() {
             return Ok(());
         }
         let n = stops.len();
-        let current = if self.translate.focused {
-            Some(None)
-        } else {
-            self.content.focused.map(Some)
-        };
+        let current = self.current_stop();
         let at = current.and_then(|f| stops.iter().position(|&s| s == f));
         let next = match (at, forward) {
             (None, true) => 0,
-            (None, false) => n - 1,
+            // Backwards from nowhere is the last of the card, not its back button.
+            (None, false) => stops.iter().rposition(|&s| s != Stop::Back).unwrap_or(n - 1),
             (Some(i), true) => (i + 1) % n,
             (Some(i), false) => (i + n - 1) % n,
         };
-        match stops[next] {
-            None => self.focus_translate(),
-            Some(start) => {
-                self.focus_link(Some(start))?;
-                self.scroll_into_view(start)
+        self.go_to(current, stops[next])
+    }
+
+    /// Rings `to`, which the ring glides to from `from`. Between a button
+    /// and a link it glides over the card, as they're not in the same space.
+    fn go_to(&mut self, from: Option<Stop>, to: Stop) -> Result<()> {
+        let across = from.is_some_and(|f| f != to && (f.is_button() || to.is_button()));
+        let from_scroll = self.visible_scroll();
+        // What the ring lands on shows once the one gliding over has arrived.
+        let reveal = if across { FOCUS_MS } else { 0 };
+        match to {
+            Stop::Translate => self.focus_translate(reveal)?,
+            Stop::Back => self.focus_back(reveal)?,
+            Stop::Link(start) => {
+                self.focus_link(Some(start), reveal)?;
+                self.scroll_into_view(start)?;
             }
         }
+        match from {
+            Some(from) if across => self.glide_ring(from, from_scroll, to),
+            _ => Ok(()),
+        }
+    }
+
+    /// Where the ring of `stop` is in the card: its place, size and corner
+    /// radius, with the body scrolled to `scroll`.
+    fn ring_rect(&self, stop: Stop, scroll: f32) -> Option<(Vector3, Vector2, f32)> {
+        let s = self.scale;
+        let stroke = (FOCUS_STROKE * s).round();
+        let grow = stroke / 2.0;
+        match stop {
+            Stop::Translate | Stop::Back => {
+                let button = if stop == Stop::Back {
+                    &self.back
+                } else {
+                    &self.translate
+                };
+                let side = BACK_SIZE * s;
+                Some((
+                    v3((button.x * s).round(), button.top),
+                    v2(side, side),
+                    BACK_RADIUS * s + grow,
+                ))
+            }
+            Stop::Link(start) => {
+                let l = self.content.rects(start).next()?;
+                let (x, y) = ((l.x * s).round(), (l.y * s).round());
+                let (w, h) = ((l.width * s).round(), (l.height * s).round());
+                Some((
+                    v3(PAD_X * s + x - grow, self.header_h - scroll + y - grow),
+                    v2(w + stroke, h + stroke),
+                    FOCUS_RADIUS * s + grow,
+                ))
+            }
+        }
+    }
+
+    /// Glides a ring over the card from `from` to `to`, then takes it away.
+    fn glide_ring(&mut self, from: Stop, from_scroll: f32, to: Stop) -> Result<()> {
+        let (Some((from_at, from_size, _)), Some((to_at, to_size, radius))) = (
+            self.ring_rect(from, from_scroll),
+            self.ring_rect(to, self.scroll),
+        ) else {
+            return Ok(());
+        };
+        let stroke = (FOCUS_STROKE * self.scale).round();
+        let side = (2.0 * radius).ceil() + 1.0;
+        let mask = self
+            .renderer
+            .draw_rounded(side, side, radius, Some(stroke))?;
+        self.glide_source.SetSurface(&mask)?;
+        self.glide_grid.SetInsets(radius)?;
+        let (glide, anim) = (&self.glide, &self.anim);
+        Animator::stop(glide, &["Offset", "Size", "Opacity"]);
+        glide.SetOffset(from_at)?;
+        glide.SetSize(from_size)?;
+        glide.SetOpacity(1.0)?;
+        anim.vector3(glide, "Offset", to_at, FOCUS_MS, 0, &anim.decelerate)?;
+        anim.vector2(glide, "Size", to_size, FOCUS_MS)?;
+        anim.scalar(glide, "Opacity", 0.0, 1, FOCUS_MS, &anim.decelerate)
     }
 
     /// Moves the keyboard focus to the link going to `target`, if the card
     /// has one.
     pub fn focus_target(&mut self, target: &Target) -> Result<()> {
         if let Some(start) = self.content.links.iter().position(|l| &l.target == target) {
-            self.focus_link(Some(start))?;
+            self.focus_link(Some(start), 0)?;
             self.scroll_into_view(start)?;
         }
         Ok(())
@@ -1374,37 +1529,98 @@ impl Popup {
 
     /// Takes the ring off whatever Tab moved to.
     pub fn unfocus(&mut self) -> Result<()> {
-        self.focus_link(None)
+        self.focus_link(None, 0)
     }
 
-    /// Rings the translate button.
-    fn focus_translate(&mut self) -> Result<()> {
-        self.focus_link(None)?;
-        self.translate.set_focused(true)
+    /// Rings the translate button, `reveal` ms from now.
+    fn focus_translate(&mut self, reveal: u64) -> Result<()> {
+        self.focus_link(None, reveal)?;
+        self.translate.reveal(&self.anim, reveal)
     }
 
-    /// Rings the link starting at `start` in the body's links, or none.
-    fn focus_link(&mut self, start: Option<usize>) -> Result<()> {
+    /// Rings the back button, `reveal` ms from now.
+    fn focus_back(&mut self, reveal: u64) -> Result<()> {
+        self.focus_link(None, reveal)?;
+        self.back.reveal(&self.anim, reveal)
+    }
+
+    /// Rings the link starting at `start` in the body's links, or none,
+    /// `reveal` ms from now. With a delay, the rings that are showing go at
+    /// once, as another is gliding over the card to take their place.
+    fn focus_link(&mut self, start: Option<usize>, reveal: u64) -> Result<()> {
         self.translate.set_focused(false)?;
+        self.back.set_focused(false)?;
         let content = &mut self.content;
         content.focused = start;
-        let shapes = content.focus.Shapes()?;
-        shapes.Clear()?;
+        let (anim, s) = (&self.anim, self.scale);
         let Some(start) = start else {
+            content.ring_shown = false;
+            for ring in &content.rings {
+                if reveal > 0 {
+                    Animator::stop(ring, &["Opacity"]);
+                    ring.SetOpacity(0.0)?;
+                } else {
+                    anim.scalar(ring, "Opacity", 0.0, FOCUS_FADE_MS, 0, &anim.decelerate)?;
+                }
+            }
             return Ok(());
         };
-        let (c, s) = (&self.anim.compositor, self.scale);
-        for l in content.rects(start) {
-            let geometry = c.CreateRoundedRectangleGeometry()?;
-            let (x, y) = ((l.x * s).round(), (l.y * s).round());
-            geometry.SetOffset(v2(x + RING_ROOM, y + RING_ROOM))?;
-            geometry.SetSize(v2((l.width * s).round(), (l.height * s).round()))?;
-            geometry.SetCornerRadius(v2(FOCUS_RADIUS * s, FOCUS_RADIUS * s))?;
-            let shape = c.CreateSpriteShapeWithGeometry(&geometry)?;
-            shape.SetStrokeBrush(&content.focus_brush)?;
-            shape.SetStrokeThickness((FOCUS_STROKE * s).round())?;
-            shapes.Append(&shape)?;
+        // Drawn pixel for pixel and shown through a mask, as shapes are
+        // jagged in what scrolls. The stroke is inside the mask, so each
+        // ring is its link grown by half of it, centred on the link's edge.
+        let stroke = (FOCUS_STROKE * s).round();
+        let grow = stroke / 2.0;
+        let radius = FOCUS_RADIUS * s + grow;
+        let side = (2.0 * radius).ceil() + 1.0;
+        let mask = self
+            .renderer
+            .draw_rounded(side, side, radius, Some(stroke))?;
+        content.ring_source.SetSurface(&mask)?;
+        content.ring_grid.SetInsets(radius)?;
+        let rects: Vec<_> = content
+            .rects(start)
+            .map(|l| {
+                let (x, y) = ((l.x * s).round(), (l.y * s).round());
+                let (w, h) = ((l.width * s).round(), (l.height * s).round());
+                (v3(x - grow, y - grow), v2(w + stroke, h + stroke))
+            })
+            .collect();
+        let glide = content.ring_shown && reveal == 0;
+        for (i, &(at, size)) in rects.iter().enumerate() {
+            if i == content.rings.len() {
+                let ring = anim.compositor.CreateSpriteVisual()?;
+                ring.SetBrush(&content.ring_mask)?;
+                ring.SetOpacity(0.0)?;
+                content.focus.Children()?.InsertAtTop(&ring)?;
+                content.rings.push(ring);
+            }
+            let ring = &content.rings[i];
+            // One that was in use glides to its place, one that wasn't
+            // fades in there; either way the others of this link follow.
+            let from_view = glide && ring.Opacity()? > 0.0;
+            if from_view {
+                anim.vector3(ring, "Offset", at, FOCUS_MS, 0, &anim.decelerate)?;
+                anim.vector2(ring, "Size", size, FOCUS_MS)?;
+            } else {
+                Animator::stop(ring, &["Offset", "Size"]);
+                ring.SetOffset(at)?;
+                ring.SetSize(size)?;
+            }
+            if reveal > 0 {
+                Animator::stop(ring, &["Opacity"]);
+                ring.SetOpacity(0.0)?;
+            }
+            anim.scalar(ring, "Opacity", 1.0, FOCUS_FADE_MS, reveal, &anim.decelerate)?;
         }
+        for ring in content.rings.iter().skip(rects.len()) {
+            if reveal > 0 {
+                Animator::stop(ring, &["Opacity"]);
+                ring.SetOpacity(0.0)?;
+            } else {
+                anim.scalar(ring, "Opacity", 0.0, FOCUS_FADE_MS, 0, &anim.decelerate)?;
+            }
+        }
+        content.ring_shown = true;
         Ok(())
     }
 
@@ -1523,7 +1739,7 @@ impl Popup {
     fn enter_search(&mut self, title: &str, placeholder: &str, in_place: bool) -> Result<()> {
         self.set_back(false)?;
         self.set_translate(false)?;
-        self.focus_link(None)?;
+        self.focus_link(None, 0)?;
         self.header_indent = 0.0;
         let anim = &self.anim;
         let shown: [Visual; 4] = [

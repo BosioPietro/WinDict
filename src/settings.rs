@@ -11,6 +11,8 @@
 
 mod view;
 
+use std::cell::Cell;
+
 use windows::core::{Result, HSTRING};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
@@ -754,8 +756,11 @@ struct View {
     hits: Vec<(Hit, Rect)>,
     /// Where Tab stops, and the corner radius of the ring there, in the scroller.
     stops: Vec<(Stop, Rect, f32)>,
-    ring: ShapeVisual,
-    ring_geometry: CompositionRoundedRectangleGeometry,
+    ring: SpriteVisual,
+    /// The mask of the ring, and the corner radius it was drawn for.
+    ring_source: CompositionSurfaceBrush,
+    ring_grid: CompositionNineGridBrush,
+    ring_radius: Cell<f32>,
     languages: LanguagesView,
 }
 
@@ -2631,17 +2636,29 @@ impl Settings {
             Animator::stop(&view.ring, &["Opacity"]);
             return view.ring.SetOpacity(0.0);
         };
-        let geometry = &view.ring_geometry;
-        let (at, size) = (v2(rect.x, rect.y), rect.size());
-        if animate && self.ring_shown {
-            anim.vector2(geometry, "Offset", at, FOCUS_MS)?;
-            anim.vector2(geometry, "Size", size, FOCUS_MS)?;
-        } else {
-            Animator::stop(geometry, &["Offset", "Size"]);
-            geometry.SetOffset(at)?;
-            geometry.SetSize(size)?;
+        // The stroke is drawn inside the mask, so the ring is the stop grown
+        // by half of it, to be centred on its edge.
+        let stroke = (self.scale * FOCUS_STROKE).max(1.0);
+        let rect = rect.outset(stroke / 2.0);
+        let radius = radius + stroke / 2.0;
+        if view.ring_radius.get() != radius {
+            // The corners take exactly the radius, so a pill, whose radius is
+            // half its height, doesn't have them overlap and squash.
+            let side = (2.0 * radius).ceil() + 1.0;
+            let mask = self.renderer.draw_rounded(side, side, radius, Some(stroke))?;
+            view.ring_source.SetSurface(&mask)?;
+            view.ring_grid.SetInsets(radius)?;
+            view.ring_radius.set(radius);
         }
-        geometry.SetCornerRadius(v2(radius, radius))?;
+        let ring = &view.ring;
+        if animate && self.ring_shown {
+            anim.vector3(ring, "Offset", rect.at(), FOCUS_MS, 0, &anim.decelerate)?;
+            anim.vector2(ring, "Size", rect.size(), FOCUS_MS)?;
+        } else {
+            Animator::stop(ring, &["Offset", "Size"]);
+            ring.SetOffset(rect.at())?;
+            ring.SetSize(rect.size())?;
+        }
         self.ring_shown = true;
         anim.scalar(&view.ring, "Opacity", 1.0, HOVER_MS, 0, &anim.decelerate)
     }
