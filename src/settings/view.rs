@@ -1086,6 +1086,20 @@ impl Settings {
         } else {
             rgb(0xFA, 0xFA, 0xFA)
         };
+        // A soft shadow under it, stretched from a small surface.
+        let spread = px(TIP_SHADOW);
+        let (surface, inset) = r.draw_shadow(spread, radius, t.shadow_opacity())?;
+        let source = c.CreateSurfaceBrush()?;
+        source.SetStretch(CompositionStretch::Fill)?;
+        source.SetSurface(&surface)?;
+        let brush = c.CreateNineGridBrush()?;
+        brush.SetSource(&source)?;
+        brush.SetInsets(inset)?;
+        let shadow = c.CreateSpriteVisual()?;
+        shadow.SetBrush(&brush)?;
+        shadow.SetOffset(v3(-spread, -spread + px(TIP_SHADOW_DY)))?;
+        shadow.SetSize(v2(face.w + 2.0 * spread, face.h + 2.0 * spread))?;
+        root.Children()?.InsertAtTop(&shadow)?;
         rounded(c, &root, face, radius, fill)?;
         outline(c, &root, face, radius, t.border())?;
         let text = Text::new(c, &root)?;
@@ -1105,7 +1119,12 @@ impl Settings {
         right: f32,
         middle: f32,
     ) -> Result<(FieldView, Rect)> {
-        let (c, t, s) = (&self.anim.compositor, &self.theme, self.scale);
+        let (c, r, t, s) = (
+            &self.anim.compositor,
+            &self.renderer,
+            &self.theme,
+            self.scale,
+        );
         let px = |dip: f32| (dip * s).round();
         let (w, h, radius) = (px(FIELD_W), px(FIELD_H), px(FIELD_RADIUS));
         let at = Rect {
@@ -1116,40 +1135,35 @@ impl Settings {
         };
         let root = container(c, group, at.at())?;
         root.SetSize(v2(w, h))?;
-        let clip = c.CreateRoundedRectangleGeometry()?;
-        clip.SetSize(v2(w, h))?;
-        clip.SetCornerRadius(v2(radius, radius))?;
-        root.SetClip(&c.CreateGeometricClipWithGeometry(&clip)?)?;
         let face = Rect {
             w,
             h,
             ..Rect::default()
         };
-        rounded(c, &root, face, 0.0, t.control())?;
-        let (hover, _) = rounded(c, &root, face, 0.0, t.highlight())?;
+        // No clip to round the corners off: a clip's edge is smoothed
+        // differently as the field moves by fractions of a pixel in a
+        // scroll, which made the lines along the bottom flicker. The shapes
+        // are rounded themselves instead.
+        rounded(c, &root, face, radius, t.control())?;
+        let (hover, _) = rounded(c, &root, face, radius, t.highlight())?;
         hover.SetOpacity(0.0)?;
         outline(c, &root, face, radius, t.control_stroke())?;
-        let hairline = s.round().max(1.0);
-        let line = Rect {
-            y: h - hairline,
-            h: hairline,
-            ..face
+        // A line `thick` tall along the bottom, thinning to nothing up the
+        // corners, drawn as one shape so that it follows their curve.
+        let edge = |color: Color, thick: f32| -> Result<SpriteVisual> {
+            let surface = r.draw_underline(w, h, radius, thick, color)?;
+            let brush = c.CreateSurfaceBrush()?;
+            brush.SetStretch(CompositionStretch::Fill)?;
+            brush.SetSurface(&surface)?;
+            let edge = c.CreateSpriteVisual()?;
+            edge.SetBrush(&brush)?;
+            edge.SetSize(face.size())?;
+            root.Children()?.InsertAtTop(&edge)?;
+            Ok(edge)
         };
-        rounded(c, &root, line, 0.0, t.strong_stroke())?;
+        edge(t.strong_stroke(), s.round().max(1.0))?;
         let thick = px(FIELD_LINE).max(1.0);
-        // The accent line runs along the bottom and up the corners with the
-        // outline, so that it doesn't stop short of it.
-        let accent = container(c, &root, v3(0.0, 0.0))?;
-        accent.SetSize(face.size())?;
-        let (corners, _) = outline(c, &accent, face, radius, t.accent)?;
-        corners.SetClip(&c.CreateInsetClipWithInsets(0.0, (h - radius).max(0.0), 0.0, 0.0)?)?;
-        let line = Rect {
-            x: radius,
-            y: h - thick,
-            w: w - 2.0 * radius,
-            h: thick,
-        };
-        rounded(c, &accent, line, 0.0, t.accent)?;
+        let accent = edge(t.accent, thick)?;
         accent.SetOpacity(0.0)?;
 
         let pad = px(FIELD_PAD);

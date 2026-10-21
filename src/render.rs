@@ -1805,6 +1805,56 @@ impl Renderer {
         Ok((surface, inset))
     }
 
+    /// The underline of a `w` by `h` pixel field with corners of `radius`:
+    /// the rounded rectangle less itself raised by `thick`, so that the line
+    /// is `thick` tall along the bottom and thins to nothing up the corners.
+    pub fn draw_underline(
+        &self,
+        w: f32,
+        h: f32,
+        radius: f32,
+        thick: f32,
+        color: windows::UI::Color,
+    ) -> Result<CompositionDrawingSurface> {
+        let surface = self.surface(w, h)?;
+        self.paint(&surface, 1.0, |dc| unsafe {
+            let shape = |dy: f32| D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F {
+                    left: 0.0,
+                    top: dy,
+                    right: w,
+                    bottom: h + dy,
+                },
+                radiusX: radius,
+                radiusY: radius,
+            };
+            let whole = self.d2d.CreateRoundedRectangleGeometry(&shape(0.0))?;
+            let raised = self.d2d.CreateRoundedRectangleGeometry(&shape(-thick))?;
+            let line = self.d2d.CreatePathGeometry()?;
+            let sink = line.Open()?;
+            whole.CombineWithGeometry(
+                &raised,
+                D2D1_COMBINE_MODE_EXCLUDE,
+                None,
+                0.1,
+                &sink.cast::<ID2D1SimplifiedGeometrySink>()?,
+            )?;
+            sink.Close()?;
+            let brush = dc.CreateSolidColorBrush(
+                &D2D1_COLOR_F {
+                    r: color.R as f32 / 255.0,
+                    g: color.G as f32 / 255.0,
+                    b: color.B as f32 / 255.0,
+                    a: color.A as f32 / 255.0,
+                },
+                None,
+            )?;
+            dc.FillGeometry(&line, &brush, None::<&ID2D1Brush>);
+            Ok(())
+        })?;
+        Ok(surface)
+    }
+
     fn surface(&self, w: f32, h: f32) -> Result<CompositionDrawingSurface> {
         self.graphics.CreateDrawingSurface(
             Size {

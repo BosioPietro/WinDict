@@ -92,6 +92,9 @@ const INFO_W: f32 = 16.0;
 const TIP_W: f32 = 300.0;
 const TIP_PAD: f32 = 10.0;
 const TIP_RADIUS: f32 = 6.0;
+/// How far the tooltip's shadow spreads, and how far it drops.
+const TIP_SHADOW: f32 = 12.0;
+const TIP_SHADOW_DY: f32 = 3.0;
 /// Between the info symbol and its tooltip.
 const TIP_GAP: f32 = 6.0;
 /// How far the tooltip rises from as it appears.
@@ -627,7 +630,7 @@ struct FieldView {
     /// Lightens the field under the pointer.
     hover: SpriteVisual,
     /// The accent line along the bottom, shown while typing.
-    accent: ContainerVisual,
+    accent: SpriteVisual,
     /// What's typed, scrolling inside the field to keep the caret in view.
     text: Text,
     caret: SpriteVisual,
