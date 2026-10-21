@@ -60,6 +60,13 @@ pub(super) unsafe extern "system" fn main_proc(
             with_app(|app| app.close_settings());
             LRESULT(0)
         }
+        WM_APP_RECORD_KEY => {
+            let key = VIRTUAL_KEY(wparam.0 as u16);
+            let modifiers = HOT_KEY_MODIFIERS((lparam.0 & 0xFFFF) as u32);
+            let down = lparam.0 >> 16 & 1 == 1;
+            with_app(|app| app.in_settings(|s| s.record_key(key, modifiers, down)));
+            LRESULT(0)
+        }
         WM_TIMER => {
             with_app(|app| app.on_timer(wparam.0));
             LRESULT(0)
@@ -412,6 +419,80 @@ pub(super) unsafe extern "system" fn mouse_hook(
         }
     }
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+/// While a shortcut is recorded, every key goes to it before Windows can act
+/// on it: Win+Alt+D would open the calendar, and Win alone Start, so the
+/// settings window would never see them. Like the mouse hook, it doesn't
+/// touch APP, and posts what it caught instead.
+pub(super) unsafe extern "system" fn keyboard_hook(
+    code: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    let next = || unsafe { CallNextHookEx(None, code, wparam, lparam) };
+    if code < 0 {
+        return next();
+    }
+    let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+    let vk = info.vkCode as u16;
+    let down = matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
+    let target = RECORDING_IN.get();
+    let recording = !target.is_invalid() && unsafe { GetForegroundWindow() } == target;
+    let mut swallowed = SWALLOWED.get();
+    let (slot, bit) = ((vk as usize / 64) % 4, 1u64 << (vk % 64));
+    let kept = swallowed[slot] & bit != 0;
+    if !recording && !kept {
+        return next();
+    }
+    if down {
+        swallowed[slot] |= bit;
+    } else {
+        swallowed[slot] &= !bit;
+    }
+    SWALLOWED.set(swallowed);
+    if recording {
+        let modifiers = held_after(&swallowed, vk, down);
+        let state = modifiers.0 as isize | (down as isize) << 16;
+        unsafe {
+            let _ = PostMessageW(
+                Some(MSG_HWND.get()),
+                WM_APP_RECORD_KEY,
+                WPARAM(vk as usize),
+                LPARAM(state),
+            );
+        }
+    }
+    // A key that went down before recording started goes back up as usual.
+    if down || kept {
+        LRESULT(1)
+    } else {
+        next()
+    }
+}
+
+/// The modifiers held once `vk` has gone `down` or up: those the hook kept
+/// from Windows, and those it didn't, as Windows has them.
+fn held_after(swallowed: &[u64; 4], vk: u16, down: bool) -> HOT_KEY_MODIFIERS {
+    let held = |key: VIRTUAL_KEY| {
+        if key.0 == vk {
+            return down;
+        }
+        let (slot, bit) = ((key.0 as usize / 64) % 4, 1u64 << (key.0 % 64));
+        swallowed[slot] & bit != 0 || unsafe { GetAsyncKeyState(key.0 as i32) } < 0
+    };
+    let mut modifiers = HOT_KEY_MODIFIERS(0);
+    for (keys, modifier) in [
+        ([VK_LCONTROL, VK_RCONTROL], MOD_CONTROL),
+        ([VK_LMENU, VK_RMENU], MOD_ALT),
+        ([VK_LSHIFT, VK_RSHIFT], MOD_SHIFT),
+        ([VK_LWIN, VK_RWIN], MOD_WIN),
+    ] {
+        if keys.into_iter().any(held) {
+            modifiers |= modifier;
+        }
+    }
+    modifiers
 }
 
 pub(super) unsafe extern "system" fn focus_hook(

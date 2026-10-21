@@ -38,7 +38,9 @@ use crate::ui;
 use crate::win::{self, Window};
 use edit::{Input, LineEdit, Motion};
 use picking::Picking;
-use procs::{focus_hook, main_proc, menu_proc, mouse_hook, popup_proc, settings_proc};
+use procs::{
+    focus_hook, keyboard_hook, main_proc, menu_proc, mouse_hook, popup_proc, settings_proc,
+};
 
 const MAIN_CLASS: PCWSTR = w!("WinDict.Main");
 const POPUP_CLASS: PCWSTR = w!("WinDict.Popup");
@@ -59,6 +61,10 @@ const WM_APP_CAPTURE: u32 = WM_APP + 6;
 const WM_APP_CLICK: u32 = WM_APP + 7;
 const WM_APP_BACK: u32 = WM_APP + 8;
 const WM_APP_CLOSE_SETTINGS: u32 = WM_APP + 9;
+/// A key the keyboard hook caught while a shortcut is recorded: the key in
+/// `wparam`, the modifiers held after it in the low word of `lparam`, and
+/// whether it went down in the next bit.
+const WM_APP_RECORD_KEY: u32 = WM_APP + 10;
 
 const HOTKEY_LOOKUP: i32 = 1;
 const HOTKEY_ESCAPE: i32 = 2;
@@ -145,6 +151,11 @@ thread_local! {
     static SHOWN_AT: Cell<u64> = const { Cell::new(0) };
     // Where the pointer last moved over the card, on screen (GetMessagePos).
     static POINTER_AT: Cell<Option<u32>> = const { Cell::new(None) };
+    // The settings window while it records a shortcut, read by the keyboard hook.
+    static RECORDING_IN: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) };
+    // The keys the keyboard hook kept from Windows that are still down, by
+    // virtual key, so that their repeats and releases are kept too.
+    static SWALLOWED: Cell<[u64; 4]> = const { Cell::new([0; 4]) };
 }
 
 struct Captured {
@@ -371,6 +382,8 @@ pub struct App {
     hotkey_ok: bool,
     mouse_hook: Option<HHOOK>,
     focus_hook: Option<HWINEVENTHOOK>,
+    /// Catches keys before Windows does, while a shortcut is recorded.
+    keyboard_hook: Option<HHOOK>,
 }
 
 pub fn run(compositor: Compositor) -> windows::core::Result<()> {
@@ -489,6 +502,7 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             hotkey_ok: false,
             mouse_hook: None,
             focus_hook: None,
+            keyboard_hook: None,
         };
         app.register_hotkey();
         let mut dictionary_error = offline::set_languages(&app.config.languages).err();
@@ -1791,6 +1805,11 @@ impl App {
                 if let Some(mut s) = self.settings.take() {
                     s.finish_hide();
                 }
+                if let Some(h) = self.keyboard_hook.take() {
+                    unsafe {
+                        let _ = UnhookWindowsHookEx(h);
+                    }
+                }
                 trim_working_set();
             }
             TIMER_TEARDOWN if self.popup.as_ref().is_some_and(|p| !p.visible) => {
@@ -2040,6 +2059,7 @@ impl App {
             return;
         }
         selection::take_foreground(settings.hwnd);
+        self.sync_recording();
     }
 
     fn close_settings(&mut self) {
@@ -2048,6 +2068,7 @@ impl App {
         };
         let recording = settings.recording();
         let _ = settings.begin_hide();
+        self.sync_recording();
         // Recording had put the shortcut aside.
         if recording {
             self.register_hotkey();
@@ -2064,6 +2085,7 @@ impl App {
         if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
             let _ = settings.refresh(theme, values);
         }
+        self.sync_recording();
     }
 
     /// Runs `f` on the open settings window, and carries out what it asks for.
@@ -2078,6 +2100,22 @@ impl App {
             .and_then(|s| f(s).ok().flatten());
         if let Some(change) = change {
             self.on_setting(change);
+        }
+        self.sync_recording();
+    }
+
+    /// Lets the keyboard hook know whether a shortcut is being recorded,
+    /// setting it up the first time one is.
+    fn sync_recording(&mut self) {
+        let recording = self
+            .settings
+            .as_ref()
+            .filter(|s| s.visible && s.recording());
+        let hwnd = recording.map_or(HWND(std::ptr::null_mut()), |s| s.hwnd);
+        RECORDING_IN.set(hwnd);
+        if recording.is_some() && self.keyboard_hook.is_none() {
+            self.keyboard_hook =
+                unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), None, 0).ok() };
         }
     }
 

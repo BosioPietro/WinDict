@@ -286,7 +286,7 @@ impl Settings {
             h: size,
             ..Rect::default()
         };
-        let (close_hover, _) = rounded(c, &close, face, px(CLOSE_RADIUS), t.highlight())?;
+        let (close_hover, _) = rounded(c, r, &close, face, px(CLOSE_RADIUS), t.highlight())?;
         close_hover.SetOpacity(0.0)?;
         let glyph = Text::new(c, &close)?;
         let cross = r.layout_line(CLOSE_GLYPH, Face::Chrome, Ink::Primary, CLOSE_SIZE)?;
@@ -308,10 +308,8 @@ impl Settings {
 
         let (group_x, group_w, row_h) = (px(GROUP_X), card_w - 2.0 * px(GROUP_X), px(ROW_H));
         let (languages_layout, slack) = self.layout_languages()?;
-        let translate_h = px(TRANSLATE_HEAD)
-            + (languages_layout.height * s).ceil()
-            + slack
-            + px(TRANSLATE_FOOT);
+        let translate_h =
+            px(TRANSLATE_HEAD) + (languages_layout.height * s).ceil() + slack + px(TRANSLATE_FOOT);
         let mut parts = Parts::default();
         let mut list = None;
         let mut y = 0.0;
@@ -363,7 +361,7 @@ impl Settings {
             clip.SetSize(bounds.size())?;
             clip.SetCornerRadius(v2(px(GROUP_RADIUS), px(GROUP_RADIUS)))?;
             group.SetClip(&c.CreateGeometricClipWithGeometry(&clip)?)?;
-            let (bg, _) = rounded(c, &group, open, 0.0, t.group())?;
+            let (bg, _) = rounded(c, r, &group, open, 0.0, t.group())?;
             let mut row_y = 0.0;
             let mut tail: Option<ContainerVisual> = None;
             for (j, spec) in rows.iter().enumerate() {
@@ -394,7 +392,8 @@ impl Settings {
                 true => Some(self.build_list(&mut parts, &group, group_at, group_h, group_w)?),
                 false => None,
             };
-            let (_, border) = outline(c, &group, open, px(GROUP_RADIUS), t.group_stroke())?;
+            let (_, border) =
+                resizable_outline(c, &group, open, px(GROUP_RADIUS), t.group_stroke())?;
             border.SetSize(v2(bounds.w - 1.0, bounds.h - 1.0))?;
             if let Some(tail) = tail {
                 let below = container(c, &scroller, v3(0.0, 0.0))?;
@@ -485,7 +484,10 @@ impl Settings {
         thumb.SetClip(&c.CreateGeometricClipWithGeometry(&thumb_clip)?)?;
         thumb.SetOpacity(0.0)?;
         content.Children()?.InsertAtTop(&thumb)?;
-        let tip = self.build_tip(&content)?;
+        let tips = vec![
+            (Hit::Info, self.build_tip(&content, EMAIL_TIP)?),
+            (Hit::Swap, self.build_tip(&content, SWAP_TIP)?),
+        ];
 
         Ok(View {
             content,
@@ -498,7 +500,7 @@ impl Settings {
             scroller,
             thumb,
             thumb_clip,
-            tip,
+            tips,
             reveal,
             shortcut: parts.shortcut.ok_or_else(missing)?,
             switches: parts
@@ -573,8 +575,8 @@ impl Settings {
                 h: s.round().max(1.0),
                 ..row
             };
-            rounded(c, &list, line, 0.0, t.separator())?;
-            let (hover, _) = rounded(c, &list, row, 0.0, t.highlight())?;
+            rounded(c, r, &list, line, 0.0, t.separator())?;
+            let (hover, _) = rounded(c, r, &list, row, 0.0, t.highlight())?;
             hover.SetOpacity(0.0)?;
             let middle = row.y + h / 2.0;
             let check = Rect {
@@ -590,15 +592,15 @@ impl Settings {
             };
             let radius = px(CHECK_RADIUS);
             let off = container(c, &list, check.at())?;
-            rounded(c, &off, face, radius, t.sunken())?;
-            outline(c, &off, face, radius, t.strong_stroke())?;
+            rounded(c, r, &off, face, radius, t.sunken())?;
+            outline(c, r, &off, face, radius, t.strong_stroke())?;
             let on = container(c, &list, check.at())?;
             on.SetCenterPoint(Vector3 {
                 X: b / 2.0,
                 Y: b / 2.0,
                 Z: 0.0,
             })?;
-            rounded(c, &on, face, radius, t.accent)?;
+            rounded(c, r, &on, face, radius, t.accent)?;
             let tick = Text::new(c, &on)?;
             let glyph = r.layout_aligned(
                 CHECK_GLYPH,
@@ -663,7 +665,7 @@ impl Settings {
                 h: s.round().max(1.0),
                 ..row
             };
-            rounded(c, group, line, 0.0, t.separator())?;
+            rounded(c, r, group, line, 0.0, t.separator())?;
         }
         if matches!(spec.control, Control::Translate) {
             return self.build_translate(parts, group, group_at, spec, row, languages);
@@ -671,7 +673,7 @@ impl Settings {
         // Rows that are clicked as a whole light up under the pointer.
         let hover = match spec.control {
             Control::Shortcut | Control::Switch(_) | Control::Languages => {
-                let (hover, _) = rounded(c, group, row, 0.0, t.highlight())?;
+                let (hover, _) = rounded(c, r, group, row, 0.0, t.highlight())?;
                 hover.SetOpacity(0.0)?;
                 Some(hover)
             }
@@ -868,14 +870,25 @@ impl Settings {
         let detail_at = v3(px(ROW_PAD), top + title_size.Y + px(DETAIL_GAP));
         detail.visual.SetOffset(detail_at)?;
 
+        let at = v3(px(ROW_PAD), row.y + px(TRANSLATE_HEAD));
+        // Under the boxes, so the arrows show through it.
+        let swap = languages.links.iter().find(|l| l.target == Target::Swap);
+        let swap_at = swap.map_or(Rect::default(), |l| Rect {
+            x: at.X + (l.x * s).round(),
+            y: at.Y + (l.y * s).round(),
+            w: (l.width * s).round(),
+            h: (l.height * s).round(),
+        });
+        let (swap_hover, _) = rounded(c, r, group, swap_at, px(SWAP_RING_RADIUS), t.highlight())?;
+        swap_hover.SetOpacity(0.0)?;
         let boxes = Text::new(c, group)?;
         boxes.show(r, languages, s, t)?;
-        let at = v3(px(ROW_PAD), row.y + px(TRANSLATE_HEAD));
         boxes.visual.SetOffset(at)?;
         let mut blinker = None;
         if let Some(m) = languages.caret {
             let caret = rounded(
                 c,
+                r,
                 &boxes.visual.cast::<ContainerVisual>()?,
                 Rect {
                     x: (m.x * s).round(),
@@ -892,6 +905,7 @@ impl Settings {
         parts.boxes = Some(BoxesView {
             text: boxes,
             caret: blinker,
+            swap_hover,
             at,
             group_at,
         });
@@ -936,7 +950,12 @@ impl Settings {
         right: f32,
         middle: f32,
     ) -> Result<(SwitchView, Rect)> {
-        let (c, t, s) = (&self.anim.compositor, &self.theme, self.scale);
+        let (c, r, t, s) = (
+            &self.anim.compositor,
+            &self.renderer,
+            &self.theme,
+            self.scale,
+        );
         let px = |dip: f32| (dip * s).round();
         let (w, h) = (px(SWITCH_W), px(SWITCH_H));
         let track = Rect {
@@ -952,16 +971,16 @@ impl Settings {
             ..Rect::default()
         };
         let off = container(c, &root, v3(0.0, 0.0))?;
-        rounded(c, &off, face, h / 2.0, t.sunken())?;
-        outline(c, &off, face, h / 2.0, t.strong_stroke())?;
-        let (on, _) = rounded(c, &root, face, h / 2.0, t.accent)?;
+        rounded(c, r, &off, face, h / 2.0, t.sunken())?;
+        outline(c, r, &off, face, h / 2.0, t.strong_stroke())?;
+        let (on, _) = rounded(c, r, &root, face, h / 2.0, t.accent)?;
         let knob = px(KNOB);
         let dot = Rect {
             w: knob,
             h: knob,
             ..Rect::default()
         };
-        let (knob_visual, knob_brush) = rounded(c, &root, dot, knob / 2.0, t.knob(false))?;
+        let (knob_visual, knob_brush) = rounded(c, r, &root, dot, knob / 2.0, t.knob(false))?;
         knob_visual.SetCenterPoint(Vector3 {
             X: knob / 2.0,
             Y: knob / 2.0,
@@ -1010,8 +1029,8 @@ impl Settings {
             h,
             ..Rect::default()
         };
-        rounded(c, &root, face, px(SEGMENT_RADIUS), t.sunken())?;
-        outline(c, &root, face, px(SEGMENT_RADIUS), t.control_stroke())?;
+        rounded(c, r, &root, face, px(SEGMENT_RADIUS), t.sunken())?;
+        outline(c, r, &root, face, px(SEGMENT_RADIUS), t.control_stroke())?;
 
         let inset = px(PILL_INSET);
         let pill_face = Rect {
@@ -1026,8 +1045,8 @@ impl Settings {
             Y: pill_face.h / 2.0,
             Z: 0.0,
         })?;
-        rounded(c, &pill, pill_face, px(PILL_RADIUS), t.raised())?;
-        outline(c, &pill, pill_face, px(PILL_RADIUS), t.control_stroke())?;
+        rounded(c, r, &pill, pill_face, px(PILL_RADIUS), t.raised())?;
+        outline(c, r, &pill, pill_face, px(PILL_RADIUS), t.control_stroke())?;
 
         let mut labels = Vec::new();
         let mut segments = Vec::new();
@@ -1053,8 +1072,8 @@ impl Settings {
         Ok((ChoiceView { pill, labels, rest }, at, segments))
     }
 
-    /// The info tooltip, over everything and out of sight, in `parent`.
-    fn build_tip(&self, parent: &ContainerVisual) -> Result<TipView> {
+    /// A tooltip saying `text`, over everything and out of sight, in `parent`.
+    fn build_tip(&self, parent: &ContainerVisual, text: &str) -> Result<TipView> {
         let (c, r, t, s) = (
             &self.anim.compositor,
             &self.renderer,
@@ -1063,7 +1082,7 @@ impl Settings {
         );
         let px = |dip: f32| (dip * s).round();
         let pad = px(TIP_PAD);
-        let layout = r.layout_line(EMAIL_TIP, Face::Small, Ink::Primary, TIP_W - 2.0 * TIP_PAD)?;
+        let layout = r.layout_tip(text, TIP_W - 2.0 * TIP_PAD)?;
         let text_size = v2((layout.width * s).ceil(), (layout.height * s).ceil());
         let face = Rect {
             w: text_size.X + 2.0 * pad,
@@ -1093,8 +1112,8 @@ impl Settings {
         shadow.SetOffset(v3(-spread, -spread + px(TIP_SHADOW_DY)))?;
         shadow.SetSize(v2(face.w + 2.0 * spread, face.h + 2.0 * spread))?;
         root.Children()?.InsertAtTop(&shadow)?;
-        rounded(c, &root, face, radius, fill)?;
-        outline(c, &root, face, radius, t.border())?;
+        rounded(c, r, &root, face, radius, fill)?;
+        outline(c, r, &root, face, radius, t.border())?;
         let text = Text::new(c, &root)?;
         text.show(r, &layout, s, t)?;
         text.visual.SetOffset(v3(pad, pad))?;
@@ -1137,10 +1156,10 @@ impl Settings {
         // differently as the field moves by fractions of a pixel in a
         // scroll, which made the lines along the bottom flicker. The shapes
         // are rounded themselves instead.
-        rounded(c, &root, face, radius, t.control())?;
-        let (hover, _) = rounded(c, &root, face, radius, t.highlight())?;
+        rounded(c, r, &root, face, radius, t.control())?;
+        let (hover, _) = rounded(c, r, &root, face, radius, t.highlight())?;
         hover.SetOpacity(0.0)?;
-        outline(c, &root, face, radius, t.control_stroke())?;
+        outline(c, r, &root, face, radius, t.control_stroke())?;
         // A line `thick` tall along the bottom, thinning to nothing up the
         // corners, drawn as one shape so that it follows their curve.
         let edge = |color: Color, thick: f32| -> Result<SpriteVisual> {
@@ -1170,7 +1189,7 @@ impl Settings {
         host.SetSize(text_at.size())?;
         host.SetClip(&c.CreateInsetClip()?)?;
         let text = Text::new(c, &host)?;
-        let (caret, _) = rounded(c, &host, Rect::default(), 0.0, t.accent)?;
+        let (caret, _) = rounded(c, r, &host, Rect::default(), 0.0, t.accent)?;
         caret.SetOpacity(0.0)?;
         let view = FieldView {
             hover,
@@ -1222,9 +1241,9 @@ impl Settings {
                 Z: 0.0,
             })?;
             let radius = px(STEP_RADIUS);
-            rounded(c, &visual, face, radius, t.control())?;
-            outline(c, &visual, face, radius, t.control_stroke())?;
-            let (hover, _) = rounded(c, &visual, face, radius, t.highlight())?;
+            rounded(c, r, &visual, face, radius, t.control())?;
+            outline(c, r, &visual, face, radius, t.control_stroke())?;
+            let (hover, _) = rounded(c, r, &visual, face, radius, t.highlight())?;
             hover.SetOpacity(0.0)?;
             let text = Text::new(c, &visual)?;
             let line = r.layout_line(glyph, Face::Chrome, Ink::Primary, STEP_SIZE)?;
@@ -1269,6 +1288,7 @@ fn container(c: &Compositor, parent: &ContainerVisual, at: Vector3) -> Result<Co
 /// A rectangle of `color` with corners of `radius` pixels, in `parent`.
 fn rounded(
     c: &Compositor,
+    r: &Renderer,
     parent: &ContainerVisual,
     rect: Rect,
     radius: f32,
@@ -1276,14 +1296,13 @@ fn rounded(
 ) -> Result<(SpriteVisual, CompositionColorBrush)> {
     let visual = c.CreateSpriteVisual()?;
     let brush = c.CreateColorBrushWithColor(color)?;
-    visual.SetBrush(&brush)?;
     visual.SetOffset(rect.at())?;
     visual.SetSize(rect.size())?;
     if radius > 0.0 {
-        let clip = c.CreateRoundedRectangleGeometry()?;
-        clip.SetSize(rect.size())?;
-        clip.SetCornerRadius(v2(radius, radius))?;
-        visual.SetClip(&c.CreateGeometricClipWithGeometry(&clip)?)?;
+        let mask = r.draw_rounded(rect.w, rect.h, radius, None)?;
+        visual.SetBrush(&masked(c, &brush, &mask)?)?;
+    } else {
+        visual.SetBrush(&brush)?;
     }
     parent.Children()?.InsertAtTop(&visual)?;
     Ok((visual, brush))
@@ -1291,6 +1310,43 @@ fn rounded(
 
 /// A hairline just inside a rounded rectangle, in `parent`.
 fn outline(
+    c: &Compositor,
+    r: &Renderer,
+    parent: &ContainerVisual,
+    rect: Rect,
+    radius: f32,
+    color: Color,
+) -> Result<SpriteVisual> {
+    let visual = c.CreateSpriteVisual()?;
+    let brush = c.CreateColorBrushWithColor(color)?;
+    let mask = r.draw_rounded(rect.w, rect.h, radius, Some(1.0))?;
+    visual.SetBrush(&masked(c, &brush, &mask)?)?;
+    visual.SetOffset(rect.at())?;
+    visual.SetSize(rect.size())?;
+    parent.Children()?.InsertAtTop(&visual)?;
+    Ok(visual)
+}
+
+/// `brush` showing only through `mask`, drawn pixel for pixel. The round
+/// edges of the controls are drawn this way rather than as shapes or clips:
+/// what scrolls is drawn again through a visual surface to fade its ends,
+/// and that leaves shapes and clips jagged, but not what's drawn already.
+fn masked(
+    c: &Compositor,
+    brush: &CompositionColorBrush,
+    mask: &CompositionDrawingSurface,
+) -> Result<CompositionMaskBrush> {
+    let shape = c.CreateSurfaceBrushWithSurface(mask)?;
+    shape.SetStretch(CompositionStretch::Fill)?;
+    let masked = c.CreateMaskBrush()?;
+    masked.SetSource(brush)?;
+    masked.SetMask(&shape)?;
+    Ok(masked)
+}
+
+/// A hairline just inside a rounded rectangle, in `parent`, that can be
+/// resized through the geometry returned.
+fn resizable_outline(
     c: &Compositor,
     parent: &ContainerVisual,
     rect: Rect,

@@ -49,6 +49,9 @@ const TRANSLATE_ROOM: f32 = CARD_W - PAD_X - TRANSLATE_X + 6.0;
 /// "Translate" in Segoe Fluent Icons and Segoe MDL2 Assets.
 const TRANSLATE_GLYPH: &str = "\u{E8C1}";
 const TRANSLATE_TIP: &str = "Translate (Ctrl+T)";
+const SWAP_TIP: &str = "Swap languages";
+/// The swap button's tooltip's tool, after the back and translate buttons'.
+const SWAP_TOOL: usize = 3;
 /// The ring around the link Tab moved to, as on Windows 11 controls.
 const FOCUS_STROKE: f32 = 2.0;
 const FOCUS_RADIUS: f32 = 4.0;
@@ -179,6 +182,8 @@ pub struct Popup {
     scroll: f32,
     scroll_anim: Option<Glide>,
     wheel_bursts: Bursts,
+    /// Where the pointer last was on the window, in window pixels.
+    pointer: Option<(i32, i32)>,
     pub visible: bool,
     /// Last, so it goes after everything shown on it.
     _window: Window,
@@ -231,14 +236,33 @@ struct Content {
     caret_brush: CompositionColorBrush,
     /// The first of the focused link's rectangles in `links`.
     focused: Option<usize>,
+    /// Lightens the button swapping a translation's languages under the
+    /// pointer; inside `visual` too.
+    swap: ShapeVisual,
+    swap_geometry: CompositionRoundedRectangleGeometry,
+    swap_brush: CompositionColorBrush,
+    swap_hovered: bool,
+    /// Says what that button does. Owned by the card's window.
+    swap_tip: Option<HWND>,
+    /// The area of the window it shows over, last set.
+    swap_tip_rect: RECT,
 }
 
 impl Content {
-    fn new(c: &Compositor, card: &ContainerVisual) -> Result<Content> {
+    fn new(c: &Compositor, card: &ContainerVisual, hwnd: HWND) -> Result<Content> {
         let host = c.CreateContainerVisual()?;
         host.SetClip(&c.CreateInsetClip()?)?;
         let (visual, brush) = text_sprite(c)?;
         host.Children()?.InsertAtTop(&visual)?;
+        let swap = c.CreateShapeVisual()?;
+        swap.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
+        swap.SetOpacity(0.0)?;
+        let swap_geometry = c.CreateRoundedRectangleGeometry()?;
+        let swap_shape = c.CreateSpriteShapeWithGeometry(&swap_geometry)?;
+        let swap_brush = c.CreateColorBrush()?;
+        swap_shape.SetFillBrush(&swap_brush)?;
+        swap.Shapes()?.Append(&swap_shape)?;
+        visual.Children()?.InsertAtTop(&swap)?;
         // Reaches past the definition's edges, which would clip the rings
         // of links at them.
         let focus = c.CreateShapeVisual()?;
@@ -263,7 +287,18 @@ impl Content {
             caret,
             caret_brush,
             focused: None,
+            swap,
+            swap_geometry,
+            swap_brush,
+            swap_hovered: false,
+            swap_tip: create_tooltip(hwnd, SWAP_TIP, SWAP_TOOL),
+            swap_tip_rect: RECT::default(),
         })
+    }
+
+    /// The swap button's link, if the card has one.
+    fn swap_link(&self) -> Option<&Link> {
+        self.links.iter().find(|l| l.target == Target::Swap)
     }
 
     /// Puts the caret at `mark`, blinking, or takes it away.
@@ -702,7 +737,7 @@ impl Popup {
             TRANSLATE_X,
             0.0,
         )?;
-        let content = Content::new(c, &frame.card)?;
+        let content = Content::new(c, &frame.card, hwnd)?;
         let loader = Loader::new(c, &content.host, &theme)?;
         let scroll_chrome = ScrollChrome::new(c, &frame.card)?;
         let search = SearchBox::new(c, &frame.card)?;
@@ -735,6 +770,7 @@ impl Popup {
             scroll: 0.0,
             scroll_anim: None,
             wheel_bursts: Bursts::default(),
+            pointer: None,
             visible: false,
             _window: window,
         })
@@ -1071,7 +1107,7 @@ impl Popup {
         }
         self.update_scroll_chrome(false)?;
         self.sync_tooltip();
-        Ok(())
+        self.sync_swap()
     }
 
     /// Shows or hides the back button. The word moves to make room for it
@@ -1092,6 +1128,7 @@ impl Popup {
 
     /// Highlights the button the pointer, in window pixels, is on.
     pub fn hover(&mut self, point: Option<(i32, i32)>) -> Result<()> {
+        self.pointer = point;
         if self.search.active {
             let point = point.map(|(x, y)| self.card_point(x, y));
             return self.search.hover(&self.anim, point);
@@ -1099,7 +1136,58 @@ impl Popup {
         let over_back = point.is_some_and(|(x, y)| self.back_at(x, y));
         let over_translate = point.is_some_and(|(x, y)| self.translate_at(x, y));
         self.back.set_hovered(&self.anim, over_back)?;
-        self.translate.set_hovered(&self.anim, over_translate)
+        self.translate.set_hovered(&self.anim, over_translate)?;
+        self.sync_swap()
+    }
+
+    /// Lightens the button swapping a translation's languages while the
+    /// pointer's on it, and keeps its tooltip over it as the body changes
+    /// and scrolls.
+    fn sync_swap(&mut self) -> Result<()> {
+        let s = self.scale;
+        let link = self.content.swap_link().cloned();
+        let rect = link.as_ref().map_or(RECT::default(), |l| self.link_rect(l));
+        let over = self
+            .pointer
+            .is_some_and(|(x, y)| self.link_at(x, y) == Some(&Target::Swap));
+        let content = &mut self.content;
+        if let Some(l) = &link {
+            let geometry = &content.swap_geometry;
+            geometry.SetOffset(v2((l.x * s).round(), (l.y * s).round()))?;
+            geometry.SetSize(v2((l.width * s).round(), (l.height * s).round()))?;
+            geometry.SetCornerRadius(v2(BACK_RADIUS * s, BACK_RADIUS * s))?;
+        }
+        if over != content.swap_hovered {
+            content.swap_hovered = over;
+            let opacity = if over { 1.0 } else { 0.0 };
+            let anim = &self.anim;
+            anim.scalar(&content.swap, "Opacity", opacity, 100, 0, &anim.decelerate)?;
+        }
+        if rect != content.swap_tip_rect {
+            content.swap_tip_rect = rect;
+            if let Some(tip) = content.swap_tip {
+                set_tooltip_rect(tip, self.hwnd, SWAP_TOOL, rect);
+            }
+        }
+        Ok(())
+    }
+
+    /// The part of the body's link `l` in view, in window pixels.
+    fn link_rect(&self, l: &Link) -> RECT {
+        let s = self.scale;
+        let body = self.frame_y() + self.header_h;
+        let left = (MARGIN + PAD_X + l.x) * s;
+        let top = (body + l.y * s - self.scroll).max(body);
+        let bottom = (body + (l.y + l.height) * s - self.scroll).min(self.frame_y() + self.card_h);
+        if bottom <= top {
+            return RECT::default();
+        }
+        RECT {
+            left: left as i32,
+            top: top as i32,
+            right: (left + l.width * s) as i32,
+            bottom: bottom as i32,
+        }
     }
 
     /// Whether a point in window pixels is on the back button.
@@ -1193,7 +1281,8 @@ impl Popup {
         self.scroll_anim = Some(glide);
         let x = PAD_X * self.scale;
         glide.play(&self.anim, &self.content.visual, |scroll| v3(x, -scroll))?;
-        self.update_scroll_chrome(true)
+        self.update_scroll_chrome(true)?;
+        self.sync_swap()
     }
 
     /// The scroll position currently on screen, following the running animation.
@@ -1380,6 +1469,11 @@ impl Popup {
         self.back.reset()?;
         self.translate.reset()?;
         self.search.reset();
+        // The pointer comes back to the card afresh.
+        self.pointer = None;
+        self.content.swap_hovered = false;
+        Animator::stop(&self.content.swap, &["Opacity"]);
+        self.content.swap.SetOpacity(0.0)?;
         self.card_h = 0.0;
         Ok(())
     }
@@ -1452,7 +1546,8 @@ impl Popup {
         (self.header_h, self.body_h) = (h, 0.0);
         (self.scroll, self.scroll_anim) = (0.0, None);
         self.resize(h, in_place)?;
-        self.update_scroll_chrome(false)
+        self.update_scroll_chrome(false)?;
+        self.sync_swap()
     }
 
     /// A point in window pixels, relative to the card's top left.
@@ -1491,6 +1586,7 @@ impl Popup {
         self.frame.apply_theme(&self.renderer, &t, self.scale)?;
         self.loader.brush.SetColor(t.accent)?;
         self.content.focus_brush.SetColor(t.focus())?;
+        self.content.swap_brush.SetColor(t.highlight())?;
         self.content.caret_brush.SetColor(t.accent)?;
         self.back.apply_theme(&self.renderer, &t, self.scale)?;
         self.translate.apply_theme(&self.renderer, &t, self.scale)?;

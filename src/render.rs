@@ -58,6 +58,12 @@ enum Item {
         width: f32,
         height: f32,
     },
+    /// The Windows logo, `size` square, in the primary ink.
+    Logo {
+        x: f32,
+        y: f32,
+        size: f32,
+    },
     /// A language's flag.
     Flag {
         flag: Flag,
@@ -196,6 +202,7 @@ impl Layout {
                 Item::Text { layout, y, .. } => Some(y + first_line_height(layout)),
                 Item::Rule { .. }
                 | Item::Key { .. }
+                | Item::Logo { .. }
                 | Item::Flag { .. }
                 | Item::Shape { .. }
                 | Item::Fade { .. }
@@ -322,6 +329,9 @@ const BADGE_W: f32 = 24.0;
 const CARET_W: f32 = 1.5;
 /// The outline of a box being typed in.
 const FOCUS_STROKE: f32 = 2.0;
+/// The Windows logo on a shortcut's cap, in DIPs: four panes, a gap apart.
+const LOGO_SIZE: f32 = 11.0;
+const LOGO_GAP: f32 = 1.0;
 
 /// A layout being built top to bottom.
 #[derive(Default)]
@@ -728,6 +738,21 @@ impl Renderer {
         Ok(layout)
     }
 
+    /// A tooltip's small text, wrapped at `width` but only as wide as its
+    /// longest line.
+    pub fn layout_tip(&self, text: &str, width: f32) -> Result<Layout> {
+        let mut out = Stack::default();
+        let line = self.text(text, &self.formats.footer, width)?;
+        let (w, height) = out.text(line, 0.0, Ink::Primary);
+        Ok(Layout {
+            items: out.items,
+            width: w.ceil().min(width),
+            height,
+            links: Vec::new(),
+            caret: None,
+        })
+    }
+
     /// A small heading in spaced capitals, like a part of speech.
     pub fn layout_label(&self, text: &str, ink: Ink, width: f32) -> Result<Layout> {
         let mut out = Stack::default();
@@ -742,6 +767,7 @@ impl Renderer {
     }
 
     /// The keys of a shortcut, each on its own cap: "[Ctrl] [Alt] [D]".
+    /// The Windows key shows its logo.
     pub fn layout_caps(&self, keys: &[&str]) -> Result<Layout> {
         let (pad_x, pad_y, gap) = (8.0, 3.0, 4.0);
         let mut out = Stack {
@@ -757,14 +783,27 @@ impl Renderer {
             let (w, h, _) = metrics(&name);
             // At least square, so one-letter keys don't look pinched.
             let cap_h = h + 2.0 * pad_y;
-            let cap_w = (w + 2.0 * pad_x).max(cap_h);
+            let logo = *key == "Win";
+            let cap_w = if logo {
+                cap_h
+            } else {
+                (w + 2.0 * pad_x).max(cap_h)
+            };
             out.items.push(Item::Key {
                 x,
                 y: 0.0,
                 width: cap_w,
                 height: cap_h,
             });
-            out.text(name, x + (cap_w - w) / 2.0, Ink::Primary);
+            if logo {
+                out.items.push(Item::Logo {
+                    x: x + (cap_w - LOGO_SIZE) / 2.0,
+                    y: (cap_h - LOGO_SIZE) / 2.0,
+                    size: LOGO_SIZE,
+                });
+            } else {
+                out.text(name, x + (cap_w - w) / 2.0, Ink::Primary);
+            }
             x += cap_w;
             height = height.max(cap_h);
         }
@@ -1676,6 +1715,23 @@ impl Renderer {
                         dc.FillRoundedRectangle(&cap, &key);
                         dc.DrawRoundedRectangle(&cap, &divider, 1.0 / scale, None);
                     }
+                    Item::Logo { x, y, size } => {
+                        // On whole pixels, so the panes stay crisp.
+                        let snap = |v: f32| (v * scale).round() / scale;
+                        let gap = (LOGO_GAP * scale).round().max(1.0) / scale;
+                        let pane = snap((size - gap) / 2.0);
+                        let (left, top) = (snap(*x), snap(*y));
+                        for (dx, dy) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+                            let (l, t) = (left + dx * (pane + gap), top + dy * (pane + gap));
+                            let rect = D2D_RECT_F {
+                                left: l,
+                                top: t,
+                                right: l + pane,
+                                bottom: t + pane,
+                            };
+                            dc.FillRectangle(&rect, &primary);
+                        }
+                    }
                     Item::Flag {
                         flag,
                         x,
@@ -1941,6 +1997,47 @@ impl Renderer {
                 None,
             )?;
             dc.FillGeometry(&line, &brush, None::<&ID2D1Brush>);
+            Ok(())
+        })?;
+        Ok(surface)
+    }
+
+    /// A `w` by `h` pixel rounded rectangle with corners of `radius`, in
+    /// white, smoothed at its edges: filled, or with `stroke` a line that
+    /// thick just inside its edge. Meant as a mask, tinted by a color brush.
+    pub fn draw_rounded(
+        &self,
+        w: f32,
+        h: f32,
+        radius: f32,
+        stroke: Option<f32>,
+    ) -> Result<CompositionDrawingSurface> {
+        let surface = self.surface(w.max(1.0), h.max(1.0))?;
+        self.paint(&surface, 1.0, |dc| unsafe {
+            let white = dc.CreateSolidColorBrush(
+                &D2D1_COLOR_F {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                },
+                None,
+            )?;
+            let half = stroke.map_or(0.0, |s| s / 2.0);
+            let shape = D2D1_ROUNDED_RECT {
+                rect: D2D_RECT_F {
+                    left: half,
+                    top: half,
+                    right: w - half,
+                    bottom: h - half,
+                },
+                radiusX: (radius - half).max(0.0),
+                radiusY: (radius - half).max(0.0),
+            };
+            match stroke {
+                Some(thick) => dc.DrawRoundedRectangle(&shape, &white, thick, None),
+                None => dc.FillRoundedRectangle(&shape, &white),
+            }
             Ok(())
         })?;
         Ok(surface)

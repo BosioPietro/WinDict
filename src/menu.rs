@@ -92,7 +92,7 @@ fn entries(hotkey: &str, autostart: bool) -> Vec<Entry> {
         },
         Entry::separator(),
         Entry::command(Command::Autostart, "Start with Windows", autostart),
-        Entry::command(Command::Settings, "Settings\u{2026}", false),
+        Entry::command(Command::Settings, "Settings", false),
         Entry::command(Command::Reload, "Reload settings", false),
         Entry::separator(),
         Entry::command(Command::Quit, "Quit", false),

@@ -180,13 +180,15 @@ const RECORDING_DETAIL: &str = "Press the new shortcut, or Esc to cancel";
 const RECORDING_HINT: &str = "Press keys";
 const NEEDS_MODIFIER: &str = "Hold Ctrl, Alt or Win with the key";
 const UNUSABLE_KEY: &str = "That key can\u{2019}t be part of a shortcut";
-pub const SHORTCUT_TAKEN: &str = "Another app already uses that shortcut";
+pub const SHORTCUT_TAKEN: &str = "Already used by Windows or another app";
 const CONFIG_LINK: &str = "Open config.json";
 const EMAIL_PLACEHOLDER: &str = "name@example.com";
 /// Over the info symbol by the email field.
 const EMAIL_TIP: &str = "MyMemory, the translator used when Google Translate can\u{2019}t \
     be reached, allows 5,000 characters a day, or 50,000 with an email address. \
     It\u{2019}s sent only to MyMemory, with the words translated.";
+/// Over the button between the default languages.
+const SWAP_TIP: &str = "Swap languages";
 /// The longest an email address can be.
 const MAX_EMAIL_CHARS: usize = 254;
 
@@ -618,7 +620,7 @@ struct LanguageView {
     status_middle: f32,
 }
 
-/// The info tooltip.
+/// A tooltip, shown over what it's for.
 struct TipView {
     root: ContainerVisual,
     size: Vector2,
@@ -700,7 +702,8 @@ struct View {
     scroller: ContainerVisual,
     thumb: SpriteVisual,
     thumb_clip: CompositionRoundedRectangleGeometry,
-    tip: TipView,
+    /// The tooltips, and what each shows over.
+    tips: Vec<(Hit, TipView)>,
     /// What rises in as the window opens, and where each rests.
     reveal: Vec<(Visual, Vector3)>,
     shortcut: ShortcutView,
@@ -752,6 +755,8 @@ impl View {
 struct BoxesView {
     text: Text,
     caret: Option<SpriteVisual>,
+    /// Lightens the swap button under the pointer.
+    swap_hover: SpriteVisual,
     /// In the group, and the group in the scroller.
     at: Vector3,
     group_at: Vector3,
@@ -987,6 +992,8 @@ impl Settings {
     /// The left button went down at a point in window pixels.
     pub fn press(&mut self, x: i32, y: i32) -> Result<Option<Change>> {
         let hit = self.hit_at(x, y);
+        // A click sends a tooltip away, as the system's do.
+        self.show_tip(None)?;
         // The pointer's in charge now: the ring goes until Tab brings it back.
         self.ring = false;
         self.active = true;
@@ -1033,7 +1040,7 @@ impl Settings {
     /// A key went down.
     pub fn key(&mut self, key: VIRTUAL_KEY) -> Result<Option<Change>> {
         if self.recording {
-            return self.record(key);
+            return self.record(key, held_modifiers());
         }
         if self.picking.is_some() {
             return self.picker_key(key);
@@ -1138,6 +1145,26 @@ impl Settings {
             self.set_preview(held_modifiers())?;
         }
         Ok(())
+    }
+
+    /// A key went `down`, or up, while recording, caught before Windows
+    /// could act on it, leaving `modifiers` held.
+    pub fn record_key(
+        &mut self,
+        key: VIRTUAL_KEY,
+        modifiers: HOT_KEY_MODIFIERS,
+        down: bool,
+    ) -> Result<Option<Change>> {
+        if !self.recording {
+            return Ok(None);
+        }
+        if down {
+            return self.record(key, modifiers);
+        }
+        if is_modifier(key) {
+            self.set_preview(modifiers)?;
+        }
+        Ok(None)
     }
 
     /// The window became the active one again: the caret's back.
@@ -1795,9 +1822,8 @@ impl Settings {
         self.show_recording()
     }
 
-    /// A key went down while recording.
-    fn record(&mut self, key: VIRTUAL_KEY) -> Result<Option<Change>> {
-        let modifiers = held_modifiers();
+    /// A key went down while recording, leaving `modifiers` held.
+    fn record(&mut self, key: VIRTUAL_KEY, modifiers: HOT_KEY_MODIFIERS) -> Result<Option<Change>> {
         if is_modifier(key) {
             self.set_preview(modifiers)?;
             return Ok(None);
@@ -1867,8 +1893,8 @@ impl Settings {
             return Ok(());
         }
         let old = std::mem::replace(&mut self.hovered, hit);
-        if old == Some(Hit::Info) || hit == Some(Hit::Info) {
-            self.show_tip(hit == Some(Hit::Info))?;
+        if self.has_tip(old) || self.has_tip(hit) {
+            self.show_tip(hit)?;
         }
         self.show_hover(old)?;
         self.show_hover(hit)?;
@@ -1957,7 +1983,7 @@ impl Settings {
         let glide = Glide::new(self.scroll_anim, self.scroll, to, push, max, most, ms);
         self.scroll = to;
         self.scroll_anim = Some(glide);
-        self.show_tip(false)?;
+        self.show_tip(None)?;
         if let Some(view) = &self.view {
             glide.play(&self.anim, &view.scroller, |scroll| v3(0.0, -scroll))?;
         }
@@ -2314,19 +2340,34 @@ impl Settings {
         ui::blink(&self.anim.compositor, &view.field.caret)
     }
 
-    /// Shows the info tooltip under the info symbol, rising in a moment
-    /// after the pointer settles on it, or sends it away.
-    fn show_tip(&self, on: bool) -> Result<()> {
+    /// Whether `hit` has a tooltip.
+    fn has_tip(&self, hit: Option<Hit>) -> bool {
+        let tips = self.view.as_ref().map(|view| &view.tips);
+        tips.is_some_and(|tips| tips.iter().any(|(h, _)| Some(*h) == hit))
+    }
+
+    /// Shows the tooltip of what's under the pointer, `hit`, under it,
+    /// rising in a moment after the pointer settles there, and sends any
+    /// other away.
+    fn show_tip(&self, hit: Option<Hit>) -> Result<()> {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let (anim, tip, s) = (&self.anim, &view.tip, self.scale);
+        for (over, tip) in &view.tips {
+            self.show_one_tip(view, *over, tip, hit == Some(*over))?;
+        }
+        Ok(())
+    }
+
+    /// Shows `tip`, under `over`, or sends it away.
+    fn show_one_tip(&self, view: &View, over: Hit, tip: &TipView, on: bool) -> Result<()> {
+        let (anim, s) = (&self.anim, self.scale);
         Animator::stop(&tip.root, &["Opacity", "Offset"]);
         let info = view
             .hits(self.open)
-            .find(|(hit, _)| *hit == Hit::Info)
+            .find(|(hit, _)| *hit == over)
             .map(|(_, rect)| rect)
-            // Not while the symbol is under the header.
+            // Not while it's under the header.
             .filter(|rect| rect.y >= self.scroll);
         let (true, Some(info)) = (on, info) else {
             return anim.scalar(&tip.root, "Opacity", 0.0, TIP_HIDE_MS, 0, &anim.accelerate);
@@ -2506,9 +2547,8 @@ impl Settings {
             Some(Hit::Languages) => fade(&view.languages.hover),
             Some(Hit::Language(i)) => fade(&view.languages.items[i].hover),
             Some(Hit::Email) => fade(&view.field.hover),
-            Some(Hit::Info | Hit::Select(_) | Hit::Swap | Hit::Pick(_) | Hit::Config) | None => {
-                Ok(())
-            }
+            Some(Hit::Swap) => fade(&view.boxes.swap_hover),
+            Some(Hit::Info | Hit::Select(_) | Hit::Pick(_) | Hit::Config) | None => Ok(()),
         }
     }
 
