@@ -34,6 +34,13 @@ impl Definition {
         std::iter::once(self).chain(&self.others)
     }
 
+    /// Only the part in `language`, if the word is in it.
+    pub fn only(self, language: &str) -> Option<Definition> {
+        self.into_sections()
+            .into_iter()
+            .find(|s| s.language == language)
+    }
+
     fn into_sections(mut self) -> Vec<Definition> {
         let others = std::mem::take(&mut self.others);
         std::iter::once(self).chain(others).collect()
@@ -321,6 +328,11 @@ mod tests {
             [(WORDNET, "run"), ("Wikizionario", "run")]
         );
         assert!(combine(Vec::new(), &order()).is_none());
+        // Picked in one language, only that part is left.
+        let only = both.clone().only("it").unwrap();
+        assert_eq!((&*only.language, only.others.len()), ("it", 0));
+        assert_eq!(only.all_sources(), [("Wikizionario", "run")]);
+        assert!(both.clone().only("fr").is_none());
         // Online, a language the offline dictionaries lack is added in its
         // place; one they have the base form of is left as it is.
         let local = combine(

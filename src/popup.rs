@@ -619,12 +619,13 @@ impl Popup {
         self.search.field_at(x, y)
     }
 
-    /// Shows `items` (each a word, what it's a form of, and how many of its
-    /// first characters to bold as typed) under the search field, or else
-    /// `note`, resizing the card to fit.
+    /// Shows `items` (each a word, what it's a form of, how many of its
+    /// first characters to bold as typed, and the code of its language when
+    /// there are several) under the search field, or else `note`, resizing
+    /// the card to fit.
     pub fn set_suggestions(
         &mut self,
-        items: &[(&str, Option<&str>, usize)],
+        items: &[(&str, Option<&str>, usize, Option<&str>)],
         note: Option<&str>,
     ) -> Result<()> {
         let (renderer, anim, theme) = (&self.renderer, &self.anim, &self.theme);

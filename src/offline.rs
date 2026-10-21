@@ -269,6 +269,8 @@ pub struct Suggestion {
     /// How many of its first characters are what was typed: none when it
     /// puts a typo right.
     pub typed: usize,
+    /// The code of the language it's a word of ("en").
+    pub language: String,
 }
 
 /// Every word the dictionaries define, to suggest from as the search box is
@@ -289,6 +291,8 @@ struct Word {
     key_len: u16,
     display_len: u16,
     senses: u16,
+    /// Which of the dictionaries it's from.
+    dictionary: u8,
 }
 
 impl Words {
@@ -303,9 +307,9 @@ impl Words {
             words: Vec::new(),
             dictionaries,
         };
-        for dictionary in words.dictionaries.clone() {
+        for (i, dictionary) in words.dictionaries.clone().iter().enumerate() {
             if let Some(dict) = dictionary.dict() {
-                words.add(&dict);
+                words.add(&dict, i as u8);
             }
         }
         // Each dictionary's are in key order; together, they're put back in
@@ -318,7 +322,7 @@ impl Words {
         words
     }
 
-    fn add(&mut self, dict: &Dict) {
+    fn add(&mut self, dict: &Dict, dictionary: u8) {
         let words = self;
         for block in 0..dict.entry_blocks {
             let Some(text) = dict.entry_block(block) else {
@@ -349,6 +353,7 @@ impl Words {
                     key_len: key.len() as u16,
                     display_len: display.len() as u16,
                     senses: senses.min(u16::MAX as usize) as u16,
+                    dictionary,
                 });
                 words.text.push_str(key);
                 words.text.push_str(&display);
@@ -359,6 +364,15 @@ impl Words {
     fn key(&self, word: &Word) -> &str {
         let start = word.start as usize;
         &self.text[start..start + word.key_len as usize]
+    }
+
+    fn language(&self, word: &Word) -> &str {
+        self.dictionaries[word.dictionary as usize].language()
+    }
+
+    /// Whether the words are from dictionaries in more than one language.
+    pub fn multilingual(&self) -> bool {
+        self.dictionaries.len() > 1
     }
 
     fn display(&self, word: &Word) -> &str {
@@ -420,36 +434,45 @@ impl Words {
                 break;
             }
             let word = self.display(&self.words[i]);
-            // Once, though it's there with and without its accents.
-            if out.iter().any(|s| s.word == word) {
+            let language = self.language(&self.words[i]);
+            // Once in each language, though it's there with and without its
+            // accents.
+            if out.iter().any(|s| s.word == word && s.language == language) {
                 continue;
             }
             out.push(Suggestion {
                 word: word.to_string(),
                 base: None,
                 typed: if typos == 0 { typed_chars.len() } else { 0 },
+                language: language.to_string(),
             });
         }
         // An inflected form ("geese", "walked") is offered, as what it's a
-        // form of, only once it's typed in full.
-        let defined = out.first().is_some_and(|s| s.word.to_lowercase() == typed);
-        if !defined {
-            let base = self
-                .dictionaries
-                .iter()
-                .find_map(|d| d.dict().and_then(|d| d.base_of(typed)));
-            if let Some(base) = base {
+        // form of, only once it's typed in full: in each language it isn't
+        // a word of, after those it is.
+        let mut at = out
+            .iter()
+            .take_while(|s| s.word.to_lowercase() == typed)
+            .count();
+        for dictionary in &self.dictionaries {
+            let language = dictionary.language();
+            if out[..at].iter().any(|s| s.language == language) {
+                continue;
+            }
+            if let Some(base) = dictionary.dict().and_then(|d| d.base_of(typed)) {
                 out.insert(
-                    0,
+                    at,
                     Suggestion {
                         word: typed.to_string(),
                         base: Some(base),
                         typed: typed_chars.len(),
+                        language: language.to_string(),
                     },
                 );
-                out.truncate(limit);
+                at += 1;
             }
         }
+        out.truncate(limit);
         out
     }
 
@@ -1103,6 +1126,39 @@ mod tests {
         assert_eq!(geese[0].base.as_deref(), Some("goose"));
         assert_eq!(suggest("walked", 5)[0].base.as_deref(), Some("walk"));
         assert!(suggest("gee", 5).iter().all(|s| s.base.is_none()));
+    }
+
+    #[test]
+    fn suggests_words_in_each_language() {
+        // English again, as if it were another language.
+        let mut other = Dictionary::new(Data::Embedded(ENGLISH));
+        other.info.language = "xx".into();
+        let words = Words::of(vec![english(), Arc::new(other)]);
+        assert!(words.multilingual() && !all_words().multilingual());
+        let rows = |typed| {
+            words
+                .suggest(typed, 5)
+                .into_iter()
+                .map(|s| (s.word, s.base, s.language))
+                .collect::<Vec<_>>()
+        };
+        let dog = rows("dog");
+        assert_eq!(
+            dog[..2],
+            [
+                ("dog".into(), None, "en".into()),
+                ("dog".into(), None, "xx".into())
+            ]
+        );
+        // Inflected forms in each language, the preferred one first.
+        let geese = rows("geese");
+        assert_eq!(
+            geese[..2],
+            [
+                ("geese".into(), Some("goose".into()), "en".into()),
+                ("geese".into(), Some("goose".into()), "xx".into())
+            ]
+        );
     }
 
     #[test]

@@ -407,9 +407,9 @@ impl SearchBox {
         Ok(())
     }
 
-    /// Shows `items` (each a word, what it's a form of, and how many of its
-    /// first characters to bold as typed) under the field, or else `note`
-    /// in their place. New rows slide in, rows no longer needed fade, and
+    /// Shows `items` (each a word, what it's a form of, how many of its
+    /// first characters to bold as typed, and the code of its language when
+    /// there are several) under the field, or else `note` in their place. New rows slide in, rows no longer needed fade, and
     /// the footer glides to its new place. Returns the box's new height in
     /// pixels.
     pub(crate) fn set_suggestions(
@@ -417,7 +417,7 @@ impl SearchBox {
         renderer: &Renderer,
         anim: &Animator,
         theme: &Theme,
-        items: &[(&str, Option<&str>, usize)],
+        items: &[(&str, Option<&str>, usize, Option<&str>)],
         note: Option<&str>,
     ) -> Result<f32> {
         let s = self.scale;
@@ -452,13 +452,13 @@ impl SearchBox {
         }
         for (i, row) in self.rows.iter().enumerate() {
             let v = &row.visual;
-            let Some((word, base, typed)) = items.get(i).filter(|_| i < count) else {
+            let Some((word, base, typed, badge)) = items.get(i).filter(|_| i < count) else {
                 if i < self.count {
                     anim.scalar(v, "Opacity", 0.0, LEAVE_MS, 0, &anim.accelerate)?;
                 }
                 continue;
             };
-            let layout = renderer.layout_suggestion(word, *typed, *base, room / s)?;
+            let layout = renderer.layout_suggestion(word, *typed, *base, *badge, room / s)?;
             let size = row.show(renderer, &layout, s, theme)?;
             let rest = v3(x, i as f32 * row_h + ((row_h - size.Y) / 2.0).round());
             self.row_rest[i] = rest;

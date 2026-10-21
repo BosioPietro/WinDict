@@ -137,8 +137,26 @@ struct Captured {
 
 struct Looked {
     id: u64,
-    word: String,
+    query: Query,
     result: Lookup,
+}
+
+/// A word to look up, in every language it's in, or only in the one it
+/// was picked in from the search box's suggestions.
+#[derive(Clone, PartialEq)]
+struct Query {
+    word: String,
+    language: Option<String>,
+}
+
+impl Query {
+    /// `def`, or only its part in the language asked for.
+    fn within(&self, def: Definition) -> Option<Definition> {
+        match &self.language {
+            Some(language) => def.only(language),
+            None => Some(def),
+        }
+    }
 }
 
 /// A result that wasn't found, or couldn't be looked up, and the word it
@@ -236,13 +254,13 @@ pub struct App {
     events: Events,
     request: u64,
     /// Online answers, most recently used last.
-    cache: Vec<(String, Lookup)>,
+    cache: Vec<(Query, Lookup)>,
     /// The offline entry for the current request, if any.
     local: Option<Definition>,
     /// The word the card shows, as it was looked up.
-    current: Option<String>,
+    current: Option<Query>,
     /// Words the card showed before synonyms were followed, most recent last.
-    history: Vec<String>,
+    history: Vec<Query>,
     /// Whether Backspace and Alt+Left are registered.
     back_keys: bool,
     /// Whether Tab and Shift+Tab are registered.
@@ -575,7 +593,11 @@ impl App {
             }
             Err(NormalizeError::Empty) => return self.open_search(SEARCH_TITLE, anchor),
         };
-        self.lookup(word, Place::New(anchor_or_cursor(anchor)));
+        let query = Query {
+            word,
+            language: None,
+        };
+        self.lookup(query, Place::New(anchor_or_cursor(anchor)));
     }
 
     /// Nothing was selected: opens the card as a search box, for text that
@@ -700,8 +722,10 @@ impl App {
         let typed = search.edit.text().trim_start().to_lowercase();
         let typed_chars = typed.chars().count();
         let suggest = typed_chars >= SUGGEST_AFTER;
+        let mut multilingual = false;
         search.suggestions = if suggest {
             let words = search.words.get_or_insert_with(offline::Words::load);
+            multilingual = words.multilingual();
             words.suggest(&typed, MAX_SUGGESTIONS)
         } else {
             Vec::new()
@@ -714,17 +738,22 @@ impl App {
             } else {
                 NO_SUGGESTIONS
             });
-        let items: Vec<(&str, Option<&str>, usize)> = search
+        // With several languages, each says which it's in.
+        let items: Vec<_> = search
             .suggestions
             .iter()
-            .map(|s| (s.word.as_str(), s.base.as_deref(), s.typed))
+            .map(|s| {
+                let badge = multilingual.then_some(s.language.as_str());
+                (s.word.as_str(), s.base.as_deref(), s.typed, badge)
+            })
             .collect();
         let _ = popup.set_suggestions(&items, note);
         self.on_resized();
     }
 
     /// Enter in the search box, or a click on a suggestion: the card turns
-    /// into the definition of the `picked` suggestion, or of what's typed.
+    /// into the definition of the `picked` suggestion, in its language when
+    /// there are several, or of what's typed, in all of them.
     fn submit_search(&mut self, picked: Option<usize>) {
         let Some(search) = self.search.as_mut() else {
             return;
@@ -732,6 +761,8 @@ impl App {
         let picked_row = picked.filter(|&i| i < search.suggestions.len());
         let picked = picked_row.map(|i| &search.suggestions[i]);
         let text = picked.map_or(search.edit.text(), |s| s.word.as_str());
+        let multilingual = search.words.as_ref().is_some_and(|w| w.multilingual());
+        let language = picked.filter(|_| multilingual).map(|s| s.language.clone());
         let complaint = match dictionary::normalize(text) {
             Ok(word) => {
                 self.search = None;
@@ -739,7 +770,8 @@ impl App {
                 if let Some(popup) = self.popup.as_mut() {
                     let _ = popup.pick_suggestion(picked_row);
                 }
-                return self.lookup(word, Place::Same(Transition::Replace));
+                let query = Query { word, language };
+                return self.lookup(query, Place::Same(Transition::Replace));
             }
             Err(NormalizeError::Empty) => None,
             Err(NormalizeError::TooLong) if !search.error => {
@@ -756,19 +788,23 @@ impl App {
         }
     }
 
-    /// Looks `word` up and shows the answer at `place`. The bundled
+    /// Looks `query` up and shows the answer at `place`. The bundled
     /// dictionary answers instantly; the online one fills gaps.
-    fn lookup(&mut self, word: String, place: Place) {
+    fn lookup(&mut self, query: Query, place: Place) {
         let detail = Detail {
             senses: self.config.max_definitions,
             synonyms: self.config.max_synonyms,
             examples: self.config.show_examples,
         };
-        self.current = Some(word.clone());
-        self.local = offline::lookup(&word, detail);
-        let online_key = match &self.local {
-            Some(def) => def.word.to_lowercase(),
-            None => word.clone(),
+        let word = query.word.clone();
+        self.current = Some(query.clone());
+        self.local = offline::lookup(&word, detail).and_then(|def| query.within(def));
+        let online_key = Query {
+            word: match &self.local {
+                Some(def) => def.word.to_lowercase(),
+                None => word.clone(),
+            },
+            language: query.language,
         };
         let online = self.cached(&online_key);
 
@@ -796,21 +832,24 @@ impl App {
 
         let (id, events) = (self.request, self.events.clone());
         // In the languages of the dictionaries in use, which is English when
-        // the chosen ones couldn't be read.
-        let languages = offline::languages();
+        // the chosen ones couldn't be read, or the one picked.
+        let languages = match &online_key.language {
+            Some(language) => vec![language.clone()],
+            None => offline::languages(),
+        };
         std::thread::spawn(move || {
-            let result = online::lookup(&online_key, detail, &languages);
+            let result = online::lookup(&online_key.word, detail, &languages);
             events.send(Event::Looked(Looked {
                 id,
-                word: online_key,
+                query: online_key,
                 result,
             }));
         });
     }
 
     /// A cached online answer (a definition, or a definite "not found").
-    fn cached(&mut self, key: &str) -> Option<Lookup> {
-        let hit = self.cache.iter().position(|(w, _)| w == key)?;
+    fn cached(&mut self, key: &Query) -> Option<Lookup> {
+        let hit = self.cache.iter().position(|(q, _)| q == key)?;
         let entry = self.cache.remove(hit);
         let result = entry.1.clone();
         self.cache.push(entry);
@@ -820,9 +859,9 @@ impl App {
     fn on_result(&mut self, looked: Looked) {
         // Remember definite answers; retry failures (e.g. offline) next time.
         if !matches!(looked.result, Lookup::Failed(_)) {
-            self.cache.retain(|(w, _)| *w != looked.word);
+            self.cache.retain(|(q, _)| *q != looked.query);
             self.cache
-                .push((looked.word.clone(), looked.result.clone()));
+                .push((looked.query.clone(), looked.result.clone()));
             if self.cache.len() > CACHE_SIZE {
                 self.cache.remove(0);
             }
@@ -852,12 +891,12 @@ impl App {
                         Transition::Refine
                     };
                     let place = Place::Same(transition);
-                    self.present(place, &looked.word, &Lookup::Found(merged));
+                    self.present(place, &looked.query.word, &Lookup::Found(merged));
                 }
             }
             None => {
                 let place = Place::Same(Transition::Replace);
-                self.present(place, &looked.word, &looked.result);
+                self.present(place, &looked.query.word, &looked.result);
             }
         }
     }
@@ -1046,11 +1085,14 @@ impl App {
     }
 
     /// Shows a synonym's definition in the card, remembering the way back.
+    /// A card in one language stays in it.
     fn follow(&mut self, word: &str) {
         let Ok(word) = dictionary::normalize(word) else {
             return;
         };
-        if self.current.as_ref() == Some(&word) {
+        let language = self.current.as_ref().and_then(|q| q.language.clone());
+        let query = Query { word, language };
+        if self.current.as_ref() == Some(&query) {
             return;
         }
         if let Some(current) = self.current.take() {
@@ -1061,7 +1103,7 @@ impl App {
         }
         // Answers still on their way are for the word we're leaving.
         self.request += 1;
-        self.lookup(word, Place::Same(Transition::Replace));
+        self.lookup(query, Place::Same(Transition::Replace));
         self.sync_back_keys();
     }
 
@@ -1070,11 +1112,11 @@ impl App {
         if !self.popup.as_ref().is_some_and(|p| p.visible) {
             return;
         }
-        let Some(word) = self.history.pop() else {
+        let Some(query) = self.history.pop() else {
             return;
         };
         self.request += 1;
-        self.lookup(word, Place::Same(Transition::Replace));
+        self.lookup(query, Place::Same(Transition::Replace));
         self.sync_back_keys();
     }
 

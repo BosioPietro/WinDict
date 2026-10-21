@@ -345,14 +345,42 @@ impl Renderer {
     }
 
     /// A suggested word, its first `typed` characters (what was typed) in
-    /// bold, and the word it's a form of after an arrow.
+    /// bold, and the word it's a form of after an arrow. `badge`, the code of
+    /// its language, goes before it on a cap, when there are several.
     pub fn layout_suggestion(
         &self,
         word: &str,
         typed: usize,
         base: Option<&str>,
+        badge: Option<&str>,
         width: f32,
     ) -> Result<Layout> {
+        let mut out = Stack::default();
+        let mut x = 0.0;
+        if let Some(code) = badge {
+            // Wide enough for any two letters, so the words line up.
+            let (pad_y, min_w, gap) = (1.0, 24.0f32, 8.0);
+            let name = self.text(&code.to_uppercase(), &self.formats.footer, 100.0)?;
+            let (w, h, _) = metrics(&name);
+            let line_h = metrics(&self.text("Ag", &self.formats.suggestion, width)?).1;
+            let (cap_w, cap_h) = (min_w.max(w + 8.0), h + 2.0 * pad_y);
+            let y = ((line_h - cap_h) / 2.0).round();
+            out.items.push(Item::Key {
+                x: 0.0,
+                y,
+                width: cap_w,
+                height: cap_h,
+            });
+            out.items.push(Item::Text {
+                layout: name,
+                x: ((cap_w - w) / 2.0).round(),
+                y: y + pad_y,
+                ink: Ink::Secondary,
+                accents: Vec::new(),
+            });
+            x = cap_w + gap;
+        }
+        let width = (width - x).max(1.0);
         let line = self.text(word, &self.formats.suggestion, width)?;
         // DirectWrite counts UTF-16 code units.
         let bold = word.chars().take(typed).map(char::len_utf16).sum::<usize>();
@@ -363,16 +391,15 @@ impl Renderer {
         unsafe {
             let _ = line.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, range);
         }
-        let mut out = Stack::default();
-        let (w, height) = out.text(line, 0.0, Ink::Primary);
+        let (w, height) = out.text(line, x, Ink::Primary);
         if let Some(base) = base {
             let form_of =
                 self.text(&format!("\u{2192} {base}"), &self.formats.suggestion, width)?;
-            out.text(form_of, w + 8.0, Ink::Tertiary);
+            out.text(form_of, x + w + 8.0, Ink::Tertiary);
         }
         Ok(Layout {
             items: out.items,
-            width,
+            width: x + width,
             height,
             links: Vec::new(),
         })
