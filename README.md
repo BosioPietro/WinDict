@@ -20,6 +20,15 @@ the word, Backspace, Alt+← or the mouse's back button returns to the
 previous one. Tab and Shift+Tab move between the synonyms and the source
 links in order, and Enter opens the one that's ringed.
 
+With online lookup on, the translate button at the top right of the card (or
+**Ctrl+T**, while the card is open) turns it into a translation. A word
+from one of your two dictionary languages goes into the other; a word that's in
+both, or that the card can't place, starts from the default languages in the
+settings. Pick either language from its menu, or swap them with the button
+between them. The translation lists alternatives by part of speech where
+there are any. The back arrow, Backspace or Ctrl+T again returns to the
+definition.
+
 ## Footprint
 
 - About 2 MB of memory while idle and 4 MB while a card is open.
@@ -28,7 +37,8 @@ links in order, and Enter opens the one that's ringed.
   network and take under a millisecond. Italian (from Wikizionario, about
   75,000 words) is downloaded, once, when it's chosen in the settings.
 - The online dictionary is only used for pronunciations and for words the
-  built-in one doesn't have. It can be turned off.
+  built-in one doesn't have, and translations only when asked for. Both can be
+  turned off.
 - A single executable written in Rust against the native Windows APIs. No
   installer and no runtime to install.
 
@@ -64,6 +74,9 @@ by hand, use **Open config.json** at the bottom of the settings window, then
 | `online_lookup` | `true` | `false` keeps WinDict fully offline. |
 | `language` | `"en"` | `"en"` or `"it"`. English is built in; Italian is downloaded to `%LOCALAPPDATA%\WinDict\dicts\it.wdict`. |
 | `use_ui_automation` | `true` | Read selections without touching the clipboard where apps allow it. |
+| `translate_from` | `"en"` | The language translated from when the card can't tell. |
+| `translate_to` | `"it"` | The language translated into when the card can't tell. |
+| `mymemory_email` | `""` | Raises MyMemory's daily limit from 5,000 to 50,000 characters. It's sent only to MyMemory. |
 
 ## Showing the card above the Start menu
 
@@ -139,4 +152,7 @@ fallback. The Italian dictionary, and Italian lookups online, are from
 [Wikizionario](https://it.wiktionary.org/) through
 [wiktextract](https://kaikki.org/itwiktionary/), with Wikizionario's own
 API as a fallback (CC BY-SA 4.0; see
-`data/LICENSE-Wiktionary.txt`). WinDict is MIT licensed.
+`data/LICENSE-Wiktionary.txt`). Translations are from Google Translate's
+public web endpoint, which is unofficial and may change, with
+[MyMemory](https://mymemory.translated.net/) as a fallback. WinDict is MIT
+licensed.

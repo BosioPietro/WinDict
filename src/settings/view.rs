@@ -83,6 +83,8 @@ impl Settings {
         for counter in COUNTERS {
             self.show_count(counter, None)?;
         }
+        self.email_shift = 0.0;
+        self.show_field()?;
         self.show_caps(false)?;
         for note in NOTES {
             let (text, error) = self.notes[note as usize].clone();
@@ -355,6 +357,7 @@ impl Settings {
                 .into_iter()
                 .collect::<Option<_>>()
                 .ok_or_else(missing)?,
+            field: parts.field.ok_or_else(missing)?,
             hits: parts.hits,
             stops: parts.stops,
             ring,
@@ -501,7 +504,7 @@ impl Settings {
                 hover.SetOpacity(0.0)?;
                 Some(hover)
             }
-            Control::Choice(_) | Control::Counter(_) => None,
+            Control::Choice(_) | Control::Counter(_) | Control::Email => None,
         };
 
         let room = GROUP_W - 2.0 * ROW_PAD - spec.control.width() - CONTROL_GAP;
@@ -514,6 +517,23 @@ impl Settings {
         let block = title_size.Y + px(DETAIL_GAP) + detail_size.Y;
         let text_y = row.y + ((row.h - block) / 2.0).round();
         title.visual.SetOffset(v3(px(ROW_PAD), text_y))?;
+        if matches!(spec.control, Control::Email) {
+            // The info symbol follows the name, wherever that ends.
+            let (_, name_w, _) = r.layout_field(spec.title, Ink::Primary, 0)?;
+            let info = Text::new(c, group)?;
+            let glyph = r.layout_line(INFO_GLYPH, Face::Icon, Ink::Secondary, INFO_W)?;
+            let size = info.show(r, &glyph, s, t)?;
+            let x = px(ROW_PAD) + (name_w * s).round() + px(INFO_GAP);
+            let y = text_y + ((title_size.Y - size.Y) / 2.0).round();
+            info.visual.SetOffset(v3(x, y))?;
+            let at = Rect {
+                x,
+                y,
+                w: px(INFO_W),
+                h: size.Y,
+            };
+            parts.hits.push((Hit::Info, at.offset(group_at)));
+        }
         let detail_at = v3(px(ROW_PAD), text_y + title_size.Y + px(DETAIL_GAP));
         detail.visual.SetOffset(detail_at)?;
         // A description that changes cross-fades from the one before.
@@ -599,8 +619,20 @@ impl Settings {
                     .push((Stop::Choice(choice), place(at).outset(outset), radius));
                 parts.choices[choice as usize] = Some(view);
             }
+            Control::Email => {
+                let (view, at) = self.build_field(group, right, middle)?;
+                parts.hits.push((Hit::Email, place(at)));
+                let radius = px(FIELD_RADIUS) + outset;
+                parts
+                    .stops
+                    .push((Stop::Email, place(at).outset(outset), radius));
+                parts.field = Some(FieldView {
+                    at: place(view.at),
+                    ..view
+                });
+            }
             Control::Counter(counter) => {
-                let (view, at, buttons) = self.build_counter(group, right, middle)?;
+                let (view, at, buttons) = self.build_counter(counter, group, right, middle)?;
                 for (up, button) in [false, true].into_iter().zip(buttons) {
                     parts.hits.push((Hit::Step(counter, up), place(button)));
                 }
@@ -758,10 +790,83 @@ impl Settings {
         Ok((ChoiceView { pill, labels, rest }, at, segments))
     }
 
-    /// A number between − and + buttons, ending at `right` and centred on
-    /// `middle`, in `group`. Returns it, its bounds and its buttons'.
+/// A text field ending at `right` and centred on `middle`, in `group`.
+    /// Returns it, with where its text goes in `group`, and its bounds.
+    fn build_field(
+        &self,
+        group: &ContainerVisual,
+        right: f32,
+        middle: f32,
+    ) -> Result<(FieldView, Rect)> {
+        let (c, t, s) = (&self.anim.compositor, &self.theme, self.scale);
+        let px = |dip: f32| (dip * s).round();
+        let (w, h, radius) = (px(FIELD_W), px(FIELD_H), px(FIELD_RADIUS));
+        let at = Rect {
+            x: right - w,
+            y: (middle - h / 2.0).round(),
+            w,
+            h,
+        };
+        let root = container(c, group, at.at())?;
+        root.SetSize(v2(w, h))?;
+        let clip = c.CreateRoundedRectangleGeometry()?;
+        clip.SetSize(v2(w, h))?;
+        clip.SetCornerRadius(v2(radius, radius))?;
+        root.SetClip(&c.CreateGeometricClipWithGeometry(&clip)?)?;
+        let face = Rect {
+            w,
+            h,
+            ..Rect::default()
+        };
+        rounded(c, &root, face, 0.0, t.control())?;
+        let (hover, _) = rounded(c, &root, face, 0.0, t.highlight())?;
+        hover.SetOpacity(0.0)?;
+        outline(c, &root, face, radius, t.control_stroke())?;
+        let hairline = s.round().max(1.0);
+        let line = Rect {
+            y: h - hairline,
+            h: hairline,
+            ..face
+        };
+        rounded(c, &root, line, 0.0, t.strong_stroke())?;
+        let thick = px(FIELD_LINE).max(1.0);
+        let line = Rect {
+            y: h - thick,
+            h: thick,
+            ..face
+        };
+        let (accent, _) = rounded(c, &root, line, 0.0, t.accent)?;
+        accent.SetOpacity(0.0)?;
+
+        let pad = px(FIELD_PAD);
+        let text_at = Rect {
+            x: pad,
+            y: 0.0,
+            w: w - 2.0 * pad,
+            h: h - thick,
+        };
+        let host = container(c, &root, text_at.at())?;
+        host.SetSize(text_at.size())?;
+        host.SetClip(&c.CreateInsetClip()?)?;
+        let text = Text::new(c, &host)?;
+        let (caret, _) = rounded(c, &host, Rect::default(), 0.0, t.accent)?;
+        caret.SetOpacity(0.0)?;
+        let view = FieldView {
+            hover,
+            accent,
+            text,
+            caret,
+            at: text_at.offset(at.at()),
+        };
+        Ok((view, at))
+    }
+
+    /// `counter`'s value between − and + buttons, ending at `right` and
+    /// centred on `middle`, in `group`. Returns it, its bounds and its
+    /// buttons'.
     fn build_counter(
         &self,
+        counter: Counter,
         group: &ContainerVisual,
         right: f32,
         middle: f32,
@@ -773,7 +878,7 @@ impl Settings {
             self.scale,
         );
         let px = |dip: f32| (dip * s).round();
-        let (b, value_w) = (px(STEP_SIZE), px(VALUE_W));
+        let (b, value_w) = (px(STEP_SIZE), px(counter.value_w()));
         let at = Rect {
             x: right - 2.0 * b - value_w,
             y: (middle - b / 2.0).round(),
@@ -894,7 +999,8 @@ struct Parts {
     switches: [Option<SwitchView>; 4],
     choices: [Option<ChoiceView>; 1],
     notes: [Option<NoteView>; 2],
-    counters: [Option<CounterView>; 2],
+    counters: [Option<CounterView>; 4],
+    field: Option<FieldView>,
     /// The languages row's hover and chevron.
     languages: Option<(SpriteVisual, SpriteVisual)>,
     hits: Vec<(Hit, Rect)>,

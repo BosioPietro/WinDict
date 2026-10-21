@@ -1,5 +1,5 @@
-//! The text typed into the search box and the caret in it, edited as a
-//! Windows text field would be.
+//! The text typed into a field, like the search box, and the caret in it,
+//! edited as a Windows text field would be.
 
 use crate::dictionary::MAX_LOOKUP_CHARS;
 
@@ -36,16 +36,35 @@ pub enum Motion {
     End,
 }
 
-#[derive(Default)]
 pub struct LineEdit {
     text: String,
     /// Where the caret is in `text`, in bytes.
     caret: usize,
     /// The first half of a character outside the BMP, waiting for the second.
     high_surrogate: Option<u16>,
+    /// How many characters it takes.
+    limit: usize,
+}
+
+/// Empty, and taking as much as a lookup does.
+impl Default for LineEdit {
+    fn default() -> Self {
+        Self::new("", MAX_LOOKUP_CHARS)
+    }
 }
 
 impl LineEdit {
+    /// Holds `text`, with the caret after it, and takes up to `limit` characters.
+    pub fn new(text: &str, limit: usize) -> Self {
+        let text: String = text.chars().take(limit).collect();
+        Self {
+            caret: text.len(),
+            text,
+            high_surrogate: None,
+            limit,
+        }
+    }
+
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -53,6 +72,19 @@ impl LineEdit {
     /// Where the caret is, in the UTF-16 units DirectWrite counts.
     pub fn caret_utf16(&self) -> u32 {
         self.text[..self.caret].encode_utf16().count() as u32
+    }
+
+    /// Puts the caret `at` UTF-16 units in, or at the end if that's past it.
+    pub fn set_caret_utf16(&mut self, at: u32) {
+        let mut units = 0;
+        self.caret = self
+            .text
+            .char_indices()
+            .find(|(_, c)| {
+                units += c.len_utf16() as u32;
+                units > at
+            })
+            .map_or(self.text.len(), |(i, _)| i);
     }
 
     /// A character typed (one UTF-16 unit of WM_CHAR).
@@ -120,7 +152,7 @@ impl LineEdit {
     }
 
     fn insert(&mut self, c: char) {
-        if !c.is_control() && self.text.chars().count() < MAX_LOOKUP_CHARS {
+        if !c.is_control() && self.text.chars().count() < self.limit {
             self.text.insert(self.caret, c);
             self.caret += c.len_utf8();
         }
@@ -232,6 +264,20 @@ mod tests {
         assert_eq!(edit.text(), "cream cone");
         edit.move_caret(Motion::End);
         assert!(!edit.delete(Motion::CharForward));
+    }
+
+    #[test]
+    fn holds_text_up_to_its_limit() {
+        let mut edit = LineEdit::new("cafés", 6);
+        assert_eq!(edit.caret_utf16(), 5);
+        edit.set_caret_utf16(4);
+        edit.type_unit(b'x' as u16);
+        assert_eq!(edit.text(), "caféxs");
+        edit.type_unit(b'y' as u16);
+        assert_eq!(edit.text(), "caféxs");
+        edit.set_caret_utf16(99);
+        assert_eq!(edit.caret_utf16(), 6);
+        assert_eq!(LineEdit::new("abc", 2).text(), "ab");
     }
 
     #[test]

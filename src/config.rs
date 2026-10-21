@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::translate;
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeMode {
@@ -35,6 +37,12 @@ pub struct Config {
     /// `%LOCALAPPDATA%\WinDict\dicts\<code>.wdict`.
     #[serde(alias = "language", deserialize_with = "one_or_more")]
     pub languages: Vec<String>,
+    /// The languages words are translated from and into, as codes, when the
+    /// card can't tell (see `translate::pick`).
+    pub translate_from: String,
+    pub translate_to: String,
+    /// Sent to MyMemory, and only to it, for its larger daily allowance.
+    pub mymemory_email: String,
 }
 
 impl Default for Config {
@@ -48,6 +56,9 @@ impl Default for Config {
             use_ui_automation: true,
             online_lookup: true,
             languages: vec!["en".into()],
+            translate_from: "en".into(),
+            translate_to: "it".into(),
+            mymemory_email: String::new(),
         }
     }
 }
@@ -114,6 +125,19 @@ fn parse(bytes: &[u8]) -> Result<Config, String> {
         languages.push("en".into());
     }
     config.languages = languages;
+    // A language that can't be translated into, or both the same: the defaults.
+    let defaults = Config::default();
+    if !translate::supported(&config.translate_from) {
+        config.translate_from = defaults.translate_from.clone();
+    }
+    if !translate::supported(&config.translate_to) || config.translate_to == config.translate_from
+    {
+        config.translate_to = [defaults.translate_to, defaults.translate_from]
+            .into_iter()
+            .find(|l| *l != config.translate_from)
+            .unwrap_or_default();
+    }
+    config.mymemory_email = config.mymemory_email.trim().to_string();
     Ok(config)
 }
 
@@ -161,6 +185,19 @@ mod tests {
             ["it", "en"]
         );
         assert_eq!(languages(r#"{"languages": []}"#), ["en"]);
+    }
+
+    #[test]
+    fn reads_translation_languages() {
+        let config = parse(br#"{"translate_from": "fr", "translate_to": "de"}"#).unwrap();
+        assert_eq!((config.translate_from.as_str(), config.translate_to.as_str()), ("fr", "de"));
+        assert!(config.mymemory_email.is_empty());
+        let config = parse(br#"{"translate_from": "xx", "translate_to": "en"}"#).unwrap();
+        assert_eq!((config.translate_from.as_str(), config.translate_to.as_str()), ("en", "it"));
+        let config = parse(br#"{"translate_from": "it", "translate_to": "it"}"#).unwrap();
+        assert_eq!((config.translate_from.as_str(), config.translate_to.as_str()), ("it", "en"));
+        let config = parse(br#"{"mymemory_email": " me@example.com "}"#).unwrap();
+        assert_eq!(config.mymemory_email, "me@example.com");
     }
 
     #[test]

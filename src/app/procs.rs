@@ -30,6 +30,7 @@ pub(super) unsafe extern "system" fn main_proc(
                 HOTKEY_NEXT_LINK => with_app(|app| app.step_link(true)),
                 HOTKEY_PREV_LINK => with_app(|app| app.step_link(false)),
                 HOTKEY_OPEN_LINK => with_app(|app| app.open_focused_link()),
+                HOTKEY_TRANSLATE => with_app(|app| app.toggle_translation()),
                 _ => None,
             };
             LRESULT(0)
@@ -289,19 +290,31 @@ pub(super) unsafe extern "system" fn settings_proc(
             with_app(|app| app.in_settings(|s| s.settle().map(|_| None)));
             LRESULT(0)
         }
-        // A hand over the link.
+        // A hand over the link, and an I-beam over the text field.
         WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
             let mut pt = POINT::default();
             let located =
                 unsafe { GetCursorPos(&mut pt).is_ok() && ScreenToClient(hwnd, &mut pt).as_bool() };
-            let link = located
-                && with_app(|app| app.settings.as_ref().is_some_and(|s| s.link_at(pt.x, pt.y)))
-                    .unwrap_or(false);
-            if !link {
+            let shape = located
+                .then(|| {
+                    with_app(|app| {
+                        let s = app.settings.as_ref()?;
+                        if s.link_at(pt.x, pt.y) {
+                            Some(IDC_HAND)
+                        } else if s.field_at(pt.x, pt.y) {
+                            Some(IDC_IBEAM)
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten()
+                })
+                .flatten();
+            let Some(shape) = shape else {
                 return default();
-            }
+            };
             unsafe {
-                if let Ok(cursor) = LoadCursorW(None, IDC_HAND) {
+                if let Ok(cursor) = LoadCursorW(None, shape) {
                     SetCursor(Some(cursor));
                 }
             }
@@ -319,13 +332,19 @@ pub(super) unsafe extern "system" fn settings_proc(
             with_app(|app| app.in_settings(|s| s.key_up(key).map(|_| None)));
             LRESULT(0)
         }
-        WM_CHAR => LRESULT(0),
+        WM_CHAR => {
+            let unit = wparam.0 as u16;
+            with_app(|app| app.in_settings(|s| s.char(unit)));
+            LRESULT(0)
+        }
         WM_SYSCHAR if recording() => LRESULT(0),
         // Alt on its own: there's no menu bar to go to.
         WM_SYSCOMMAND if (wparam.0 & 0xFFF0) as u32 == SC_KEYMENU && lparam.0 == 0 => LRESULT(0),
         WM_ACTIVATE => {
             if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE {
                 with_app(|app| app.in_settings(|s| s.deactivate()));
+            } else {
+                with_app(|app| app.in_settings(|s| s.activated().map(|_| None)));
             }
             default()
         }

@@ -15,8 +15,9 @@ use windows::Win32::System::WinRT::Composition::*;
 use windows::UI::Composition::{CompositionDrawingSurface, CompositionGraphicsDevice, Compositor};
 use windows_numerics::{Matrix3x2, Vector2};
 
-use crate::dictionary::{self, Definition};
+use crate::dictionary::{self, percent_encode, Definition};
 use crate::dicts;
+use crate::translate::{self, Translation};
 use crate::theme::Theme;
 
 #[derive(Clone, Copy)]
@@ -122,6 +123,43 @@ pub enum Target {
     Url(String),
     /// Looks the word up in the same card.
     Word(String),
+    /// The card's translate button: turns it into the word's translation.
+    Translate,
+    /// Lists the languages to translate from, or into.
+    Language(Side),
+    /// Translates the other way.
+    Swap,
+    /// Translates from, or into, the language with this code.
+    Pick(String),
+    /// Translates the way the card offers.
+    Confirm,
+}
+
+/// Either language of a translation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    From,
+    To,
+}
+
+/// The card turned into the word's translation.
+pub struct TranslationCard<'a> {
+    pub word: &'a str,
+    /// The languages' codes.
+    pub from: &'a str,
+    pub to: &'a str,
+    pub state: Translated<'a>,
+    /// The language being picked, its list in place of the translation.
+    pub picking: Option<Side>,
+}
+
+/// How far a translation has got.
+pub enum Translated<'a> {
+    /// The word is in both languages: which way is up to the user.
+    Asking,
+    Loading,
+    Done(&'a Translation),
+    Failed(&'a str),
 }
 
 /// The word's size in the heading, and the search box's text size, in DIPs.
@@ -134,6 +172,11 @@ pub const SUGGESTION_SIZE: f32 = 14.0;
 const SENSE_INDENT: f32 = 22.0;
 /// "Open in new window", after links that open the browser.
 const EXTERNAL_ICON: &str = "\u{E8A7}";
+/// "Switch", between the languages of a translation, and the chevrons after
+/// them.
+const SWAP_ICON: &str = "\u{E8AB}";
+const CHEVRON_DOWN: &str = "\u{E70D}";
+const CHEVRON_UP: &str = "\u{E70E}";
 
 /// A layout being built top to bottom.
 #[derive(Default)]
@@ -206,6 +249,7 @@ pub enum Body<'a> {
         detail: &'a str,
         suggestion: Option<&'a str>,
     },
+    Translation(TranslationCard<'a>),
 }
 
 /// Where the caret goes in a laid-out text box, in DIPs.
@@ -369,6 +413,40 @@ impl Renderer {
             links: Vec::new(),
         };
         Ok((layout, w, caret))
+    }
+
+    /// What's typed in a settings field, on one line in `ink`, its width,
+    /// and where the caret goes when it's `at` UTF-16 units in.
+    pub fn layout_field(&self, text: &str, ink: Ink, at: u32) -> Result<(Layout, f32, Caret)> {
+        let line = self.text(text, &self.formats.setting, 0.0)?;
+        let (w, height, _) = metrics(&line);
+        let (mut x, mut y) = (0.0, 0.0);
+        let mut hit = DWRITE_HIT_TEST_METRICS::default();
+        unsafe { line.HitTestTextPosition(at, false, &mut x, &mut y, &mut hit)? };
+        let caret = Caret {
+            x,
+            top: hit.top,
+            height: hit.height,
+        };
+        let mut out = Stack::default();
+        out.text(line, 0.0, ink);
+        let layout = Layout {
+            items: out.items,
+            width: w + 4.0,
+            height,
+            links: Vec::new(),
+        };
+        Ok((layout, w, caret))
+    }
+
+    /// Where the caret goes in a settings field holding `text` when it's
+    /// clicked `x` DIPs in, in UTF-16 units.
+    pub fn field_position(&self, text: &str, x: f32) -> Result<u32> {
+        let line = self.text(text, &self.formats.setting, 0.0)?;
+        let (mut trailing, mut inside) = (false.into(), false.into());
+        let mut hit = DWRITE_HIT_TEST_METRICS::default();
+        unsafe { line.HitTestPoint(x, 0.0, &mut trailing, &mut inside, &mut hit)? };
+        Ok(hit.textPosition + if trailing.as_bool() { hit.length } else { 0 })
     }
 
     /// A suggested word, its first `typed` characters (what was typed) in
@@ -645,6 +723,7 @@ impl Renderer {
                 }
                 self.layout_sources(&mut out, def, width)?;
             }
+            Body::Translation(card) => self.layout_translation(&mut out, card, width)?,
         }
         Ok(Layout {
             items: out.items,
@@ -832,6 +911,263 @@ impl Renderer {
         }
         let (_, h) = out.text_with_accents(syn, x, Ink::Secondary, ranges);
         out.y += h + 6.0;
+        Ok(())
+    }
+
+    /// The languages of a translation, then the translation, or the list to
+    /// pick one of the languages from.
+    fn layout_translation(&self, out: &mut Stack, card: &TranslationCard, width: f32) -> Result<()> {
+        self.layout_direction(out, card, width)?;
+        out.y += 16.0;
+        if let Some(side) = card.picking {
+            let current = match side {
+                Side::From => card.from,
+                Side::To => card.to,
+            };
+            return self.layout_picker(out, current, width);
+        }
+        match card.state {
+            Translated::Asking => {
+                let ask = format!(
+                    "\u{201C}{}\u{201D} is a word in both {} and {}.",
+                    card.word,
+                    translate::name(card.from),
+                    translate::name(card.to)
+                );
+                let (_, h) = out.text(self.text(&ask, &self.formats.body, width)?, 0.0, Ink::Secondary);
+                out.y += h + 8.0;
+                let label = format!("Translate into {}", translate::name(card.to));
+                let line = self.text(&label, &self.formats.body, width)?;
+                let all = DWRITE_TEXT_RANGE {
+                    startPosition: 0,
+                    length: u32::MAX,
+                };
+                unsafe {
+                    let _ = line.SetUnderline(true, all);
+                }
+                let (w, h) = out.text(line, 0.0, Ink::Accent);
+                out.links.push(Link {
+                    x: -2.0,
+                    y: out.y,
+                    width: w + 4.0,
+                    height: h,
+                    target: Target::Confirm,
+                });
+                out.y += h;
+            }
+            Translated::Loading => {
+                let line = self.text("Translating\u{2026}", &self.formats.body, width)?;
+                let (_, h) = out.text(line, 0.0, Ink::Tertiary);
+                out.y += h;
+            }
+            Translated::Failed(error) => {
+                self.layout_message(out, "Couldn\u{2019}t translate it", error, None, width)?;
+            }
+            Translated::Done(translation) => self.layout_translated(out, card, translation, width)?,
+        }
+        Ok(())
+    }
+
+    /// "English ⌄  ⇄  Italiano ⌄": each language lists the others to pick
+    /// from, the arrows swap them.
+    fn layout_direction(&self, out: &mut Stack, card: &TranslationCard, width: f32) -> Result<()> {
+        let line_h = metrics(&self.text("Ag", &self.formats.title, width)?).1;
+        let language = |out: &mut Stack, x: f32, side: Side, code: &str| -> Result<f32> {
+            let mut right = x;
+            if let Some(flag) = Flag::of(code) {
+                // 3:2, the height of a capital.
+                let (flag_w, flag_h) = (18.0, 12.0);
+                out.items.push(Item::Flag {
+                    flag,
+                    x: right,
+                    y: out.y + ((line_h - flag_h) / 2.0).round(),
+                    width: flag_w,
+                    height: flag_h,
+                });
+                right += flag_w + 7.0;
+            }
+            let name = self.text(&translate::name(code), &self.formats.title, width)?;
+            let (w, _) = out.text(name, right, Ink::Accent);
+            right += w + 6.0;
+            let chevron = if card.picking == Some(side) {
+                CHEVRON_UP
+            } else {
+                CHEVRON_DOWN
+            };
+            let icon = self.text(chevron, &self.formats.icon, width)?;
+            let (icon_w, icon_h, _) = metrics(&icon);
+            out.items.push(Item::Text {
+                layout: icon,
+                x: right,
+                y: out.y + ((line_h - icon_h) / 2.0).round(),
+                ink: Ink::Accent,
+                accents: Vec::new(),
+            });
+            right += icon_w;
+            out.links.push(Link {
+                x: x - 4.0,
+                y: out.y - 3.0,
+                width: right - x + 8.0,
+                height: line_h + 6.0,
+                target: Target::Language(side),
+            });
+            Ok(right)
+        };
+        let mut x = language(out, 0.0, Side::From, card.from)?;
+        // The arrows, centred in a square as wide as the line is tall.
+        let (gap, swap_w) = (10.0, line_h + 8.0);
+        x += gap;
+        let icon = self.text(SWAP_ICON, &self.formats.button, swap_w)?;
+        let (_, icon_h, _) = metrics(&icon);
+        out.items.push(Item::Text {
+            layout: icon,
+            x,
+            y: out.y + ((line_h - icon_h) / 2.0).round(),
+            ink: Ink::Secondary,
+            accents: Vec::new(),
+        });
+        out.links.push(Link {
+            x,
+            y: out.y - 3.0,
+            width: swap_w,
+            height: line_h + 6.0,
+            target: Target::Swap,
+        });
+        x += swap_w + gap;
+        language(out, x, Side::To, card.to)?;
+        out.y += line_h;
+        Ok(())
+    }
+
+    /// Every language there is to translate from or into, each a link, the
+    /// `current` one in bold.
+    fn layout_picker(&self, out: &mut Stack, current: &str, width: f32) -> Result<()> {
+        let separator = " \u{00B7} ";
+        // DirectWrite counts UTF-16 code units.
+        let utf16 = |s: &str| s.encode_utf16().count() as u32;
+        let mut line = String::new();
+        let mut ranges = Vec::new();
+        for (i, (_, name)) in translate::LANGUAGES.iter().enumerate() {
+            if i > 0 {
+                line.push_str(separator);
+            }
+            ranges.push(DWRITE_TEXT_RANGE {
+                startPosition: utf16(&line),
+                length: utf16(name),
+            });
+            line.push_str(name);
+        }
+        let list = self.text(&line, &self.formats.body, width)?;
+        let mut accents = Vec::new();
+        for ((code, _), range) in translate::LANGUAGES.iter().zip(&ranges) {
+            if *code == current {
+                unsafe {
+                    let _ = list.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, *range);
+                }
+                accents.push(*range);
+            }
+            for r in hit_rects(&list, *range) {
+                out.links.push(Link {
+                    x: r.left - 2.0,
+                    y: out.y + r.top,
+                    width: r.width + 4.0,
+                    height: r.height,
+                    target: Target::Pick(code.to_string()),
+                });
+            }
+        }
+        let (_, h) = out.text_with_accents(list, 0.0, Ink::Primary, accents);
+        out.y += h;
+        Ok(())
+    }
+
+    /// The translation, the definition it was asked with in its language,
+    /// the other translations by part of speech, and where it came from.
+    fn layout_translated(
+        &self,
+        out: &mut Stack,
+        card: &TranslationCard,
+        translation: &Translation,
+        width: f32,
+    ) -> Result<()> {
+        let main = self.text(&translation.text, &self.formats.heading, width)?;
+        let (_, h) = out.text(main, 0.0, Ink::Primary);
+        out.y += h;
+        if let Some(context) = &translation.context {
+            out.y += 4.0;
+            let quoted = format!("\u{201C}{context}\u{201D}");
+            let line = self.text(&quoted, &self.formats.example, width)?;
+            let (_, h) = out.text(line, 0.0, Ink::Secondary);
+            out.y += h;
+        }
+        for group in &translation.groups {
+            out.y += 10.0;
+            out.items.push(Item::Rule {
+                y: out.y,
+                x: 0.0,
+                width,
+            });
+            out.y += 14.0;
+            let label = match group.part_of_speech.as_str() {
+                "" => "Also",
+                pos => pos,
+            };
+            let (_, h) = out.text(self.spaced_caps(label, width)?, 0.0, Ink::Accent);
+            out.y += h + 6.0;
+            for term in &group.terms {
+                let text = self.text(&term.text, &self.formats.body, width)?;
+                let (w, h, baseline) = metrics(&text);
+                out.text(text, 0.0, Ink::Primary);
+                if term.back.is_empty() {
+                    out.y += h + 3.0;
+                    continue;
+                }
+                // What it means back, beside it when there's room, else under it.
+                let gap = 10.0;
+                let beside = width - w - gap >= 140.0;
+                let (x, room) = if beside {
+                    (w + gap, width - w - gap)
+                } else {
+                    out.y += h;
+                    (0.0, width)
+                };
+                let back = self.text(&term.back.join(", "), &self.formats.meta, room)?;
+                let (_, back_h, back_baseline) = metrics(&back);
+                let y = if beside { out.y + baseline - back_baseline } else { out.y };
+                out.items.push(Item::Text {
+                    layout: back,
+                    x,
+                    y,
+                    ink: Ink::Tertiary,
+                    accents: Vec::new(),
+                });
+                out.y = if beside { (out.y + h).max(y + back_h) } else { out.y + back_h };
+                out.y += 3.0;
+            }
+        }
+        out.y += 14.0;
+        let source = translation.source;
+        if source == translate::GOOGLE {
+            let url = format!(
+                "https://translate.google.com/?sl={}&tl={}&text={}&op=translate",
+                card.from,
+                card.to,
+                percent_encode(card.word)
+            );
+            let (w, h) = self.external_link(out, source, 0.0, width)?;
+            out.links.push(Link {
+                x: -4.0,
+                y: out.y - 4.0,
+                width: w + 8.0,
+                height: h + 8.0,
+                target: Target::Url(url),
+            });
+            out.y += h;
+        } else {
+            let label = self.text(source, &self.formats.footer, width)?;
+            let (_, h) = out.text(label, 0.0, Ink::Accent);
+            out.y += h;
+        }
         Ok(())
     }
 

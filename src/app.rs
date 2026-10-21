@@ -1,6 +1,6 @@
 //! Ties everything together on the UI thread: hotkey → selection → lookup → card.
 
-mod edit;
+pub(crate) mod edit;
 mod procs;
 
 use std::cell::{Cell, RefCell};
@@ -26,11 +26,12 @@ use crate::menu::{Command, Menu};
 use crate::offline;
 use crate::online;
 use crate::popup::{self, Popup, Transition};
-use crate::render::{Body, Target};
+use crate::render::{self, Body, Side, Target, TranslationCard};
 use crate::searchbox::MAX_SUGGESTIONS;
 use crate::selection::{self, Capturer, Selection};
 use crate::settings::{self, Change, Settings, Values};
 use crate::theme::Theme;
+use crate::translate::{self, Translation};
 use crate::tray::{self, Tray};
 use crate::ui;
 use crate::win::{self, Window};
@@ -64,6 +65,7 @@ const HOTKEY_BACK_ALT: i32 = 4;
 const HOTKEY_NEXT_LINK: i32 = 5;
 const HOTKEY_PREV_LINK: i32 = 6;
 const HOTKEY_OPEN_LINK: i32 = 7;
+const HOTKEY_TRANSLATE: i32 = 8;
 
 /// Hotkeys registered only while the card has a use for them, as (id,
 /// modifiers, key).
@@ -82,6 +84,11 @@ const LINK_KEYS: Keys = &[
     (HOTKEY_PREV_LINK, MOD_SHIFT, VK_TAB),
 ];
 const OPEN_KEY: Keys = &[(HOTKEY_OPEN_LINK, MOD_NOREPEAT, VK_RETURN)];
+const TRANSLATE_KEY: Keys = &[(
+    HOTKEY_TRANSLATE,
+    HOT_KEY_MODIFIERS(MOD_CONTROL.0 | MOD_NOREPEAT.0),
+    VIRTUAL_KEY(b'T' as u16),
+)];
 
 const TIMER_HIDE: usize = 1;
 const TIMER_SETTLE: usize = 2;
@@ -108,6 +115,7 @@ const HIDE_DONE_MS: u32 = ui::HIDE_MS as u32 + 30;
 /// Shrink the hit-test region once a resize animation has played.
 const SETTLE_MS: u32 = ui::RESIZE_MS as u32 + 60;
 const CACHE_SIZE: usize = 64;
+const TRANSLATION_CACHE_SIZE: usize = 32;
 /// How many words "back" remembers.
 const HISTORY_SIZE: usize = 50;
 const SEARCH_PLACEHOLDER: &str = "Type a word to look it up";
@@ -169,6 +177,53 @@ struct Corrected {
     correction: Option<String>,
 }
 
+/// A word, from one language into another.
+type TranslationKey = (String, String, String);
+
+/// A translation, or why there's none, for the request it was asked with.
+struct Translated {
+    id: u64,
+    key: TranslationKey,
+    result: Result<Translation, String>,
+}
+
+/// What the definition on the card gives a translation of its word.
+#[derive(Clone)]
+struct Translatable {
+    word: String,
+    /// The languages it's in, each with the first thing the word means in
+    /// it: context for a translation, should it need any.
+    senses: Vec<(String, Option<String>)>,
+}
+
+impl Translatable {
+    fn of(def: &Definition) -> Translatable {
+        let first = |section: &Definition| {
+            let meaning = section.meanings.first()?;
+            Some(meaning.senses.first()?.text.clone())
+        };
+        Translatable {
+            word: def.word.clone(),
+            senses: def
+                .sections()
+                .map(|s| (s.language.clone(), first(s)))
+                .collect(),
+        }
+    }
+}
+
+/// The card turned into a translation of its word.
+struct Translating {
+    about: Translatable,
+    from: String,
+    to: String,
+    /// The word is in both languages: which way waits on the user.
+    asking: bool,
+    picking: Option<Side>,
+    /// `None` while it's on its way.
+    result: Option<Result<Translation, String>>,
+}
+
 /// A dictionary being downloaded, for the language it's for.
 struct Installing {
     download: &'static dicts::Download,
@@ -188,6 +243,7 @@ enum Event {
     /// How far the download of a language's dictionary has got, in percent.
     Installing(&'static str, u32),
     Installed(&'static str, Result<(), String>),
+    Translated(Translated),
 }
 
 /// Sends [`Event`]s to the UI thread. They go through a channel, and an
@@ -261,6 +317,14 @@ pub struct App {
     current: Option<Query>,
     /// Words the card showed before synonyms were followed, most recent last.
     history: Vec<Query>,
+    /// The definition the card shows, if it does.
+    translatable: Option<Translatable>,
+    /// The translation the card turned into, if it did.
+    translating: Option<Translating>,
+    /// Translations, most recently used last.
+    translations: Vec<(TranslationKey, Translation)>,
+    /// Whether Ctrl+T is registered.
+    translate_key: bool,
     /// Whether Backspace and Alt+Left are registered.
     back_keys: bool,
     /// Whether Tab and Shift+Tab are registered.
@@ -381,6 +445,10 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             local: None,
             current: None,
             history: Vec::new(),
+            translatable: None,
+            translating: None,
+            translations: Vec::new(),
+            translate_key: false,
             back_keys: false,
             link_keys: false,
             open_key: false,
@@ -569,6 +637,7 @@ impl App {
                 Event::Corrected(corrected) => self.on_corrected(corrected),
                 Event::Installing(language, percent) => self.on_installing(language, percent),
                 Event::Installed(language, result) => self.on_installed(language, result),
+                Event::Translated(translated) => self.on_translated(translated),
             }
         }
     }
@@ -580,6 +649,7 @@ impl App {
         self.current = None;
         self.search = None;
         self.history.clear();
+        self.translating = None;
         self.sync_back_keys();
         let (text, anchor) = match captured.selection {
             Some(s) => (s.text, s.anchor),
@@ -606,6 +676,7 @@ impl App {
     fn open_search(&mut self, title: &'static str, anchor: Option<RECT>) {
         self.current = None;
         self.history.clear();
+        (self.translatable, self.translating) = (None, None);
         self.sync_back_keys();
         let previous = unsafe { GetForegroundWindow() };
         self.dismiss_menu();
@@ -976,14 +1047,21 @@ impl App {
     }
 
     fn present_body(&mut self, place: Place, title: &str, phonetic: Option<&str>, body: Body) {
+        self.translatable = match &body {
+            Body::Definition(def) => Some(Translatable::of(def)),
+            _ => None,
+        };
+        self.translating = None;
         match place {
             Place::New(anchor) => self.show_body(anchor, title, phonetic, body, false),
             Place::Same(transition) => {
                 let back = !self.history.is_empty();
+                let translate = self.can_translate();
                 let Some(popup) = self.popup.as_mut() else {
                     return;
                 };
                 let _ = popup.set_back(back);
+                let _ = popup.set_translate(translate);
                 if popup
                     .set_content(title, phonetic, body, transition)
                     .is_err()
@@ -997,6 +1075,7 @@ impl App {
     }
 
     fn show_message(&mut self, anchor: Option<RECT>, title: &str, detail: &str, auto_hide: bool) {
+        (self.translatable, self.translating) = (None, None);
         let anchor = anchor_or_cursor(anchor);
         self.show_body(
             anchor,
@@ -1021,9 +1100,11 @@ impl App {
     ) {
         self.dismiss_menu();
         let theme = self.theme();
+        let translate = self.can_translate();
         let Some(popup) = self.ensure_popup() else {
             return;
         };
+        let _ = popup.set_translate(translate);
         if let Err(e) = popup.show(anchor, theme, title, phonetic, body) {
             self.tray
                 .notify("WinDict couldn't draw its window", &e.message());
@@ -1107,12 +1188,17 @@ impl App {
         self.sync_back_keys();
     }
 
-    /// Goes back to the word shown before the last synonym was followed.
+    /// Goes back to the word shown before the last synonym was followed, or
+    /// from a translation to the definition it was of.
     fn back(&mut self) {
         if !self.popup.as_ref().is_some_and(|p| p.visible) {
             return;
         }
-        let Some(query) = self.history.pop() else {
+        let query = match self.translating.take() {
+            Some(_) => self.current.clone(),
+            None => self.history.pop(),
+        };
+        let Some(query) = query else {
             return;
         };
         self.request += 1;
@@ -1123,8 +1209,203 @@ impl App {
     /// Backspace and Alt+Left go back, but only while there's somewhere to
     /// go: otherwise they belong to the app underneath.
     fn sync_back_keys(&mut self) {
-        let wanted = !self.history.is_empty();
+        let wanted = !self.history.is_empty() || self.translating.is_some();
         set_hotkeys(self.hwnd, BACK_KEYS, &mut self.back_keys, wanted);
+    }
+
+    /// Whether the card shows a definition it can turn into a translation.
+    fn can_translate(&self) -> bool {
+        self.config.online_lookup && self.translatable.is_some() && self.translating.is_none()
+    }
+
+    /// Ctrl+T: turns the definition into a translation, or back.
+    fn toggle_translation(&mut self) {
+        if self.translating.is_some() {
+            self.back();
+        } else {
+            self.translate();
+        }
+    }
+
+    /// Turns the card into a translation of its word: from the language
+    /// it's in to the other one in use, or as the settings say when that
+    /// can't be told.
+    fn translate(&mut self) {
+        let visible = self.popup.as_ref().is_some_and(|p| p.visible);
+        if !visible || !self.can_translate() {
+            return;
+        }
+        let Some(about) = self.translatable.clone() else {
+            return;
+        };
+        let found: Vec<&str> = about.senses.iter().map(|(l, _)| l.as_str()).collect();
+        let defaults = (
+            self.config.translate_from.as_str(),
+            self.config.translate_to.as_str(),
+        );
+        let direction = translate::pick(&found, &self.config.languages, defaults);
+        let asking = !direction.sure;
+        self.translating = Some(Translating {
+            about,
+            from: direction.from,
+            to: direction.to,
+            asking,
+            picking: None,
+            result: None,
+        });
+        // Answers still on their way are for the definition.
+        self.request += 1;
+        if !asking {
+            self.fetch_translation();
+        }
+        let focus = asking.then_some(Target::Confirm);
+        self.show_translation(Transition::Replace, focus);
+        self.sync_back_keys();
+    }
+
+    /// Translates the word the way the card says, from the cache when it can.
+    fn fetch_translation(&mut self) {
+        let Some(t) = self.translating.as_ref() else {
+            return;
+        };
+        let key = (t.about.word.clone(), t.from.clone(), t.to.clone());
+        let context = t
+            .about
+            .senses
+            .iter()
+            .find(|(language, _)| *language == t.from)
+            .and_then(|(_, sense)| sense.clone());
+        let hit = self.translations.iter().position(|(k, _)| *k == key);
+        let cached = hit.map(|i| {
+            let entry = self.translations.remove(i);
+            let translation = entry.1.clone();
+            self.translations.push(entry);
+            translation
+        });
+        let Some(t) = self.translating.as_mut() else {
+            return;
+        };
+        t.result = cached.map(Ok);
+        if t.result.is_some() {
+            return;
+        }
+        self.request += 1;
+        let (id, events) = (self.request, self.events.clone());
+        let email = self.config.mymemory_email.clone();
+        std::thread::spawn(move || {
+            let (word, from, to) = &key;
+            let result = translate::translate(word, from, to, context.as_deref(), &email);
+            events.send(Event::Translated(Translated { id, key, result }));
+        });
+    }
+
+    fn on_translated(&mut self, translated: Translated) {
+        // Remember translations; retry failures (e.g. offline) next time.
+        if let Ok(translation) = &translated.result {
+            self.translations.retain(|(k, _)| *k != translated.key);
+            self.translations
+                .push((translated.key.clone(), translation.clone()));
+            if self.translations.len() > TRANSLATION_CACHE_SIZE {
+                self.translations.remove(0);
+            }
+        }
+        let visible = self.popup.as_ref().is_some_and(|p| p.visible);
+        if translated.id != self.request || !visible {
+            return;
+        }
+        let Some(t) = self.translating.as_mut() else {
+            return;
+        };
+        t.result = Some(translated.result);
+        self.show_translation(Transition::Replace, None);
+    }
+
+    /// Shows the translation as it stands, the focus on `focus`, or where
+    /// it was.
+    fn show_translation(&mut self, transition: Transition, focus: Option<Target>) {
+        let Some(t) = self.translating.as_ref() else {
+            return;
+        };
+        let Some(popup) = self.popup.as_mut().filter(|p| p.visible) else {
+            return;
+        };
+        let focus = focus.or_else(|| popup.focused_link().cloned());
+        let state = match (&t.result, t.asking) {
+            (_, true) => render::Translated::Asking,
+            (None, false) => render::Translated::Loading,
+            (Some(Ok(translation)), false) => render::Translated::Done(translation),
+            (Some(Err(error)), false) => render::Translated::Failed(error),
+        };
+        let card = TranslationCard {
+            word: &t.about.word,
+            from: &t.from,
+            to: &t.to,
+            state,
+            picking: t.picking,
+        };
+        let _ = popup.set_back(true);
+        let _ = popup.set_translate(false);
+        let body = Body::Translation(card);
+        if popup
+            .set_content(&t.about.word, None, body, transition)
+            .is_err()
+        {
+            return;
+        }
+        if let Some(target) = focus {
+            let _ = popup.focus_target(&target);
+        }
+        self.on_resized();
+        self.sync_link_keys();
+    }
+
+    /// A click, or Enter, on the translation card.
+    fn steer_translation(&mut self, target: Target) {
+        let Some(t) = self.translating.as_mut() else {
+            return;
+        };
+        let mut focus = None;
+        match target {
+            // Open the list, or close it again.
+            Target::Language(side) => {
+                if t.picking == Some(side) {
+                    t.picking = None;
+                } else {
+                    t.picking = Some(side);
+                    let current = match side {
+                        Side::From => &t.from,
+                        Side::To => &t.to,
+                    };
+                    focus = Some(Target::Pick(current.clone()));
+                }
+                return self.show_translation(Transition::Replace, focus);
+            }
+            Target::Swap => std::mem::swap(&mut t.from, &mut t.to),
+            // The other side's language swaps them round.
+            Target::Pick(language) => {
+                let Some(side) = t.picking.take() else {
+                    return;
+                };
+                let (picked, other) = match side {
+                    Side::From => (&mut t.from, &mut t.to),
+                    Side::To => (&mut t.to, &mut t.from),
+                };
+                if language == *other {
+                    std::mem::swap(picked, other);
+                } else {
+                    *picked = language;
+                }
+                focus = Some(Target::Language(side));
+            }
+            Target::Confirm => t.asking = false,
+            _ => return,
+        }
+        // Until the way is confirmed, only the offer changes.
+        if !t.asking {
+            self.request += 1;
+            self.fetch_translation();
+        }
+        self.show_translation(Transition::Replace, focus);
     }
 
     /// Tab and Shift+Tab move between the card's links, and Enter opens the
@@ -1137,7 +1418,11 @@ impl App {
             .filter(|p| p.visible && self.search.is_none());
         let tab = popup.is_some_and(|p| p.has_links());
         let enter = popup.is_some_and(|p| p.focused_link().is_some());
+        // Ctrl+T, likewise, only while there's a translation to go to or from.
+        let translate =
+            popup.is_some() && (self.can_translate() || self.translating.is_some());
         self.set_link_keys(tab, enter);
+        set_hotkeys(self.hwnd, TRANSLATE_KEY, &mut self.translate_key, translate);
     }
 
     fn set_link_keys(&mut self, tab: bool, enter: bool) {
@@ -1173,13 +1458,19 @@ impl App {
                 win::shell_open(&HSTRING::from(url));
                 self.dismiss();
             }
+            Target::Translate => self.translate(),
+            Target::Language(_) | Target::Swap | Target::Pick(_) | Target::Confirm => {
+                self.steer_translation(target)
+            }
         }
     }
 
     fn dismiss(&mut self) {
         self.history.clear();
+        self.translating = None;
         self.sync_back_keys();
         self.set_link_keys(false, false);
+        set_hotkeys(self.hwnd, TRANSLATE_KEY, &mut self.translate_key, false);
         self.remove_dismiss_hooks();
         self.dismiss_menu();
         self.search = None;
@@ -1306,6 +1597,9 @@ impl App {
         }
         if self.popup.as_ref().is_some_and(|p| p.back_at(x, y)) {
             return self.back();
+        }
+        if self.popup.as_ref().is_some_and(|p| p.translate_at(x, y)) {
+            return self.translate();
         }
         if let Some(target) = self.popup.as_ref().and_then(|p| p.link_at(x, y)).cloned() {
             self.open_link(target);
@@ -1567,11 +1861,31 @@ impl App {
             Change::MaxDefinitions(n) => self.config.max_definitions = n,
             Change::MaxSynonyms(n) => self.config.max_synonyms = n,
             Change::ShowExamples(on) => self.config.show_examples = on,
-            Change::OnlineLookup(on) => self.config.online_lookup = on,
+            Change::OnlineLookup(on) => {
+                self.config.online_lookup = on;
+                // The translate button needs the internet, like the answers.
+                let translate = self.can_translate();
+                if let Some(popup) = self.popup.as_mut() {
+                    let _ = popup.set_translate(translate);
+                }
+                self.sync_link_keys();
+            }
             Change::UiAutomation(on) => self.config.use_ui_automation = on,
+            // These don't change any answer: there's nothing to forget.
+            Change::TranslateFrom(code) => return self.save_setting(|c| c.translate_from = code),
+            Change::TranslateTo(code) => return self.save_setting(|c| c.translate_to = code),
+            Change::MyMemoryEmail(email) => {
+                return self.save_setting(|c| c.mymemory_email = email);
+            }
         }
         // Online answers were cut down to the old limits, examples and all.
         self.cache.clear();
+        self.save_setting(|_| {});
+    }
+
+    /// Changes the config with `change`, and saves it.
+    fn save_setting(&mut self, change: impl FnOnce(&mut Config)) {
+        change(&mut self.config);
         if let Err(e) = config::save(&self.config) {
             self.tray.notify("Settings not saved", &e);
         }

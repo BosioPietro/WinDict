@@ -44,6 +44,13 @@ const BACK_SLIDE: f32 = 10.0;
 /// "Back" in Segoe Fluent Icons and Segoe MDL2 Assets.
 const BACK_GLYPH: &str = "\u{E72B}";
 const BACK_TIP: &str = "Back (Backspace)";
+/// The translate button's left edge: mirrors the back button's, at the right.
+const TRANSLATE_X: f32 = CARD_W - BACK_X - BACK_SIZE;
+/// How much narrower the heading is beside the translate button.
+const TRANSLATE_ROOM: f32 = CARD_W - PAD_X - TRANSLATE_X + 6.0;
+/// "Translate" in Segoe Fluent Icons and Segoe MDL2 Assets.
+const TRANSLATE_GLYPH: &str = "\u{E8C1}";
+const TRANSLATE_TIP: &str = "Translate (Ctrl+T)";
 /// The ring around the link Tab moved to, as on Windows 11 controls.
 const FOCUS_STROKE: f32 = 2.0;
 const FOCUS_RADIUS: f32 = 4.0;
@@ -149,7 +156,8 @@ pub struct Popup {
     content: Content,
     loader: Loader,
     scroll_chrome: ScrollChrome,
-    back: BackButton,
+    back: IconButton,
+    translate: IconButton,
     search: SearchBox,
 
     theme: Theme,
@@ -252,8 +260,9 @@ impl Content {
     }
 }
 
-/// The arrow left of the word, shown once a synonym has been followed.
-struct BackButton {
+/// A glyph button level with the word: the arrow left of it, shown once a
+/// synonym has been followed, and the translate button right of it.
+struct IconButton {
     visual: ContainerVisual,
     /// Inside `visual`, which keeps the button's place: slides in and out.
     slide: ContainerVisual,
@@ -262,16 +271,39 @@ struct BackButton {
     hover_brush: CompositionColorBrush,
     glyph: SpriteVisual,
     glyph_brush: CompositionSurfaceBrush,
+    /// Rings the button while Tab is on it.
+    ring: ShapeVisual,
+    ring_shape: CompositionSpriteShape,
+    ring_clip: CompositionRoundedRectangleGeometry,
+    ring_brush: CompositionColorBrush,
     /// Owned by the card's window, which destroys it.
     tooltip: Option<HWND>,
+    /// The tooltip's tool, unique among the card's buttons.
+    tool: usize,
+    icon: &'static str,
+    /// Left edge in the card, in DIPs.
+    x: f32,
+    /// Where it slides in from, in DIPs right of its place.
+    slide_from: f32,
     shown: bool,
     hovered: bool,
+    focused: bool,
     /// Top of the button in the card, physical pixels.
     top: f32,
 }
 
-impl BackButton {
-    fn new(c: &Compositor, card: &ContainerVisual, hwnd: HWND) -> Result<BackButton> {
+impl IconButton {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        c: &Compositor,
+        card: &ContainerVisual,
+        hwnd: HWND,
+        icon: &'static str,
+        tip: &str,
+        tool: usize,
+        x: f32,
+        slide_from: f32,
+    ) -> Result<IconButton> {
         let visual = c.CreateContainerVisual()?;
         visual.SetOpacity(0.0)?;
         card.Children()?.InsertAtTop(&visual)?;
@@ -286,7 +318,15 @@ impl BackButton {
         slide.Children()?.InsertAtTop(&hover)?;
         let (glyph, glyph_brush) = text_sprite(c)?;
         slide.Children()?.InsertAtTop(&glyph)?;
-        Ok(BackButton {
+        let ring = c.CreateShapeVisual()?;
+        let ring_clip = c.CreateRoundedRectangleGeometry()?;
+        let ring_shape = c.CreateSpriteShapeWithGeometry(&ring_clip)?;
+        let ring_brush = c.CreateColorBrush()?;
+        ring_shape.SetStrokeBrush(&ring_brush)?;
+        ring.Shapes()?.Append(&ring_shape)?;
+        ring.SetOpacity(0.0)?;
+        slide.Children()?.InsertAtTop(&ring)?;
+        Ok(IconButton {
             visual,
             slide,
             hover,
@@ -294,9 +334,18 @@ impl BackButton {
             hover_brush,
             glyph,
             glyph_brush,
-            tooltip: create_tooltip(hwnd, BACK_TIP),
+            ring,
+            ring_shape,
+            ring_clip,
+            ring_brush,
+            tooltip: create_tooltip(hwnd, tip, tool),
+            tool,
+            icon,
+            x,
+            slide_from,
             shown: false,
             hovered: false,
+            focused: false,
             top: 0.0,
         })
     }
@@ -309,7 +358,17 @@ impl BackButton {
         self.hover_clip.SetSize(size)?;
         self.hover_clip
             .SetCornerRadius(v2(BACK_RADIUS * s, BACK_RADIUS * s))?;
-        let layout = renderer.layout_line(BACK_GLYPH, Face::Button, Ink::Primary, BACK_SIZE)?;
+        // Inside the button, the stroke centred on the ring's edge.
+        let stroke = (FOCUS_STROKE * s).round();
+        self.ring_brush.SetColor(t.focus())?;
+        self.ring.SetSize(size)?;
+        self.ring_shape.SetStrokeThickness(stroke)?;
+        self.ring_clip.SetOffset(v2(stroke / 2.0, stroke / 2.0))?;
+        self.ring_clip
+            .SetSize(v2(BACK_SIZE * s - stroke, BACK_SIZE * s - stroke))?;
+        self.ring_clip
+            .SetCornerRadius(v2(BACK_RADIUS * s, BACK_RADIUS * s))?;
+        let layout = renderer.layout_line(self.icon, Face::Button, Ink::Primary, BACK_SIZE)?;
         self.glyph_brush
             .SetSurface(&renderer.draw(&layout, s, t)?)?;
         self.glyph
@@ -318,34 +377,94 @@ impl BackButton {
             .SetOffset(v3(0.0, ((BACK_SIZE - layout.height) / 2.0 * s).round()))
     }
 
+    /// Fades the button in, sliding from [`IconButton::slide_from`], or out.
+    fn set_shown(&mut self, anim: &Animator, shown: bool, s: f32) -> Result<()> {
+        if shown == self.shown {
+            return Ok(());
+        }
+        self.shown = shown;
+        let away = v3(self.slide_from * s, 0.0);
+        if shown {
+            // Slides in alongside the word making room for it.
+            Animator::stop(&self.slide, &["Offset"]);
+            self.slide.SetOffset(away)?;
+            anim.scalar(&self.visual, "Opacity", 1.0, RESIZE_MS, 0, &anim.fade)?;
+            let home = v3(0.0, 0.0);
+            anim.vector3(&self.slide, "Offset", home, RESIZE_MS, 0, &anim.decelerate)?;
+        } else {
+            // Gone before the word slides over where it was.
+            anim.scalar(&self.visual, "Opacity", 0.0, 100, 0, &anim.decelerate)?;
+            anim.vector3(&self.slide, "Offset", away, 150, 0, &anim.accelerate)?;
+            self.set_hovered(anim, false)?;
+            self.set_focused(false)?;
+        }
+        Ok(())
+    }
+
+    fn set_hovered(&mut self, anim: &Animator, hovered: bool) -> Result<()> {
+        if hovered == self.hovered {
+            return Ok(());
+        }
+        self.hovered = hovered;
+        let opacity = if hovered { 1.0 } else { 0.0 };
+        anim.scalar(&self.hover, "Opacity", opacity, 100, 0, &anim.decelerate)
+    }
+
+    fn set_focused(&mut self, focused: bool) -> Result<()> {
+        self.focused = focused;
+        self.ring.SetOpacity(if focused { 1.0 } else { 0.0 })
+    }
+
+    /// Back at rest, shown or not without animating, for a new card.
+    fn reset(&mut self) -> Result<()> {
+        Animator::stop(&self.visual, &["Opacity"]);
+        Animator::stop(&self.hover, &["Opacity"]);
+        Animator::stop(&self.slide, &["Offset"]);
+        self.visual.SetOpacity(if self.shown { 1.0 } else { 0.0 })?;
+        self.hover.SetOpacity(0.0)?;
+        self.slide.SetOffset(v3(0.0, 0.0))?;
+        self.hovered = false;
+        self.set_focused(false)
+    }
+
     /// Moves the tooltip's area to `rect`, in window pixels; an empty one turns it off.
     fn set_tooltip_rect(&self, owner: HWND, rect: RECT) {
-        let Some(tooltip) = self.tooltip else {
-            return;
-        };
-        let info = TTTOOLINFOW {
-            cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
-            hwnd: owner,
-            uId: 1,
-            rect,
-            ..Default::default()
-        };
-        unsafe {
-            SendMessageW(
-                tooltip,
-                TTM_NEWTOOLRECTW,
-                None,
-                Some(LPARAM(&info as *const _ as isize)),
-            );
-            if rect.right <= rect.left {
-                SendMessageW(tooltip, TTM_POP, None, None);
-            }
+        if let Some(tooltip) = self.tooltip {
+            set_tooltip_rect(tooltip, owner, self.tool, rect);
         }
     }
 }
 
+/// Moves the area of `owner` that `tooltip`'s `tool` shows over to `rect`,
+/// in client pixels. An empty one hides it.
+pub fn set_tooltip_rect(tooltip: HWND, owner: HWND, tool: usize, rect: RECT) {
+    let info = TTTOOLINFOW {
+        cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
+        hwnd: owner,
+        uId: tool,
+        rect,
+        ..Default::default()
+    };
+    unsafe {
+        SendMessageW(
+            tooltip,
+            TTM_NEWTOOLRECTW,
+            None,
+            Some(LPARAM(&info as *const _ as isize)),
+        );
+        if rect.right <= rect.left {
+            SendMessageW(tooltip, TTM_POP, None, None);
+        }
+    }
+}
+
+fn contains(r: RECT, x: i32, y: i32) -> bool {
+    x >= r.left && x < r.right && y >= r.top && y < r.bottom
+}
+
 /// A system tooltip showing `text` over an area of `owner`, initially empty.
-fn create_tooltip(owner: HWND, text: &str) -> Option<HWND> {
+/// `tool` tells it apart from the owner's other tooltips.
+pub fn create_tooltip(owner: HWND, text: &str, tool: usize) -> Option<HWND> {
     unsafe {
         let controls = INITCOMMONCONTROLSEX {
             dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
@@ -375,7 +494,7 @@ fn create_tooltip(owner: HWND, text: &str) -> Option<HWND> {
             // Watches the owner's mouse messages itself.
             uFlags: TTF_SUBCLASS,
             hwnd: owner,
-            uId: 1,
+            uId: tool,
             lpszText: PWSTR(wide.as_mut_ptr()),
             ..Default::default()
         };
@@ -527,7 +646,17 @@ impl Popup {
         target.SetRoot(&root)?;
         let frame = Frame::new(c, &root, &theme)?;
         let header = Header::new(c, &frame.card)?;
-        let back = BackButton::new(c, &frame.card, hwnd)?;
+        let back = IconButton::new(c, &frame.card, hwnd, BACK_GLYPH, BACK_TIP, 1, BACK_X, -BACK_SLIDE)?;
+        let translate = IconButton::new(
+            c,
+            &frame.card,
+            hwnd,
+            TRANSLATE_GLYPH,
+            TRANSLATE_TIP,
+            2,
+            TRANSLATE_X,
+            0.0,
+        )?;
         let content = Content::new(c, &frame.card)?;
         let loader = Loader::new(c, &content.host, &theme)?;
         let scroll_chrome = ScrollChrome::new(c, &frame.card)?;
@@ -545,6 +674,7 @@ impl Popup {
             loader,
             scroll_chrome,
             back,
+            translate,
             search,
             theme,
             scale: 1.0,
@@ -680,10 +810,9 @@ impl Popup {
         // Release the text surfaces while idle.
         let _ = self.header.brush.SetSurface(None::<&ICompositionSurface>);
         let _ = self.content.brush.SetSurface(None::<&ICompositionSurface>);
-        let _ = self
-            .back
-            .glyph_brush
-            .SetSurface(None::<&ICompositionSurface>);
+        for button in [&self.back, &self.translate] {
+            let _ = button.glyph_brush.SetSurface(None::<&ICompositionSurface>);
+        }
         let _ = self
             .header
             .back_brush
@@ -713,9 +842,10 @@ impl Popup {
         let s = self.scale;
         let content_w = CARD_W - 2.0 * PAD_X;
         let indent = if self.back.shown { BACK_INDENT } else { 0.0 };
+        let room = if self.translate.shown { TRANSLATE_ROOM } else { 0.0 };
         let header_layout = self
             .renderer
-            .layout_header(word, phonetic, content_w, indent)?;
+            .layout_header(word, phonetic, content_w - room, indent)?;
         let body_layout = self.renderer.layout_body(&body, content_w, PAD_BOTTOM)?;
         let header_surface = self.renderer.draw(&header_layout, s, &self.theme)?;
         let body_surface = self.renderer.draw(&body_layout, s, &self.theme)?;
@@ -739,9 +869,13 @@ impl Popup {
             _ => None,
         };
         self.content.links = body_layout.links.clone();
-        let links = &self.content.links;
-        let focused = kept.and_then(|t| links.iter().position(|l| l.target == t));
-        self.focus_link(focused)?;
+        if kept == Some(Target::Translate) && self.translate.shown {
+            self.focus_translate()?;
+        } else {
+            let links = &self.content.links;
+            let focused = kept.and_then(|t| links.iter().position(|l| l.target == t));
+            self.focus_link(focused)?;
+        }
 
         // Header: on a refinement, cross-fade from the old rendering so only
         // what changed (typically the pronunciation) appears to fade in.
@@ -799,12 +933,13 @@ impl Popup {
             header.visual.SetOffset(rest)?;
         }
 
-        // The back button sits level with the word.
+        // The buttons sit level with the word.
         let line = header_layout.first_line_bottom();
-        self.back.top = ((PAD_TOP + (line - BACK_SIZE) / 2.0) * s).round();
-        self.back
-            .visual
-            .SetOffset(v3((BACK_X * s).round(), self.back.top))?;
+        let top = ((PAD_TOP + (line - BACK_SIZE) / 2.0) * s).round();
+        for button in [&mut self.back, &mut self.translate] {
+            button.top = top;
+            button.visual.SetOffset(v3((button.x * s).round(), top))?;
+        }
 
         let content = &self.content;
         content.brush.SetSurface(&body_surface)?;
@@ -878,69 +1013,46 @@ impl Popup {
     /// Shows or hides the back button. The word moves to make room for it
     /// with the next [`Popup::set_content`].
     pub fn set_back(&mut self, shown: bool) -> Result<()> {
-        if shown == self.back.shown {
-            return Ok(());
-        }
-        self.back.shown = shown;
-        let (anim, back, s) = (&self.anim, &self.back, self.scale);
-        let away = v3(-BACK_SLIDE * s, 0.0);
-        if shown {
-            // Slides in from the left alongside the word making room for it.
-            Animator::stop(&back.slide, &["Offset"]);
-            back.slide.SetOffset(away)?;
-            anim.scalar(&back.visual, "Opacity", 1.0, RESIZE_MS, 0, &anim.fade)?;
-            let home = v3(0.0, 0.0);
-            anim.vector3(&back.slide, "Offset", home, RESIZE_MS, 0, &anim.decelerate)?;
-        } else {
-            // Gone before the word slides over where it was.
-            anim.scalar(&back.visual, "Opacity", 0.0, 100, 0, &anim.decelerate)?;
-            anim.vector3(&back.slide, "Offset", away, 150, 0, &anim.accelerate)?;
-        }
-        if !shown {
-            self.set_back_hovered(false)?;
-        }
+        self.back.set_shown(&self.anim, shown, self.scale)?;
         self.sync_tooltip();
         Ok(())
     }
 
-    /// Highlights the back button while the pointer, in window pixels, is on it.
+    /// Shows or hides the translate button. The word makes room for it with
+    /// the next [`Popup::set_content`].
+    pub fn set_translate(&mut self, shown: bool) -> Result<()> {
+        self.translate.set_shown(&self.anim, shown, self.scale)?;
+        self.sync_tooltip();
+        Ok(())
+    }
+
+    /// Highlights the button the pointer, in window pixels, is on.
     pub fn hover(&mut self, point: Option<(i32, i32)>) -> Result<()> {
         if self.search.active {
             let point = point.map(|(x, y)| self.card_point(x, y));
             return self.search.hover(&self.anim, point);
         }
-        let over = point.is_some_and(|(x, y)| self.back_at(x, y));
-        self.set_back_hovered(over)
+        let over_back = point.is_some_and(|(x, y)| self.back_at(x, y));
+        let over_translate = point.is_some_and(|(x, y)| self.translate_at(x, y));
+        self.back.set_hovered(&self.anim, over_back)?;
+        self.translate.set_hovered(&self.anim, over_translate)
     }
 
     /// Whether a point in window pixels is on the back button.
     pub fn back_at(&self, x: i32, y: i32) -> bool {
-        let r = self.back_rect();
-        self.back.shown && x >= r.left && x < r.right && y >= r.top && y < r.bottom
+        self.back.shown && contains(self.button_rect(&self.back), x, y)
     }
 
-    fn set_back_hovered(&mut self, hovered: bool) -> Result<()> {
-        if hovered == self.back.hovered {
-            return Ok(());
-        }
-        self.back.hovered = hovered;
-        let anim = &self.anim;
-        let opacity = if hovered { 1.0 } else { 0.0 };
-        anim.scalar(
-            &self.back.hover,
-            "Opacity",
-            opacity,
-            100,
-            0,
-            &anim.decelerate,
-        )
+    /// Whether a point in window pixels is on the translate button.
+    pub fn translate_at(&self, x: i32, y: i32) -> bool {
+        self.translate.shown && contains(self.button_rect(&self.translate), x, y)
     }
 
-    /// The back button in window pixels.
-    fn back_rect(&self) -> RECT {
+    /// A button in window pixels.
+    fn button_rect(&self, button: &IconButton) -> RECT {
         let s = self.scale;
-        let left = (MARGIN * s + (BACK_X * s).round()) as i32;
-        let top = (self.frame_y() + self.back.top) as i32;
+        let left = (MARGIN * s + (button.x * s).round()) as i32;
+        let top = (self.frame_y() + button.top) as i32;
         let size = (BACK_SIZE * s).round() as i32;
         RECT {
             left,
@@ -950,14 +1062,16 @@ impl Popup {
         }
     }
 
-    /// Keeps the tooltip over the back button, and off while it's hidden.
+    /// Keeps the tooltips over the buttons, and off while they're hidden.
     fn sync_tooltip(&self) {
-        let rect = if self.back.shown {
-            self.back_rect()
-        } else {
-            RECT::default()
-        };
-        self.back.set_tooltip_rect(self.hwnd, rect);
+        for button in [&self.back, &self.translate] {
+            let rect = if button.shown {
+                self.button_rect(button)
+            } else {
+                RECT::default()
+            };
+            button.set_tooltip_rect(self.hwnd, rect);
+        }
     }
 
     fn move_content_host(&self, previous_header_h: f32) -> Result<()> {
@@ -1041,40 +1155,74 @@ impl Popup {
             .map(|l| &l.target)
     }
 
-    /// Whether the body has links to Tab through.
+    /// Whether the card has links, or the translate button, to Tab through.
     pub fn has_links(&self) -> bool {
-        !self.content.links.is_empty()
+        self.translate.shown || !self.content.links.is_empty()
     }
 
-    /// The link Tab moved to, if any.
+    /// The link, or button, Tab moved to, if any.
     pub fn focused_link(&self) -> Option<&Target> {
+        static TRANSLATE: Target = Target::Translate;
+        if self.translate.focused {
+            return Some(&TRANSLATE);
+        }
         self.content.focused.map(|i| &self.content.links[i].target)
     }
 
     /// Moves the keyboard focus to the next link, or the previous one,
     /// going round from the last to the first, and scrolls it into view.
+    /// The translate button comes first, as it does reading the card.
     pub fn step_link(&mut self, forward: bool) -> Result<()> {
-        let stops = self.content.stops();
+        // `None` for the translate button.
+        let mut stops: Vec<Option<usize>> = Vec::new();
+        if self.translate.shown {
+            stops.push(None);
+        }
+        stops.extend(self.content.stops().into_iter().map(Some));
         if stops.is_empty() {
             return Ok(());
         }
         let n = stops.len();
-        let at = self
-            .content
-            .focused
-            .and_then(|f| stops.iter().position(|&s| s == f));
+        let current = if self.translate.focused {
+            Some(None)
+        } else {
+            self.content.focused.map(Some)
+        };
+        let at = current.and_then(|f| stops.iter().position(|&s| s == f));
         let next = match (at, forward) {
             (None, true) => 0,
             (None, false) => n - 1,
             (Some(i), true) => (i + 1) % n,
             (Some(i), false) => (i + n - 1) % n,
         };
-        self.focus_link(Some(stops[next]))?;
-        self.scroll_into_view(stops[next])
+        match stops[next] {
+            None => self.focus_translate(),
+            Some(start) => {
+                self.focus_link(Some(start))?;
+                self.scroll_into_view(start)
+            }
+        }
+    }
+
+    /// Moves the keyboard focus to the link going to `target`, if the card
+    /// has one.
+    pub fn focus_target(&mut self, target: &Target) -> Result<()> {
+        if let Some(start) = self.content.links.iter().position(|l| &l.target == target) {
+            self.focus_link(Some(start))?;
+            self.scroll_into_view(start)?;
+        }
+        Ok(())
+    }
+
+    /// Rings the translate button.
+    fn focus_translate(&mut self) -> Result<()> {
+        self.focus_link(None)?;
+        self.translate.set_focused(true)
     }
 
     /// Rings the link starting at `start` in the body's links, or none.
     fn focus_link(&mut self, start: Option<usize>) -> Result<()> {
+        self.translate.set_focused(false)?;
         let content = &mut self.content;
         content.focused = start;
         let shapes = content.focus.Shapes()?;
@@ -1156,13 +1304,11 @@ impl Popup {
             Animator::stop(v, &["Opacity", "Offset", "Scale"]);
         }
         self.header.visual.SetScale(scale(1.0))?;
-        // A new card has nowhere to go back to.
-        let back = &mut self.back;
-        Animator::stop(&back.visual, &["Opacity"]);
-        Animator::stop(&back.hover, &["Opacity"]);
-        back.visual.SetOpacity(0.0)?;
-        back.hover.SetOpacity(0.0)?;
-        (back.shown, back.hovered) = (false, false);
+        // A new card has nowhere to go back to; whether it can be translated
+        // was said before showing it.
+        self.back.shown = false;
+        self.back.reset()?;
+        self.translate.reset()?;
         self.search.reset();
         self.card_h = 0.0;
         Ok(())
@@ -1207,6 +1353,7 @@ impl Popup {
     /// showed first and resizes it smoothly; otherwise it's about to appear.
     fn enter_search(&mut self, title: &str, placeholder: &str, in_place: bool) -> Result<()> {
         self.set_back(false)?;
+        self.set_translate(false)?;
         self.focus_link(None)?;
         self.header_indent = 0.0;
         let anim = &self.anim;
@@ -1274,6 +1421,7 @@ impl Popup {
         self.loader.brush.SetColor(t.accent)?;
         self.content.focus_brush.SetColor(t.focus())?;
         self.back.apply_theme(&self.renderer, &t, self.scale)?;
+        self.translate.apply_theme(&self.renderer, &t, self.scale)?;
         self.scroll_chrome.apply_theme(&t)
     }
 

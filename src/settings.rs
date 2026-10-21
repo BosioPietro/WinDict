@@ -6,23 +6,29 @@
 //! shortcut's keys rise into place, the list of languages opens out of its
 //! row as the card grows to fit it, and the focus ring follows Tab from
 //! control to control. Changing the theme cross-fades the whole window.
+//! The one text field, for the MyMemory email, is drawn the same way, its
+//! caret and all.
 
 mod view;
 
 use windows::core::{Result, HSTRING};
 use windows::Win32::Foundation::*;
+use windows::Win32::UI::Controls::TTM_SETMAXTIPWIDTH;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
+use crate::app::edit::{Input, LineEdit, Motion};
 use crate::config::{Config, ThemeMode};
 use crate::dicts;
 use crate::hotkey::{self, held_modifiers, is_modifier, Hotkey};
 use crate::popup;
 use crate::render::{Align, Face, Ink, Layout, Renderer};
+use crate::selection;
 use crate::theme::Theme;
+use crate::translate;
 use crate::ui::{self, scale, ts, v2, v3, Animator, Frame, Text, MARGIN};
 use crate::win::Window;
 
@@ -64,6 +70,22 @@ const PILL_RADIUS: f32 = 4.0;
 const STEP_SIZE: f32 = 30.0;
 const STEP_RADIUS: f32 = 6.0;
 const VALUE_W: f32 = 40.0;
+/// A counter's value when it's a language's name.
+const LANGUAGE_W: f32 = 100.0;
+/// The text field.
+const FIELD_W: f32 = 190.0;
+const FIELD_H: f32 = 32.0;
+const FIELD_RADIUS: f32 = 4.0;
+/// Between the field's sides and its text.
+const FIELD_PAD: f32 = 10.0;
+/// The line along its bottom, which thickens into the accent while typing.
+const FIELD_LINE: f32 = 2.0;
+const CARET_W: f32 = 1.0;
+/// Between a setting's name and the info symbol after it.
+const INFO_GAP: f32 = 6.0;
+const INFO_W: f32 = 16.0;
+/// How wide the info tooltip grows before wrapping.
+const TIP_W: f32 = 300.0;
 /// A language in the list under the languages row.
 const LANGUAGE_H: f32 = 40.0;
 const CHECK_SIZE: f32 = 20.0;
@@ -75,7 +97,6 @@ const STATUS_W: f32 = 260.0;
 const CHEVRON_W: f32 = 16.0;
 /// How wide each control is, for the description beside it to stay clear.
 const SHORTCUT_W: f32 = 150.0;
-const COUNTER_W: f32 = 2.0 * STEP_SIZE + VALUE_W;
 const EDIT_W: f32 = 16.0;
 const CAPS_GAP: f32 = 8.0;
 const FOCUS_OUTSET: f32 = 3.0;
@@ -116,6 +137,7 @@ const EXPAND_MS: u64 = ui::RESIZE_MS;
 const SETTLE_MS: u32 = ui::RESIZE_MS as u32 + 60;
 const TIMER_SETTLE: usize = 1;
 const BREATHE_MS: u64 = 1600;
+const CARET_BLINK_MS: u64 = 1060;
 
 // Segoe Fluent Icons and Segoe MDL2 Assets.
 const CLOSE_GLYPH: &str = "\u{E8BB}";
@@ -124,6 +146,7 @@ const MINUS_GLYPH: &str = "\u{E738}";
 const PLUS_GLYPH: &str = "\u{E710}";
 const CHEVRON_GLYPH: &str = "\u{E70D}";
 const CHECK_GLYPH: &str = "\u{E73E}";
+const INFO_GLYPH: &str = "\u{E946}";
 
 const SHORTCUT_DETAIL: &str = "Looks up the selected word";
 const RECORDING_DETAIL: &str = "Press the new shortcut, or Esc to cancel";
@@ -132,6 +155,16 @@ const NEEDS_MODIFIER: &str = "Hold Ctrl, Alt or Win with the key";
 const UNUSABLE_KEY: &str = "That key can\u{2019}t be part of a shortcut";
 pub const SHORTCUT_TAKEN: &str = "Another app already uses that shortcut";
 const CONFIG_LINK: &str = "Open config.json";
+const EMAIL_PLACEHOLDER: &str = "name@example.com";
+/// Over the info symbol by the email field.
+const EMAIL_TIP: &str = "MyMemory, the translator used when Google Translate can\u{2019}t \
+    be reached, allows 5,000 characters a day, or 50,000 with an email address. \
+    It\u{2019}s sent only to MyMemory, with the words translated, and never to \
+    WinDict\u{2019}s developer.";
+/// The longest an email address can be.
+const MAX_EMAIL_CHARS: usize = 254;
+/// The info tooltip, among the window's tooltips.
+const TOOL_INFO: usize = 1;
 
 /// What the settings window shows: the settings, and whether WinDict
 /// starts with Windows, which is kept in the registry instead.
@@ -159,6 +192,11 @@ pub enum Change {
     OnlineLookup(bool),
     UiAutomation(bool),
     Autostart(bool),
+    /// The languages translated from and into when the card can't tell,
+    /// as codes.
+    TranslateFrom(String),
+    TranslateTo(String),
+    MyMemoryEmail(String),
     OpenConfig,
     Close,
 }
@@ -178,13 +216,22 @@ const SWITCHES: [Switch; 4] = [
     Switch::Examples,
 ];
 
+/// A setting stepped through with − and + buttons: a number, or a
+/// language, by its place in [`translate::LANGUAGES`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Counter {
     Definitions,
     Synonyms,
+    TranslateFrom,
+    TranslateTo,
 }
 
-const COUNTERS: [Counter; 2] = [Counter::Definitions, Counter::Synonyms];
+const COUNTERS: [Counter; 4] = [
+    Counter::Definitions,
+    Counter::Synonyms,
+    Counter::TranslateFrom,
+    Counter::TranslateTo,
+];
 
 impl Counter {
     /// The lowest and highest values.
@@ -192,15 +239,31 @@ impl Counter {
         match self {
             Counter::Definitions => (1, 10),
             Counter::Synonyms => (0, 12),
+            Counter::TranslateFrom | Counter::TranslateTo => (0, translate::LANGUAGES.len() - 1),
         }
     }
 
     fn text(self, n: usize) -> String {
-        if n == 0 {
-            "Off".into()
-        } else {
-            n.to_string()
+        match self {
+            Counter::TranslateFrom | Counter::TranslateTo => translate::LANGUAGES
+                .get(n)
+                .map(|(_, name)| name.to_string())
+                .unwrap_or_default(),
+            _ if n == 0 => "Off".into(),
+            _ => n.to_string(),
         }
+    }
+
+    /// How wide the value between the buttons is.
+    fn value_w(self) -> f32 {
+        match self {
+            Counter::Definitions | Counter::Synonyms => VALUE_W,
+            Counter::TranslateFrom | Counter::TranslateTo => LANGUAGE_W,
+        }
+    }
+
+    fn width(self) -> f32 {
+        2.0 * STEP_SIZE + self.value_w()
     }
 }
 
@@ -268,6 +331,10 @@ enum Hit {
     Languages,
     /// A language in that list, by its place in [`dicts::languages`].
     Language(usize),
+    /// The email field.
+    Email,
+    /// The info symbol beside it, with its tooltip.
+    Info,
     Config,
 }
 
@@ -278,6 +345,7 @@ enum Stop {
     Switch(Switch),
     Choice(Choice),
     Counter(Counter),
+    Email,
     Languages,
     Language(usize),
     Config,
@@ -293,6 +361,8 @@ impl Hit {
             Hit::Step(counter, _) => Some(Stop::Counter(counter)),
             Hit::Languages => Some(Stop::Languages),
             Hit::Language(i) => Some(Stop::Language(i)),
+            Hit::Email => Some(Stop::Email),
+            Hit::Info => None,
             Hit::Config => Some(Stop::Config),
         }
     }
@@ -307,6 +377,9 @@ enum Control {
     /// Opens the list of languages under it. It's the last row, so that
     /// only the footer moves as the list opens.
     Languages,
+    /// The field for the MyMemory email, with an info symbol after the
+    /// setting's name.
+    Email,
 }
 
 impl Control {
@@ -315,8 +388,9 @@ impl Control {
             Control::Shortcut => SHORTCUT_W,
             Control::Switch(_) => SWITCH_W,
             Control::Choice(choice) => choice.names().len() as f32 * SEGMENT_W,
-            Control::Counter(_) => COUNTER_W,
+            Control::Counter(counter) => counter.width(),
             Control::Languages => CHEVRON_W,
+            Control::Email => FIELD_W,
         }
     }
 }
@@ -369,6 +443,26 @@ const SECTIONS: &[(&str, &[Row])] = &[
                 "Examples",
                 "Sentences showing each sense in use",
                 Control::Switch(Switch::Examples),
+            ),
+        ],
+    ),
+    (
+        "Translation",
+        &[
+            row(
+                "Translate from",
+                "If the card can\u{2019}t tell the language",
+                Control::Counter(Counter::TranslateFrom),
+            ),
+            row(
+                "Translate into",
+                "If the card can\u{2019}t tell which to use",
+                Control::Counter(Counter::TranslateTo),
+            ),
+            row(
+                "MyMemory email",
+                "Raises the daily translation limit",
+                Control::Email,
             ),
         ],
     ),
@@ -512,6 +606,19 @@ struct LanguageView {
     status_middle: f32,
 }
 
+/// The email field.
+struct FieldView {
+    /// Lightens the field under the pointer.
+    hover: SpriteVisual,
+    /// The accent line along the bottom, shown while typing.
+    accent: SpriteVisual,
+    /// What's typed, scrolling inside the field to keep the caret in view.
+    text: Text,
+    caret: SpriteVisual,
+    /// Where the host is in the scroller.
+    at: Rect,
+}
+
 /// The languages row, and the list that opens under it, in its group.
 struct LanguagesView {
     hover: SpriteVisual,
@@ -572,6 +679,7 @@ struct View {
     shortcut: ShortcutView,
     /// In the order of [`SWITCHES`] and [`COUNTERS`].
     switches: Vec<SwitchView>,
+    field: FieldView,
     /// In the order of [`CHOICES`] and [`NOTES`].
     choices: Vec<ChoiceView>,
     notes: Vec<NoteView>,
@@ -643,6 +751,13 @@ pub struct Settings {
     downloads: Vec<Option<(String, bool)>>,
     /// The choice whose pill is gliding over, and the option it's leaving.
     pill_from: Option<(Choice, usize)>,
+    /// What's typed in the email field.
+    email: LineEdit,
+    /// How far the field's text is scrolled left, in pixels.
+    email_shift: f32,
+    /// Whether the window is the active one, for the caret to show.
+    active: bool,
+    tooltip: Option<HWND>,
     scroll: f32,
     pub visible: bool,
     /// Last, so it goes after everything shown on it.
@@ -663,6 +778,7 @@ impl Settings {
         target.SetRoot(&root)?;
         let frame = Frame::new(&compositor, &root, &theme)?;
         let notes = NOTES.map(|note| (note.usual(&values), false));
+        let email = LineEdit::new(&values.config.mymemory_email, MAX_EMAIL_CHARS);
         Ok(Settings {
             hwnd,
             _target: target,
@@ -687,6 +803,10 @@ impl Settings {
             open: false,
             downloads: dicts::languages().map(|_| None).collect(),
             pill_from: None,
+            email,
+            email_shift: 0.0,
+            active: true,
+            tooltip: popup::create_tooltip(hwnd, EMAIL_TIP, TOOL_INFO),
             scroll: 0.0,
             visible: false,
             _window: window,
@@ -706,6 +826,12 @@ impl Settings {
         self.notes = NOTES.map(|note| (note.usual(&self.values), false));
         self.open = false;
         self.downloads.fill(None);
+        self.email = LineEdit::new(&self.values.config.mymemory_email, MAX_EMAIL_CHARS);
+        (self.email_shift, self.active) = (0.0, true);
+        if let Some(tooltip) = self.tooltip {
+            let w = (TIP_W * s).round() as isize;
+            unsafe { SendMessageW(tooltip, TTM_SETMAXTIPWIDTH, None, Some(LPARAM(w))) };
+        }
         unsafe {
             let _ = KillTimer(Some(self.hwnd), TIMER_SETTLE);
         }
@@ -783,9 +909,15 @@ impl Settings {
         self.hit_at(x, y) == Some(Hit::Config)
     }
 
+    /// Whether a point in window pixels is on the email field.
+    pub fn field_at(&self, x: i32, y: i32) -> bool {
+        self.hit_at(x, y) == Some(Hit::Email)
+    }
+
     /// The pointer moved to a point in window pixels, or left.
     pub fn hover(&mut self, point: Option<(i32, i32)>) -> Result<()> {
         let hit = point.and_then(|(x, y)| self.hit_at(x, y));
+        self.sync_tooltip();
         self.set_hovered(hit)
     }
 
@@ -794,8 +926,15 @@ impl Settings {
         let hit = self.hit_at(x, y);
         // The pointer's in charge now: the ring goes until Tab brings it back.
         self.ring = false;
+        self.active = true;
         if let Some(stop) = hit.and_then(Hit::stop) {
             self.focus = Some(stop);
+        } else if self.focus == Some(Stop::Email) {
+            // A click anywhere else leaves the field.
+            self.focus = None;
+        }
+        if hit == Some(Hit::Email) {
+            self.place_caret(x)?;
         }
         self.show_focus(false)?;
         self.set_pressed(hit)?;
@@ -823,11 +962,36 @@ impl Settings {
             return self.record(key);
         }
         let shift = hotkey::is_held(VK_SHIFT);
+        let ctrl = hotkey::is_held(VK_CONTROL);
         let change = match (key, self.focus) {
             (VK_ESCAPE, _) => return Ok(Some(Change::Close)),
             (VK_TAB, _) => {
                 self.step_focus(!shift)?;
                 return Ok(None);
+            }
+            (VK_LEFT | VK_RIGHT | VK_HOME | VK_END, Some(Stop::Email)) => {
+                let motion = match key {
+                    VK_LEFT if ctrl => Motion::WordBack,
+                    VK_LEFT => Motion::CharBack,
+                    VK_RIGHT if ctrl => Motion::WordForward,
+                    VK_RIGHT => Motion::CharForward,
+                    VK_HOME => Motion::Start,
+                    _ => Motion::End,
+                };
+                if self.email.move_caret(motion) {
+                    self.show_field()?;
+                }
+                None
+            }
+            (VK_DELETE, Some(Stop::Email)) => {
+                let before = self.email.text().to_owned();
+                let motion = if ctrl {
+                    Motion::WordForward
+                } else {
+                    Motion::CharForward
+                };
+                self.email.delete(motion);
+                self.typed(&before)?
             }
             (VK_SPACE | VK_RETURN, Some(Stop::Shortcut)) => self.activate(Hit::Shortcut)?,
             (VK_SPACE | VK_RETURN, Some(Stop::Switch(sw))) => self.activate(Hit::Switch(sw))?,
@@ -863,6 +1027,25 @@ impl Settings {
         Ok(change)
     }
 
+    /// A character was typed (one UTF-16 unit of WM_CHAR): it goes in the
+    /// email field, when that has the focus.
+    pub fn char(&mut self, unit: u16) -> Result<Option<Change>> {
+        if self.recording || self.focus != Some(Stop::Email) {
+            return Ok(None);
+        }
+        let before = self.email.text().to_owned();
+        match self.email.type_unit(unit) {
+            Input::Edited => {}
+            Input::Paste => {
+                if let Some(text) = selection::clipboard_text(self.hwnd) {
+                    self.email.paste(&text);
+                }
+            }
+            Input::Enter | Input::Nothing => return Ok(None),
+        }
+        self.typed(&before)
+    }
+
     /// A key came up: while recording, the held modifiers show as they're let go.
     pub fn key_up(&mut self, key: VIRTUAL_KEY) -> Result<()> {
         if self.recording && is_modifier(key) {
@@ -871,8 +1054,16 @@ impl Settings {
         Ok(())
     }
 
+    /// The window became the active one again: the caret's back.
+    pub fn activated(&mut self) -> Result<()> {
+        self.active = true;
+        self.show_editing()
+    }
+
     /// The window stopped being the active one: recording stops.
     pub fn deactivate(&mut self) -> Result<Option<Change>> {
+        self.active = false;
+        self.show_editing()?;
         self.set_pressed(None)?;
         if !self.recording {
             return Ok(None);
@@ -962,6 +1153,9 @@ impl Settings {
     /// Shows `values` changed from elsewhere, cross-fading to them.
     pub fn refresh(&mut self, theme: Theme, values: Values) -> Result<()> {
         (self.values, self.recording) = (values, false);
+        if self.email.text().trim() != self.values.config.mymemory_email {
+            self.email = LineEdit::new(&self.values.config.mymemory_email, MAX_EMAIL_CHARS);
+        }
         self.notes = NOTES.map(|note| (note.usual(&self.values), false));
         self.theme = theme;
         let (anim, renderer, s) = (&self.anim, &self.renderer, self.scale);
@@ -1052,7 +1246,33 @@ impl Settings {
                 None
             }
             Hit::Language(i) => self.tick(i)?,
+            Hit::Email | Hit::Info => None,
         })
+    }
+
+    /// The email field's text changed from `before`, or may have: shows
+    /// it, and saves it if it did.
+    fn typed(&mut self, before: &str) -> Result<Option<Change>> {
+        self.show_field()?;
+        if self.email.text() == before {
+            return Ok(None);
+        }
+        let email = self.email.text().trim().to_owned();
+        self.values.config.mymemory_email = email.clone();
+        Ok(Some(Change::MyMemoryEmail(email)))
+    }
+
+    /// Puts the caret where the email field was clicked, `x` window pixels
+    /// across.
+    fn place_caret(&mut self, x: i32) -> Result<()> {
+        let Some(view) = &self.view else {
+            return Ok(());
+        };
+        let (x, _) = self.card_point(x, 0);
+        let into = (x - view.field.at.x + self.email_shift) / self.scale;
+        let at = self.renderer.field_position(self.email.text(), into)?;
+        self.email.set_caret_utf16(at);
+        self.show_field()
     }
 
     /// Whether the language at `i` in [`dicts::languages`] is ticked.
@@ -1197,9 +1417,40 @@ impl Settings {
     }
 
     fn count(&self, counter: Counter) -> usize {
+        let config = &self.values.config;
+        let language = |code: &str| {
+            translate::LANGUAGES
+                .iter()
+                .position(|(c, _)| *c == code)
+                .unwrap_or(0)
+        };
         match counter {
-            Counter::Definitions => self.values.config.max_definitions,
-            Counter::Synonyms => self.values.config.max_synonyms,
+            Counter::Definitions => config.max_definitions,
+            Counter::Synonyms => config.max_synonyms,
+            Counter::TranslateFrom => language(&config.translate_from),
+            Counter::TranslateTo => language(&config.translate_to),
+        }
+    }
+
+    /// Where `counter` goes counting up or down one, if it can. Languages
+    /// skip the one on the other side, for a word not to be translated
+    /// into its own.
+    fn next(&self, counter: Counter, up: bool) -> Option<usize> {
+        let (lo, hi) = counter.range();
+        let other = match counter {
+            Counter::TranslateFrom => Some(self.count(Counter::TranslateTo)),
+            Counter::TranslateTo => Some(self.count(Counter::TranslateFrom)),
+            _ => None,
+        };
+        let mut n = self.count(counter);
+        loop {
+            n = if up { n + 1 } else { n.checked_sub(1)? };
+            if n < lo || n > hi {
+                return None;
+            }
+            if Some(n) != other {
+                return Some(n);
+            }
         }
     }
 
@@ -1230,20 +1481,14 @@ impl Settings {
 
     /// Counts `counter` up or down one. At either end, the number shakes.
     fn step(&mut self, counter: Counter, up: bool) -> Result<Option<Change>> {
-        let (lo, hi) = counter.range();
-        let n = self.count(counter);
-        let next = if up {
-            (n + 1).min(hi)
-        } else {
-            n.saturating_sub(1).max(lo)
-        };
-        if next == n {
+        let Some(next) = self.next(counter, up) else {
             if let Some(view) = &self.view {
                 let host = &view.counters[counter as usize].host;
                 self.anim.shake(host, host.Offset()?, self.scale * 0.5)?;
             }
             return Ok(None);
-        }
+        };
+        let code = || translate::LANGUAGES[next].0.to_owned();
         let change = match counter {
             Counter::Definitions => {
                 self.values.config.max_definitions = next;
@@ -1252,6 +1497,14 @@ impl Settings {
             Counter::Synonyms => {
                 self.values.config.max_synonyms = next;
                 Change::MaxSynonyms(next)
+            }
+            Counter::TranslateFrom => {
+                self.values.config.translate_from = code();
+                Change::TranslateFrom(code())
+            }
+            Counter::TranslateTo => {
+                self.values.config.translate_to = code();
+                Change::TranslateTo(code())
             }
         };
         self.show_count(counter, Some(up))?;
@@ -1565,7 +1818,7 @@ impl Settings {
     /// below as the old leaves upwards (or the other way, counting down).
     fn show_count(&mut self, counter: Counter, roll: Option<bool>) -> Result<()> {
         let n = self.count(counter);
-        let (lo, hi) = counter.range();
+        let ends = [false, true].map(|up| self.next(counter, up).is_none());
         let (r, anim, t, s) = (&self.renderer, &self.anim, &self.theme, self.scale);
         let Some(view) = self.view.as_mut() else {
             return Ok(());
@@ -1573,7 +1826,8 @@ impl Settings {
         let v = &mut view.counters[counter as usize];
         std::mem::swap(&mut v.value, &mut v.old);
         let text = counter.text(n);
-        let line = r.layout_aligned(&text, Face::Value, Ink::Primary, VALUE_W, Align::Center)?;
+        let w = counter.value_w();
+        let line = r.layout_aligned(&text, Face::Value, Ink::Primary, w, Align::Center)?;
         let size = v.value.show(r, &line, s, t)?;
         let rest = v3(0.0, ((v.host_h - size.Y) / 2.0).round());
         let (new, old) = (&v.value.visual, &v.old.visual);
@@ -1598,8 +1852,8 @@ impl Settings {
             }
         }
         // A button that can't count any further fades back.
-        for (button, end) in v.buttons.iter().zip([lo, hi]) {
-            let opacity = if n == end { 0.35 } else { 1.0 };
+        for (button, end) in v.buttons.iter().zip(ends) {
+            let opacity = if end { 0.35 } else { 1.0 };
             let glyph = &button.glyph;
             anim.scalar(glyph, "Opacity", opacity, LABEL_MS, 0, &anim.decelerate)?;
         }
@@ -1694,6 +1948,101 @@ impl Settings {
             v.old.clear();
             Ok(())
         }
+    }
+
+    /// Shows what's typed in the email field, or its placeholder, scrolled
+    /// as little as keeps the caret in view.
+    fn show_field(&mut self) -> Result<()> {
+        let (r, t, s) = (&self.renderer, &self.theme, self.scale);
+        let (text, ink, at) = match self.email.text() {
+            "" => (EMAIL_PLACEHOLDER, Ink::Tertiary, 0),
+            text => (text, Ink::Primary, self.email.caret_utf16()),
+        };
+        let (layout, w, caret) = r.layout_field(text, ink, at)?;
+        let Some(view) = &self.view else {
+            return Ok(());
+        };
+        let v = &view.field;
+        let size = v.text.show(r, &layout, s, t)?;
+        let (x, w, room) = (caret.x * s, w * s, v.at.w);
+        let caret_w = (CARET_W * s).round().max(1.0);
+        let mut shift = self.email_shift;
+        if x - shift > room - caret_w {
+            shift = x - room + caret_w;
+        }
+        shift = shift.min(x).min(w + caret_w - room).max(0.0).round();
+        self.email_shift = shift;
+        let y = ((v.at.h - size.Y) / 2.0).round();
+        v.text.visual.SetOffset(v3(-shift, y))?;
+        v.caret.SetSize(v2(caret_w, (caret.height * s).round()))?;
+        v.caret
+            .SetOffset(v3((x - shift).round(), y + (caret.top * s).round()))?;
+        if self.editing() {
+            self.blink()?;
+        }
+        Ok(())
+    }
+
+    /// Whether what's typed goes in the email field.
+    fn editing(&self) -> bool {
+        self.visible && self.active && self.focus == Some(Stop::Email)
+    }
+
+    /// The accent line under the email field, and its caret, show while
+    /// it's typed in.
+    fn show_editing(&self) -> Result<()> {
+        let Some(view) = &self.view else {
+            return Ok(());
+        };
+        let (anim, v, editing) = (&self.anim, &view.field, self.editing());
+        let line = if editing { 1.0 } else { 0.0 };
+        anim.scalar(&v.accent, "Opacity", line, HOVER_MS, 0, &anim.decelerate)?;
+        if editing {
+            self.blink()
+        } else {
+            Animator::stop(&v.caret, &["Opacity"]);
+            v.caret.SetOpacity(0.0)
+        }
+    }
+
+    /// Shows the email field's caret, solid for now: blinking restarts
+    /// with every keystroke.
+    fn blink(&self) -> Result<()> {
+        let Some(view) = &self.view else {
+            return Ok(());
+        };
+        let a = self.anim.compositor.CreateScalarKeyFrameAnimation()?;
+        a.InsertKeyFrame(0.0, 1.0)?;
+        a.InsertKeyFrame(0.49, 1.0)?;
+        a.InsertKeyFrame(0.5, 0.0)?;
+        a.InsertKeyFrame(0.99, 0.0)?;
+        a.InsertKeyFrame(1.0, 1.0)?;
+        a.SetDuration(ts(CARET_BLINK_MS))?;
+        a.SetIterationBehavior(AnimationIterationBehavior::Forever)?;
+        let caret = &view.field.caret;
+        caret.SetOpacity(1.0)?;
+        caret.StartAnimation(&HSTRING::from("Opacity"), &a)
+    }
+
+    /// Keeps the info tooltip over the info symbol, wherever it's scrolled
+    /// to, and away while that's under the header.
+    fn sync_tooltip(&self) {
+        let (Some(tooltip), Some(view)) = (self.tooltip, &self.view) else {
+            return;
+        };
+        let m = (MARGIN * self.scale).round();
+        let rect = view
+            .hits(self.open)
+            .find(|(hit, _)| *hit == Hit::Info)
+            .map(|(_, r)| r.offset(v3(m, m + view.header_h - self.scroll)))
+            .filter(|r| r.y >= m + view.header_h)
+            .map_or(RECT::default(), |r| RECT {
+                left: r.x as i32,
+                top: r.y as i32,
+                right: (r.x + r.w) as i32,
+                bottom: (r.y + r.h) as i32,
+            });
+        popup::set_tooltip_rect(tooltip, self.hwnd, TOOL_INFO, rect);
     }
 
     /// Fills the boxes of the languages used, and empties the others'.
@@ -1834,7 +2183,8 @@ impl Settings {
             }
             Some(Hit::Languages) => fade(&view.languages.hover),
             Some(Hit::Language(i)) => fade(&view.languages.items[i].hover),
-            Some(Hit::Config) | None => Ok(()),
+            Some(Hit::Email) => fade(&view.field.hover),
+            Some(Hit::Info | Hit::Config) | None => Ok(()),
         }
     }
 
@@ -1863,6 +2213,7 @@ impl Settings {
     /// Moves the focus ring to the focused control, gliding there when it
     /// was showing already, or hides it.
     fn show_focus(&mut self, animate: bool) -> Result<()> {
+        self.show_editing()?;
         let Some(view) = &self.view else {
             return Ok(());
         };
@@ -1938,5 +2289,8 @@ mod tests {
         }
         assert_eq!(Counter::Synonyms.text(0), "Off");
         assert_eq!(Counter::Definitions.text(4), "4");
+        assert_eq!(Counter::TranslateTo.text(0), "English");
+        let (_, hi) = Counter::TranslateFrom.range();
+        assert!(!Counter::TranslateFrom.text(hi).is_empty());
     }
 }
