@@ -18,7 +18,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 use crate::dictionary::{self, percent_encode, Definition};
 use crate::dicts;
 use crate::translate::{self, Translation};
-use crate::theme::Theme;
+use crate::theme::{to_d2d, Theme};
 
 #[derive(Clone, Copy)]
 pub enum Ink {
@@ -66,6 +66,31 @@ enum Item {
         width: f32,
         height: f32,
     },
+    /// A rounded rectangle, filled, outlined with a hairline, or both.
+    Shape {
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        radius: f32,
+        fill: Option<Paint>,
+        stroke: Option<Paint>,
+    },
+}
+
+/// The colors of an [`Item::Shape`].
+#[derive(Clone, Copy)]
+enum Paint {
+    /// A control's face, and its outline.
+    Control,
+    ControlStroke,
+    /// The list a language is picked from.
+    Field,
+    /// Behind the language Enter picks.
+    Highlight,
+    Accent,
+    /// The scrollbar's thumb.
+    Thumb,
 }
 
 /// The flags drawn for the languages WinDict knows.
@@ -101,7 +126,9 @@ impl Layout {
             .iter()
             .find_map(|item| match item {
                 Item::Text { layout, y, .. } => Some(y + first_line_height(layout)),
-                Item::Rule { .. } | Item::Key { .. } | Item::Flag { .. } => None,
+                Item::Rule { .. } | Item::Key { .. } | Item::Flag { .. } | Item::Shape { .. } => {
+                    None
+                }
             })
             .unwrap_or(0.0)
     }
@@ -149,14 +176,33 @@ pub struct TranslationCard<'a> {
     pub from: &'a str,
     pub to: &'a str,
     pub state: Translated<'a>,
-    /// The language being picked, its list in place of the translation.
-    pub picking: Option<Side>,
+    /// The list a language is being picked from, in place of the translation.
+    pub picker: Option<Picker<'a>>,
 }
+
+/// The languages to pick one side's from, listed under its box, which takes
+/// what's typed to narrow them down.
+pub struct Picker<'a> {
+    pub side: Side,
+    pub query: &'a str,
+    /// Where the caret is in `query`, in UTF-16 units.
+    pub caret: u32,
+    /// The codes of the languages that match, and the first one shown.
+    pub matches: &'a [&'static str],
+    pub first: usize,
+    /// Which of `matches` Enter picks.
+    pub highlight: Option<usize>,
+}
+
+/// How many languages the list shows at once; the rest scroll.
+pub const PICKER_ROWS: usize = 7;
 
 /// How far a translation has got.
 pub enum Translated<'a> {
     /// The word is in both languages: which way is up to the user.
     Asking,
+    /// On its way, too briefly yet to say so.
+    Waiting,
     Loading,
     Done(&'a Translation),
     Failed(&'a str),
@@ -177,6 +223,22 @@ const EXTERNAL_ICON: &str = "\u{E8A7}";
 const SWAP_ICON: &str = "\u{E8AB}";
 const CHEVRON_DOWN: &str = "\u{E70D}";
 const CHEVRON_UP: &str = "\u{E70E}";
+const SEARCH_ICON: &str = "\u{E721}";
+const CHECK_ICON: &str = "\u{E73E}";
+// A translation's languages, in DIPs: a box for each, the swap button
+// between them, and the list under the one being picked.
+const SELECT_H: f32 = 36.0;
+const SELECT_PAD: f32 = 10.0;
+const CONTROL_RADIUS: f32 = 5.0;
+const SWAP_W: f32 = 32.0;
+const SWAP_GAP: f32 = 6.0;
+const LIST_GAP: f32 = 6.0;
+const LIST_PAD: f32 = 4.0;
+const LIST_RADIUS: f32 = 8.0;
+const ROW_H: f32 = 32.0;
+/// Room for a flag or a code's cap, so the names line up.
+const BADGE_W: f32 = 24.0;
+const CARET_W: f32 = 1.5;
 
 /// A layout being built top to bottom.
 #[derive(Default)]
@@ -224,6 +286,8 @@ pub enum Face {
     Icon,
     /// A larger symbol, centred in its width, for a button.
     Button,
+    /// Larger still, for a symbol with fine detail.
+    LargeButton,
     /// The search box's heading.
     Title,
     /// What's typed in the search box.
@@ -278,6 +342,7 @@ struct Formats {
     /// [`EXTERNAL_ICON`], sized for the footer.
     external: IDWriteTextFormat,
     button: IDWriteTextFormat,
+    large_button: IDWriteTextFormat,
     heading: IDWriteTextFormat,
     setting: IDWriteTextFormat,
     value: IDWriteTextFormat,
@@ -463,40 +528,9 @@ impl Renderer {
     ) -> Result<Layout> {
         let mut out = Stack::default();
         let mut x = 0.0;
-        if let Some(flag) = badge.and_then(Flag::of) {
-            // 3:2, the height of a capital.
-            let (flag_w, flag_h, gap) = (18.0, 12.0, 8.0);
+        if let Some(code) = badge {
             let line_h = metrics(&self.text("Ag", &self.formats.suggestion, width)?).1;
-            out.items.push(Item::Flag {
-                flag,
-                x: 0.0,
-                y: ((line_h - flag_h) / 2.0).round(),
-                width: flag_w,
-                height: flag_h,
-            });
-            x = flag_w + gap;
-        } else if let Some(code) = badge {
-            // Wide enough for any two letters, so the words line up.
-            let (pad_y, min_w, gap) = (1.0, 24.0f32, 8.0);
-            let name = self.text(&code.to_uppercase(), &self.formats.footer, 100.0)?;
-            let (w, h, _) = metrics(&name);
-            let line_h = metrics(&self.text("Ag", &self.formats.suggestion, width)?).1;
-            let (cap_w, cap_h) = (min_w.max(w + 8.0), h + 2.0 * pad_y);
-            let y = ((line_h - cap_h) / 2.0).round();
-            out.items.push(Item::Key {
-                x: 0.0,
-                y,
-                width: cap_w,
-                height: cap_h,
-            });
-            out.items.push(Item::Text {
-                layout: name,
-                x: ((cap_w - w) / 2.0).round(),
-                y: y + pad_y,
-                ink: Ink::Secondary,
-                accents: Vec::new(),
-            });
-            x = cap_w + gap;
+            x = self.badge(&mut out, code, 0.0, 0.0, line_h)? + 8.0;
         }
         let width = (width - x).max(1.0);
         let line = self.text(word, &self.formats.suggestion, width)?;
@@ -566,6 +600,7 @@ impl Renderer {
             Face::Small => &self.formats.footer,
             Face::Icon => &self.formats.icon,
             Face::Button => &self.formats.button,
+            Face::LargeButton => &self.formats.large_button,
             Face::Title => &self.formats.title,
             Face::Query => &self.formats.query,
             Face::Heading => &self.formats.heading,
@@ -700,6 +735,51 @@ impl Renderer {
             }
         }
         Ok(caps)
+    }
+
+    /// `language`'s flag, if it has one, at `x`, centred on a line `line_h`
+    /// tall at `y`. Returns its width.
+    fn flag(&self, out: &mut Stack, language: &str, x: f32, y: f32, line_h: f32) -> Option<f32> {
+        let flag = Flag::of(language)?;
+        // 3:2, the height of a capital.
+        let (flag_w, flag_h) = (18.0, 12.0);
+        out.items.push(Item::Flag {
+            flag,
+            x,
+            y: y + ((line_h - flag_h) / 2.0).round(),
+            width: flag_w,
+            height: flag_h,
+        });
+        Some(flag_w)
+    }
+
+    /// `language`'s flag, or its code on a cap when it has none, like
+    /// [`Renderer::flag`]. Returns its width.
+    fn badge(&self, out: &mut Stack, language: &str, x: f32, y: f32, line_h: f32) -> Result<f32> {
+        if let Some(w) = self.flag(out, language, x, y, line_h) {
+            return Ok(w);
+        }
+        // Wide enough for any two letters, so the words line up.
+        let (pad_y, min_w) = (1.0, BADGE_W);
+        let code = language.split('-').next().unwrap_or(language);
+        let name = self.text(&code.to_uppercase(), &self.formats.footer, 100.0)?;
+        let (w, h, _) = metrics(&name);
+        let (cap_w, cap_h) = (min_w.max(w + 8.0), h + 2.0 * pad_y);
+        let cap_y = y + ((line_h - cap_h) / 2.0).round();
+        out.items.push(Item::Key {
+            x,
+            y: cap_y,
+            width: cap_w,
+            height: cap_h,
+        });
+        out.items.push(Item::Text {
+            layout: name,
+            x: x + ((cap_w - w) / 2.0).round(),
+            y: cap_y + pad_y,
+            ink: Ink::Secondary,
+            accents: Vec::new(),
+        });
+        Ok(cap_w)
     }
 
     pub fn layout_body(&self, body: &Body, width: f32, bottom_padding: f32) -> Result<Layout> {
@@ -917,15 +997,17 @@ impl Renderer {
     /// The languages of a translation, then the translation, or the list to
     /// pick one of the languages from.
     fn layout_translation(&self, out: &mut Stack, card: &TranslationCard, width: f32) -> Result<()> {
+        // Room for the languages' rings, which reach above them.
+        out.y += 4.0;
         self.layout_direction(out, card, width)?;
-        out.y += 16.0;
-        if let Some(side) = card.picking {
-            let current = match side {
+        if let Some(picker) = &card.picker {
+            let current = match picker.side {
                 Side::From => card.from,
                 Side::To => card.to,
             };
-            return self.layout_picker(out, current, width);
+            return self.layout_picker(out, picker, current, width);
         }
+        out.y += 16.0;
         match card.state {
             Translated::Asking => {
                 let ask = format!(
@@ -955,6 +1037,7 @@ impl Renderer {
                 });
                 out.y += h;
             }
+            Translated::Waiting => {}
             Translated::Loading => {
                 let line = self.text("Translating\u{2026}", &self.formats.body, width)?;
                 let (_, h) = out.text(line, 0.0, Ink::Tertiary);
@@ -968,116 +1051,270 @@ impl Renderer {
         Ok(())
     }
 
-    /// "English ⌄  ⇄  Italiano ⌄": each language lists the others to pick
-    /// from, the arrows swap them.
+    /// A box for each language, which lists the others to pick from, and
+    /// the arrows between them, which swap them.
     fn layout_direction(&self, out: &mut Stack, card: &TranslationCard, width: f32) -> Result<()> {
-        let line_h = metrics(&self.text("Ag", &self.formats.title, width)?).1;
-        let language = |out: &mut Stack, x: f32, side: Side, code: &str| -> Result<f32> {
-            let mut right = x;
-            if let Some(flag) = Flag::of(code) {
-                // 3:2, the height of a capital.
-                let (flag_w, flag_h) = (18.0, 12.0);
-                out.items.push(Item::Flag {
-                    flag,
-                    x: right,
-                    y: out.y + ((line_h - flag_h) / 2.0).round(),
-                    width: flag_w,
-                    height: flag_h,
-                });
-                right += flag_w + 7.0;
-            }
-            let name = self.text(&translate::name(code), &self.formats.title, width)?;
-            let (w, _) = out.text(name, right, Ink::Accent);
-            right += w + 6.0;
-            let chevron = if card.picking == Some(side) {
-                CHEVRON_UP
-            } else {
-                CHEVRON_DOWN
-            };
-            let icon = self.text(chevron, &self.formats.icon, width)?;
-            let (icon_w, icon_h, _) = metrics(&icon);
-            out.items.push(Item::Text {
-                layout: icon,
-                x: right,
-                y: out.y + ((line_h - icon_h) / 2.0).round(),
-                ink: Ink::Accent,
-                accents: Vec::new(),
-            });
-            right += icon_w;
-            out.links.push(Link {
-                x: x - 4.0,
-                y: out.y - 3.0,
-                width: right - x + 8.0,
-                height: line_h + 6.0,
-                target: Target::Language(side),
-            });
-            Ok(right)
-        };
-        let mut x = language(out, 0.0, Side::From, card.from)?;
-        // The arrows, centred in a square as wide as the line is tall.
-        let (gap, swap_w) = (10.0, line_h + 8.0);
-        x += gap;
-        let icon = self.text(SWAP_ICON, &self.formats.button, swap_w)?;
+        let box_w = ((width - SWAP_W - 2.0 * SWAP_GAP) / 2.0).floor();
+        let open = |side| card.picker.as_ref().filter(|p| p.side == side);
+        self.layout_select(out, 0.0, box_w, Side::From, card.from, open(Side::From))?;
+        let x = box_w + SWAP_GAP;
+        let icon = self.text(SWAP_ICON, &self.formats.button, SWAP_W)?;
         let (_, icon_h, _) = metrics(&icon);
         out.items.push(Item::Text {
             layout: icon,
             x,
-            y: out.y + ((line_h - icon_h) / 2.0).round(),
+            y: out.y + ((SELECT_H - icon_h) / 2.0).round(),
             ink: Ink::Secondary,
             accents: Vec::new(),
         });
         out.links.push(Link {
             x,
-            y: out.y - 3.0,
-            width: swap_w,
-            height: line_h + 6.0,
+            y: out.y,
+            width: SWAP_W,
+            height: SELECT_H,
             target: Target::Swap,
         });
-        x += swap_w + gap;
-        language(out, x, Side::To, card.to)?;
-        out.y += line_h;
+        self.layout_select(out, width - box_w, box_w, Side::To, card.to, open(Side::To))?;
+        out.y += SELECT_H;
         Ok(())
     }
 
-    /// Every language there is to translate from or into, each a link, the
-    /// `current` one in bold.
-    fn layout_picker(&self, out: &mut Stack, current: &str, width: f32) -> Result<()> {
-        let separator = " \u{00B7} ";
-        // DirectWrite counts UTF-16 code units.
-        let utf16 = |s: &str| s.encode_utf16().count() as u32;
-        let mut line = String::new();
-        let mut ranges = Vec::new();
-        for (i, (_, name)) in translate::LANGUAGES.iter().enumerate() {
-            if i > 0 {
-                line.push_str(separator);
+    /// The box showing `side`'s `language`, `x` from the left and `width`
+    /// wide. While `picker` is open on it, it shows what's typed instead.
+    fn layout_select(
+        &self,
+        out: &mut Stack,
+        x: f32,
+        width: f32,
+        side: Side,
+        language: &str,
+        picker: Option<&Picker>,
+    ) -> Result<()> {
+        let y = out.y;
+        out.items.push(Item::Shape {
+            x,
+            y,
+            width,
+            height: SELECT_H,
+            radius: CONTROL_RADIUS,
+            fill: Some(Paint::Control),
+            stroke: Some(if picker.is_some() {
+                Paint::Accent
+            } else {
+                Paint::ControlStroke
+            }),
+        });
+        // The ring goes just outside the box.
+        out.links.push(Link {
+            x: x - 3.0,
+            y: y - 3.0,
+            width: width + 6.0,
+            height: SELECT_H + 6.0,
+            target: Target::Language(side),
+        });
+        let format = &self.formats.suggestion;
+        let line_h = metrics(&self.text("Ag", format, width)?).1;
+        let line_y = y + ((SELECT_H - line_h) / 2.0).round();
+        let centred = |h: f32| y + ((SELECT_H - h) / 2.0).round();
+
+        let chevron = if picker.is_some() {
+            CHEVRON_UP
+        } else {
+            CHEVRON_DOWN
+        };
+        let chevron = self.text(chevron, &self.formats.icon, width)?;
+        let (chevron_w, chevron_h, _) = metrics(&chevron);
+        let chevron_x = x + width - SELECT_PAD - chevron_w;
+        out.items.push(Item::Text {
+            layout: chevron,
+            x: chevron_x,
+            y: centred(chevron_h),
+            ink: Ink::Secondary,
+            accents: Vec::new(),
+        });
+
+        let mut left = x + SELECT_PAD;
+        let Some(picker) = picker else {
+            if let Some(w) = self.flag(out, language, left, line_y, line_h) {
+                left += w + 8.0;
             }
-            ranges.push(DWRITE_TEXT_RANGE {
-                startPosition: utf16(&line),
-                length: utf16(name),
+            let name = self.text(&translate::name(language), format, chevron_x - left)?;
+            out.items.push(Item::Text {
+                layout: name,
+                x: left,
+                y: line_y,
+                ink: Ink::Primary,
+                accents: Vec::new(),
             });
-            line.push_str(name);
+            return Ok(());
+        };
+        let glyph = self.text(SEARCH_ICON, &self.formats.icon, width)?;
+        let (glyph_w, glyph_h, _) = metrics(&glyph);
+        out.items.push(Item::Text {
+            layout: glyph,
+            x: left,
+            y: centred(glyph_h),
+            ink: Ink::Secondary,
+            accents: Vec::new(),
+        });
+        left += glyph_w + 8.0;
+        // Until something's typed, the language it is now, faintly.
+        let (text, ink, at) = if picker.query.is_empty() {
+            (translate::name(language), Ink::Tertiary, 0)
+        } else {
+            (picker.query.to_string(), Ink::Primary, picker.caret)
+        };
+        let line = self.text(&text, format, chevron_x - left)?;
+        let (mut caret_x, mut caret_y) = (0.0, 0.0);
+        let mut hit = DWRITE_HIT_TEST_METRICS::default();
+        unsafe { line.HitTestTextPosition(at, false, &mut caret_x, &mut caret_y, &mut hit)? };
+        out.items.push(Item::Text {
+            layout: line,
+            x: left,
+            y: line_y,
+            ink,
+            accents: Vec::new(),
+        });
+        out.items.push(Item::Shape {
+            x: left + caret_x.round(),
+            y: line_y + hit.top,
+            width: CARET_W,
+            height: hit.height,
+            radius: 0.0,
+            fill: Some(Paint::Accent),
+            stroke: None,
+        });
+        Ok(())
+    }
+
+    /// The languages `picker` lists, under the box it's open on, `current`
+    /// ticked, the one Enter picks highlighted, and a scrollbar when they
+    /// don't all fit.
+    fn layout_picker(
+        &self,
+        out: &mut Stack,
+        picker: &Picker,
+        current: &str,
+        width: f32,
+    ) -> Result<()> {
+        out.y += LIST_GAP;
+        let total = picker.matches.len();
+        let first = picker.first.min(total);
+        let rows = &picker.matches[first..(first + PICKER_ROWS).min(total)];
+        let top = out.y;
+        let height = 2.0 * LIST_PAD + rows.len().max(1) as f32 * ROW_H;
+        out.items.push(Item::Shape {
+            x: 0.0,
+            y: top,
+            width,
+            height,
+            radius: LIST_RADIUS,
+            fill: Some(Paint::Field),
+            stroke: Some(Paint::ControlStroke),
+        });
+        let format = &self.formats.suggestion;
+        let line_h = metrics(&self.text("Ag", format, width)?).1;
+        let (row_x, row_w) = (LIST_PAD, width - 2.0 * LIST_PAD);
+        if rows.is_empty() {
+            let line = self.text("No languages match", format, row_w)?;
+            out.items.push(Item::Text {
+                layout: line,
+                x: row_x + SELECT_PAD,
+                y: top + LIST_PAD + ((ROW_H - line_h) / 2.0).round(),
+                ink: Ink::Tertiary,
+                accents: Vec::new(),
+            });
         }
-        let list = self.text(&line, &self.formats.body, width)?;
-        let mut accents = Vec::new();
-        for ((code, _), range) in translate::LANGUAGES.iter().zip(&ranges) {
-            if *code == current {
-                unsafe {
-                    let _ = list.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, *range);
-                }
-                accents.push(*range);
-            }
-            for r in hit_rects(&list, *range) {
-                out.links.push(Link {
-                    x: r.left - 2.0,
-                    y: out.y + r.top,
-                    width: r.width + 4.0,
-                    height: r.height,
-                    target: Target::Pick(code.to_string()),
+        let scrolls = total > PICKER_ROWS;
+        // Clear of the scrollbar.
+        let right = row_x + row_w - SELECT_PAD - if scrolls { 6.0 } else { 0.0 };
+        for (i, code) in rows.iter().enumerate() {
+            let y = top + LIST_PAD + i as f32 * ROW_H;
+            if picker.highlight == Some(first + i) {
+                out.items.push(Item::Shape {
+                    x: row_x,
+                    y,
+                    width: row_w,
+                    height: ROW_H,
+                    radius: CONTROL_RADIUS,
+                    fill: Some(Paint::Highlight),
+                    stroke: None,
                 });
             }
+            let line_y = y + ((ROW_H - line_h) / 2.0).round();
+            let mut x = row_x + SELECT_PAD;
+            self.badge(out, code, x, line_y, line_h)?;
+            x += BADGE_W + 10.0;
+            let name = translate::name(code);
+            let line = self.text(&name, format, width)?;
+            if *code == current {
+                let all = DWRITE_TEXT_RANGE {
+                    startPosition: 0,
+                    length: u32::MAX,
+                };
+                unsafe {
+                    let _ = line.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, all);
+                }
+            }
+            let (w, _, _) = metrics(&line);
+            out.items.push(Item::Text {
+                layout: line,
+                x,
+                y: line_y,
+                ink: Ink::Primary,
+                accents: Vec::new(),
+            });
+            x += w + 8.0;
+            let mut end = right;
+            if *code == current {
+                let check = self.text(CHECK_ICON, &self.formats.icon, width)?;
+                let (check_w, check_h, _) = metrics(&check);
+                end -= check_w;
+                out.items.push(Item::Text {
+                    layout: check,
+                    x: end,
+                    y: y + ((ROW_H - check_h) / 2.0).round(),
+                    ink: Ink::Accent,
+                    accents: Vec::new(),
+                });
+                end -= 8.0;
+            }
+            // Its name in English too, where that's another.
+            if let Some(english) = translate::english_name(code).filter(|e| *e != name) {
+                if end - x > 30.0 {
+                    let line = self.text(english, format, end - x)?;
+                    out.items.push(Item::Text {
+                        layout: line,
+                        x,
+                        y: line_y,
+                        ink: Ink::Tertiary,
+                        accents: Vec::new(),
+                    });
+                }
+            }
+            out.links.push(Link {
+                x: row_x,
+                y,
+                width: row_w,
+                height: ROW_H,
+                target: Target::Pick(code.to_string()),
+            });
         }
-        let (_, h) = out.text_with_accents(list, 0.0, Ink::Primary, accents);
-        out.y += h;
+        if scrolls {
+            let track = rows.len() as f32 * ROW_H - 4.0;
+            let thumb_h = (track * PICKER_ROWS as f32 / total as f32).max(16.0);
+            let thumb_y = (track - thumb_h) * first as f32 / (total - PICKER_ROWS) as f32;
+            out.items.push(Item::Shape {
+                x: width - LIST_PAD - 5.0,
+                y: top + LIST_PAD + 2.0 + thumb_y.round(),
+                width: 3.0,
+                height: thumb_h.round(),
+                radius: 1.5,
+                fill: Some(Paint::Thumb),
+                stroke: None,
+            });
+        }
+        out.y += height;
         Ok(())
     }
 
@@ -1090,12 +1327,12 @@ impl Renderer {
         translation: &Translation,
         width: f32,
     ) -> Result<()> {
-        let main = self.text(&translation.text, &self.formats.heading, width)?;
+        let main = self.text(&capitalize(&translation.text), &self.formats.heading, width)?;
         let (_, h) = out.text(main, 0.0, Ink::Primary);
         out.y += h;
         if let Some(context) = &translation.context {
             out.y += 4.0;
-            let quoted = format!("\u{201C}{context}\u{201D}");
+            let quoted = format!("\u{201C}{}\u{201D}", capitalize(context));
             let line = self.text(&quoted, &self.formats.example, width)?;
             let (_, h) = out.text(line, 0.0, Ink::Secondary);
             out.y += h;
@@ -1115,7 +1352,7 @@ impl Renderer {
             let (_, h) = out.text(self.spaced_caps(label, width)?, 0.0, Ink::Accent);
             out.y += h + 6.0;
             for term in &group.terms {
-                let text = self.text(&term.text, &self.formats.body, width)?;
+                let text = self.text(&capitalize(&term.text), &self.formats.body, width)?;
                 let (w, h, baseline) = metrics(&text);
                 out.text(text, 0.0, Ink::Primary);
                 if term.back.is_empty() {
@@ -1131,7 +1368,7 @@ impl Renderer {
                     out.y += h;
                     (0.0, width)
                 };
-                let back = self.text(&term.back.join(", "), &self.formats.meta, room)?;
+                let back = self.text(&capitalize(&term.back.join(", ")), &self.formats.meta, room)?;
                 let (_, back_h, back_baseline) = metrics(&back);
                 let y = if beside { out.y + baseline - back_baseline } else { out.y };
                 out.items.push(Item::Text {
@@ -1336,6 +1573,44 @@ impl Renderer {
                             ..outline
                         };
                         dc.DrawRoundedRectangle(&edge, &flag_edge, 1.0 / scale, None);
+                    }
+                    Item::Shape {
+                        x,
+                        y,
+                        width,
+                        height,
+                        radius,
+                        fill,
+                        stroke,
+                    } => {
+                        let paint = |p: Paint| {
+                            brush(match p {
+                                Paint::Control => to_d2d(theme.control()),
+                                Paint::ControlStroke => to_d2d(theme.control_stroke()),
+                                Paint::Field => to_d2d(theme.field()),
+                                Paint::Highlight => to_d2d(theme.highlight()),
+                                Paint::Accent => theme.accent_d2d(),
+                                Paint::Thumb => to_d2d(theme.thumb()),
+                            })
+                        };
+                        // Inset by half the hairline, so it lands on whole pixels.
+                        let half = 0.5 / scale;
+                        let shape = D2D1_ROUNDED_RECT {
+                            rect: D2D_RECT_F {
+                                left: x + half,
+                                top: y + half,
+                                right: x + width - half,
+                                bottom: y + height - half,
+                            },
+                            radiusX: *radius,
+                            radiusY: *radius,
+                        };
+                        if let Some(p) = fill {
+                            dc.FillRoundedRectangle(&shape, &paint(*p)?);
+                        }
+                        if let Some(p) = stroke {
+                            dc.DrawRoundedRectangle(&shape, &paint(*p)?, 1.0 / scale, None);
+                        }
                     }
                 }
             }
@@ -1585,6 +1860,8 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
     let external = make(&symbols, 9.5, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
     let button = make(&symbols, 14.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
     unsafe { button.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)? };
+    let large_button = make(&symbols, 17.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
+    unsafe { large_button.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)? };
     let query = make(&text, QUERY_SIZE, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
     unsafe { query.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)? };
     let suggestion = make(
@@ -1629,6 +1906,7 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
         icon,
         external,
         button,
+        large_button,
         heading: make(&display, 20.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?,
         setting,
         value,

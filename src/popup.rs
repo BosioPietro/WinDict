@@ -54,6 +54,8 @@ const TRANSLATE_TIP: &str = "Translate (Ctrl+T)";
 /// The ring around the link Tab moved to, as on Windows 11 controls.
 const FOCUS_STROKE: f32 = 2.0;
 const FOCUS_RADIUS: f32 = 4.0;
+/// How far, in pixels, rings can reach past the definition's edges.
+const RING_ROOM: f32 = 16.0;
 /// Room kept above and below a link Tab scrolls into view.
 const FOCUS_MARGIN: f32 = 12.0;
 
@@ -229,8 +231,12 @@ impl Content {
         card.Children()?.InsertAtTop(&host)?;
         let (visual, brush) = text_sprite(c)?;
         host.Children()?.InsertAtTop(&visual)?;
+        // Reaches past the definition's edges, which would clip the rings
+        // of links at them.
         let focus = c.CreateShapeVisual()?;
         focus.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
+        focus.SetOffset(v3(-RING_ROOM, -RING_ROOM))?;
+        focus.SetSize(v2(2.0 * RING_ROOM, 2.0 * RING_ROOM))?;
         visual.Children()?.InsertAtTop(&focus)?;
         Ok(Content {
             host,
@@ -281,6 +287,8 @@ struct IconButton {
     /// The tooltip's tool, unique among the card's buttons.
     tool: usize,
     icon: &'static str,
+    face: Face,
+    ink: Ink,
     /// Left edge in the card, in DIPs.
     x: f32,
     /// Where it slides in from, in DIPs right of its place.
@@ -299,6 +307,8 @@ impl IconButton {
         card: &ContainerVisual,
         hwnd: HWND,
         icon: &'static str,
+        face: Face,
+        ink: Ink,
         tip: &str,
         tool: usize,
         x: f32,
@@ -341,6 +351,8 @@ impl IconButton {
             tooltip: create_tooltip(hwnd, tip, tool),
             tool,
             icon,
+            face,
+            ink,
             x,
             slide_from,
             shown: false,
@@ -368,7 +380,7 @@ impl IconButton {
             .SetSize(v2(BACK_SIZE * s - stroke, BACK_SIZE * s - stroke))?;
         self.ring_clip
             .SetCornerRadius(v2(BACK_RADIUS * s, BACK_RADIUS * s))?;
-        let layout = renderer.layout_line(self.icon, Face::Button, Ink::Primary, BACK_SIZE)?;
+        let layout = renderer.layout_line(self.icon, self.face, self.ink, BACK_SIZE)?;
         self.glyph_brush
             .SetSurface(&renderer.draw(&layout, s, t)?)?;
         self.glyph
@@ -646,12 +658,27 @@ impl Popup {
         target.SetRoot(&root)?;
         let frame = Frame::new(c, &root, &theme)?;
         let header = Header::new(c, &frame.card)?;
-        let back = IconButton::new(c, &frame.card, hwnd, BACK_GLYPH, BACK_TIP, 1, BACK_X, -BACK_SLIDE)?;
+        let back = IconButton::new(
+            c,
+            &frame.card,
+            hwnd,
+            BACK_GLYPH,
+            Face::Button,
+            Ink::Primary,
+            BACK_TIP,
+            1,
+            BACK_X,
+            -BACK_SLIDE,
+        )?;
+        // Its glyph's detail wants it larger than the arrow, and it's
+        // colored like the links, as it leads somewhere too.
         let translate = IconButton::new(
             c,
             &frame.card,
             hwnd,
             TRANSLATE_GLYPH,
+            Face::LargeButton,
+            Ink::Accent,
             TRANSLATE_TIP,
             2,
             TRANSLATE_X,
@@ -1214,6 +1241,11 @@ impl Popup {
         Ok(())
     }
 
+    /// Takes the ring off whatever Tab moved to.
+    pub fn unfocus(&mut self) -> Result<()> {
+        self.focus_link(None)
+    }
+
     /// Rings the translate button.
     fn focus_translate(&mut self) -> Result<()> {
         self.focus_link(None)?;
@@ -1233,7 +1265,8 @@ impl Popup {
         let (c, s) = (&self.anim.compositor, self.scale);
         for l in content.rects(start) {
             let geometry = c.CreateRoundedRectangleGeometry()?;
-            geometry.SetOffset(v2((l.x * s).round(), (l.y * s).round()))?;
+            let (x, y) = ((l.x * s).round(), (l.y * s).round());
+            geometry.SetOffset(v2(x + RING_ROOM, y + RING_ROOM))?;
             geometry.SetSize(v2((l.width * s).round(), (l.height * s).round()))?;
             geometry.SetCornerRadius(v2(FOCUS_RADIUS * s, FOCUS_RADIUS * s))?;
             let shape = c.CreateSpriteShapeWithGeometry(&geometry)?;

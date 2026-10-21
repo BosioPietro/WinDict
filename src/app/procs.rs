@@ -25,7 +25,7 @@ pub(super) unsafe extern "system" fn main_proc(
         WM_HOTKEY => {
             match wparam.0 as i32 {
                 HOTKEY_LOOKUP => with_app(|app| app.on_hotkey()),
-                HOTKEY_ESCAPE => with_app(|app| app.dismiss()),
+                HOTKEY_ESCAPE => with_app(|app| app.escape()),
                 HOTKEY_BACK | HOTKEY_BACK_ALT => with_app(|app| app.back()),
                 HOTKEY_NEXT_LINK => with_app(|app| app.step_link(true)),
                 HOTKEY_PREV_LINK => with_app(|app| app.step_link(false)),
@@ -44,11 +44,7 @@ pub(super) unsafe extern "system" fn main_proc(
             LRESULT(0)
         }
         WM_APP_WHEEL => {
-            with_app(|app| {
-                app.popup
-                    .as_mut()
-                    .map(|p| p.scroll_by(wparam.0 as i16 as i32))
-            });
+            with_app(|app| app.on_wheel(wparam.0 as i16 as i32));
             LRESULT(0)
         }
         WM_APP_CLICK => {
@@ -109,11 +105,11 @@ pub(super) unsafe extern "system" fn popup_proc(
             // Ask for WM_MOUSELEAVE, to drop the hover when the pointer goes.
             win::track_mouse_leave(hwnd);
             let (x, y) = win::lparam_point(lparam);
-            with_app(|app| app.popup.as_mut().map(|p| p.hover(Some((x, y)))));
+            with_app(|app| app.hover_card(Some((x, y))));
             LRESULT(0)
         }
         WM_MOUSELEAVE => {
-            with_app(|app| app.popup.as_mut().map(|p| p.hover(None)));
+            with_app(|app| app.hover_card(None));
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {

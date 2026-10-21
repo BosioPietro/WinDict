@@ -24,8 +24,8 @@ With online lookup on, the translate button at the top right of the card (or
 **Ctrl+T**, while the card is open) turns it into a translation. A word
 from one of your two dictionary languages goes into the other; a word that's in
 both, or that the card can't place, starts from the default languages in the
-settings. Pick either language from its menu, or swap them with the button
-between them. The translation lists alternatives by part of speech where
+settings. Click either language's box to pick another from its list, typing
+to narrow it down, or swap them with the button between them. The translation lists alternatives by part of speech where
 there are any. The back arrow, Backspace or Ctrl+T again returns to the
 definition.
 

@@ -1,6 +1,7 @@
 //! Ties everything together on the UI thread: hotkey → selection → lookup → card.
 
 pub(crate) mod edit;
+mod picking;
 mod procs;
 
 use std::cell::{Cell, RefCell};
@@ -26,7 +27,7 @@ use crate::menu::{Command, Menu};
 use crate::offline;
 use crate::online;
 use crate::popup::{self, Popup, Transition};
-use crate::render::{self, Body, Side, Target, TranslationCard};
+use crate::render::{self, Body, Side, Target, TranslationCard, PICKER_ROWS};
 use crate::searchbox::MAX_SUGGESTIONS;
 use crate::selection::{self, Capturer, Selection};
 use crate::settings::{self, Change, Settings, Values};
@@ -36,6 +37,7 @@ use crate::tray::{self, Tray};
 use crate::ui;
 use crate::win::{self, Window};
 use edit::{Input, LineEdit, Motion};
+use picking::Picking;
 use procs::{focus_hook, main_proc, menu_proc, mouse_hook, popup_proc, settings_proc};
 
 const MAIN_CLASS: PCWSTR = w!("WinDict.Main");
@@ -98,6 +100,7 @@ const TIMER_COVERED: usize = 5;
 const TIMER_MENU_HIDE: usize = 6;
 const TIMER_MENU_TEARDOWN: usize = 7;
 const TIMER_SETTINGS_HIDE: usize = 8;
+const TIMER_TRANSLATING: usize = 9;
 
 /// Free the GPU resources after this long without a lookup.
 const IDLE_TEARDOWN_MS: u32 = 3 * 60 * 1000;
@@ -114,8 +117,12 @@ const MENU_REOPEN_GUARD_MS: u64 = 300;
 const HIDE_DONE_MS: u32 = ui::HIDE_MS as u32 + 30;
 /// Shrink the hit-test region once a resize animation has played.
 const SETTLE_MS: u32 = ui::RESIZE_MS as u32 + 60;
+/// How long the card waits for a translation before showing it on its way.
+const TRANSLATING_WAIT_MS: u32 = 400;
 const CACHE_SIZE: usize = 64;
 const TRANSLATION_CACHE_SIZE: usize = 32;
+/// How many languages a notch of the mouse wheel scrolls their list by.
+const WHEEL_ROWS: f32 = 3.0;
 /// How many words "back" remembers.
 const HISTORY_SIZE: usize = 50;
 const SEARCH_PLACEHOLDER: &str = "Type a word to look it up";
@@ -219,9 +226,31 @@ struct Translating {
     to: String,
     /// The word is in both languages: which way waits on the user.
     asking: bool,
-    picking: Option<Side>,
+    /// The list a language is being picked from, when it's open.
+    picking: Option<Picking>,
     /// `None` while it's on its way.
     result: Option<Result<Translation, String>>,
+    /// The card waits a moment for it before showing it on its way, so a
+    /// quick answer comes in one change rather than two.
+    waiting: bool,
+    /// Where the focus goes once the card stops waiting.
+    focus: Option<Target>,
+    /// Whether the card shows the translation yet, rather than the
+    /// definition it was asked from.
+    shown: bool,
+}
+
+impl Translating {
+    /// How the card changes as the translation comes: from the definition
+    /// it's another card; on the translation, only what's under the
+    /// languages changes.
+    fn transition(&self) -> Transition {
+        if self.shown {
+            Transition::Refine
+        } else {
+            Transition::Replace
+        }
+    }
 }
 
 /// A dictionary being downloaded, for the language it's for.
@@ -714,6 +743,9 @@ impl App {
 
     /// A character typed into the card (WM_CHAR).
     fn on_char(&mut self, unit: u16) {
+        if self.picking().is_some() {
+            return self.type_language(unit);
+        }
         let Some(hwnd) = self.popup.as_ref().filter(|p| p.visible).map(|p| p.hwnd) else {
             return;
         };
@@ -739,6 +771,9 @@ impl App {
     /// pick a suggestion; Left, Right, Home and End move the caret, by
     /// words with Ctrl; Delete removes what's after it.
     fn on_key(&mut self, key: VIRTUAL_KEY) {
+        if self.picking().is_some() {
+            return self.language_key(key);
+        }
         let (Some(search), Some(popup)) = (self.search.as_mut(), self.popup.as_mut()) else {
             return;
         };
@@ -1209,7 +1244,9 @@ impl App {
     /// Backspace and Alt+Left go back, but only while there's somewhere to
     /// go: otherwise they belong to the app underneath.
     fn sync_back_keys(&mut self) {
-        let wanted = !self.history.is_empty() || self.translating.is_some();
+        // Backspace edits what's typed in the list of languages.
+        let picking = self.translating.as_ref().is_some_and(|t| t.picking.is_some());
+        let wanted = (!self.history.is_empty() || self.translating.is_some()) && !picking;
         set_hotkeys(self.hwnd, BACK_KEYS, &mut self.back_keys, wanted);
     }
 
@@ -1252,6 +1289,9 @@ impl App {
             asking,
             picking: None,
             result: None,
+            waiting: false,
+            focus: None,
+            shown: false,
         });
         // Answers still on their way are for the definition.
         self.request += 1;
@@ -1286,8 +1326,12 @@ impl App {
             return;
         };
         t.result = cached.map(Ok);
-        if t.result.is_some() {
+        t.waiting = t.result.is_none();
+        if !t.waiting {
             return;
+        }
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_TRANSLATING, TRANSLATING_WAIT_MS, None);
         }
         self.request += 1;
         let (id, events) = (self.request, self.events.clone());
@@ -1317,31 +1361,66 @@ impl App {
             return;
         };
         t.result = Some(translated.result);
-        self.show_translation(Transition::Replace, None);
+        t.waiting = false;
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_TRANSLATING);
+        }
+        let focus = t.focus.take();
+        let transition = t.transition();
+        self.show_translation(transition, focus);
+    }
+
+    /// No quick answer: shows the translation on its way.
+    fn stop_waiting(&mut self) {
+        let Some(t) = self.translating.as_mut().filter(|t| t.waiting) else {
+            return;
+        };
+        t.waiting = false;
+        let focus = t.focus.take();
+        let transition = t.transition();
+        self.show_translation(transition, focus);
     }
 
     /// Shows the translation as it stands, the focus on `focus`, or where
     /// it was.
     fn show_translation(&mut self, transition: Transition, focus: Option<Target>) {
-        let Some(t) = self.translating.as_ref() else {
+        let Some(t) = self.translating.as_mut() else {
             return;
         };
+        if t.waiting && !t.shown {
+            // The definition stays a moment longer.
+            t.focus = focus.or(t.focus.take());
+            return;
+        }
         let Some(popup) = self.popup.as_mut().filter(|p| p.visible) else {
             return;
         };
-        let focus = focus.or_else(|| popup.focused_link().cloned());
+        // The list has the keyboard while it's open.
+        let focus = match t.picking {
+            Some(_) => None,
+            None => focus.or_else(|| popup.focused_link().cloned()),
+        };
         let state = match (&t.result, t.asking) {
             (_, true) => render::Translated::Asking,
+            (None, false) if t.waiting => render::Translated::Waiting,
             (None, false) => render::Translated::Loading,
             (Some(Ok(translation)), false) => render::Translated::Done(translation),
             (Some(Err(error)), false) => render::Translated::Failed(error),
         };
+        let picker = t.picking.as_ref().map(|p| render::Picker {
+            side: p.side,
+            query: p.query.text(),
+            caret: p.query.caret_utf16(),
+            matches: &p.matches,
+            first: p.first,
+            highlight: p.highlight,
+        });
         let card = TranslationCard {
             word: &t.about.word,
             from: &t.from,
             to: &t.to,
             state,
-            picking: t.picking,
+            picker,
         };
         let _ = popup.set_back(true);
         let _ = popup.set_translate(false);
@@ -1352,11 +1431,157 @@ impl App {
         {
             return;
         }
-        if let Some(target) = focus {
+        t.shown = true;
+        if t.picking.is_some() {
+            let _ = popup.unfocus();
+        } else if let Some(target) = focus {
             let _ = popup.focus_target(&target);
         }
         self.on_resized();
         self.sync_link_keys();
+        self.sync_back_keys();
+    }
+
+    /// The list a language is being picked from, if it's open, and the
+    /// language that side has now.
+    fn picking(&mut self) -> Option<(&mut Picking, &str)> {
+        let t = self.translating.as_mut()?;
+        let picking = t.picking.as_mut()?;
+        let current = match picking.side {
+            Side::From => &t.from,
+            Side::To => &t.to,
+        };
+        Some((picking, current))
+    }
+
+    /// A character typed while the list of languages is open: narrows it
+    /// down, or, with Enter, picks the highlighted one.
+    fn type_language(&mut self, unit: u16) {
+        let hwnd = self.popup.as_ref().map(|p| p.hwnd);
+        let Some((picking, current)) = self.picking() else {
+            return;
+        };
+        match picking.query.type_unit(unit) {
+            Input::Edited => {}
+            Input::Enter => {
+                if let Some(code) = picking.highlighted() {
+                    self.steer_translation(Target::Pick(code.to_string()));
+                }
+                return;
+            }
+            Input::Paste => {
+                let pasted = hwnd.and_then(selection::clipboard_text).unwrap_or_default();
+                picking.query.paste(&pasted);
+            }
+            Input::Nothing => return,
+        }
+        let current = current.to_string();
+        picking.refilter(&current);
+        self.show_translation(Transition::Refine, None);
+    }
+
+    /// A key pressed while the list of languages is open: Up, Down, Tab,
+    /// Shift+Tab, Page Up and Page Down move the highlight; the others move
+    /// the caret, as in the search box.
+    fn language_key(&mut self, key: VIRTUAL_KEY) {
+        let ctrl = hotkey::is_held(VK_CONTROL);
+        let Some((picking, current)) = self.picking() else {
+            return;
+        };
+        let page = PICKER_ROWS as isize;
+        let step = match key {
+            VK_DOWN => Some(1),
+            VK_UP => Some(-1),
+            VK_TAB if hotkey::is_held(VK_SHIFT) => Some(-1),
+            VK_TAB => Some(1),
+            VK_NEXT => Some(page),
+            VK_PRIOR => Some(-page),
+            _ => None,
+        };
+        if let Some(by) = step {
+            picking.step(by);
+            return self.show_translation(Transition::Refine, None);
+        }
+        let edit = &mut picking.query;
+        let changed = match key {
+            VK_LEFT if ctrl => edit.move_caret(Motion::WordBack),
+            VK_LEFT => edit.move_caret(Motion::CharBack),
+            VK_RIGHT if ctrl => edit.move_caret(Motion::WordForward),
+            VK_RIGHT => edit.move_caret(Motion::CharForward),
+            VK_HOME => edit.move_caret(Motion::Start),
+            VK_END => edit.move_caret(Motion::End),
+            VK_DELETE => {
+                let to = if ctrl {
+                    Motion::WordForward
+                } else {
+                    Motion::CharForward
+                };
+                if edit.delete(to) {
+                    let current = current.to_string();
+                    picking.refilter(&current);
+                }
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.show_translation(Transition::Refine, None);
+        }
+    }
+
+    /// The pointer over the card: over the list of languages, it moves the
+    /// highlight along.
+    fn hover_card(&mut self, point: Option<(i32, i32)>) {
+        let Some(popup) = self.popup.as_mut() else {
+            return;
+        };
+        let _ = popup.hover(point);
+        let target = point.and_then(|(x, y)| popup.link_at(x, y)).cloned();
+        let Some(Target::Pick(code)) = target else {
+            return;
+        };
+        if self.picking().is_some_and(|(picking, _)| picking.highlight(&code)) {
+            self.show_translation(Transition::Refine, None);
+        }
+    }
+
+    /// The mouse wheel: scrolls the list of languages while it's open, or
+    /// else the card.
+    fn on_wheel(&mut self, delta: i32) {
+        if let Some((picking, _)) = self.picking() {
+            let rows = -(delta as f32 / 120.0 * WHEEL_ROWS).round() as isize;
+            if picking.scroll(rows) {
+                self.show_translation(Transition::Refine, None);
+            }
+            return;
+        }
+        if let Some(popup) = self.popup.as_mut() {
+            let _ = popup.scroll_by(delta);
+        }
+    }
+
+    /// Esc: closes the list of languages, if it's open, or else the card.
+    fn escape(&mut self) {
+        let closed = self.translating.as_mut().and_then(|t| t.picking.take());
+        match closed {
+            Some(picking) => {
+                let focus = Some(Target::Language(picking.side));
+                self.show_translation(Transition::Refine, focus);
+            }
+            None => self.dismiss(),
+        }
+    }
+
+    /// Gives the card the keyboard, to type into, until it closes and hands
+    /// it back.
+    fn take_keyboard(&mut self) {
+        let Some(hwnd) = self.popup.as_ref().filter(|p| p.visible).map(|p| p.hwnd) else {
+            return;
+        };
+        let previous = unsafe { GetForegroundWindow() };
+        if previous != hwnd && selection::take_foreground(hwnd) && self.return_focus.is_none() {
+            self.return_focus = Some(previous);
+        }
     }
 
     /// A click, or Enter, on the translation card.
@@ -1368,34 +1593,41 @@ impl App {
         match target {
             // Open the list, or close it again.
             Target::Language(side) => {
-                if t.picking == Some(side) {
-                    t.picking = None;
+                let open = t.picking.take().map(|p| p.side);
+                if open == Some(side) {
+                    focus = Some(Target::Language(side));
                 } else {
-                    t.picking = Some(side);
                     let current = match side {
                         Side::From => &t.from,
                         Side::To => &t.to,
                     };
-                    focus = Some(Target::Pick(current.clone()));
+                    t.picking = Some(Picking::new(side, current));
+                    self.take_keyboard();
                 }
-                return self.show_translation(Transition::Replace, focus);
+                return self.show_translation(Transition::Refine, focus);
             }
-            Target::Swap => std::mem::swap(&mut t.from, &mut t.to),
+            Target::Swap => {
+                t.picking = None;
+                std::mem::swap(&mut t.from, &mut t.to);
+            }
             // The other side's language swaps them round.
             Target::Pick(language) => {
-                let Some(side) = t.picking.take() else {
+                let Some(side) = t.picking.take().map(|p| p.side) else {
                     return;
                 };
+                focus = Some(Target::Language(side));
                 let (picked, other) = match side {
                     Side::From => (&mut t.from, &mut t.to),
                     Side::To => (&mut t.to, &mut t.from),
                 };
+                if language == *picked {
+                    return self.show_translation(Transition::Refine, focus);
+                }
                 if language == *other {
                     std::mem::swap(picked, other);
                 } else {
                     *picked = language;
                 }
-                focus = Some(Target::Language(side));
             }
             Target::Confirm => t.asking = false,
             _ => return,
@@ -1405,22 +1637,24 @@ impl App {
             self.request += 1;
             self.fetch_translation();
         }
-        self.show_translation(Transition::Replace, focus);
+        self.show_translation(Transition::Refine, focus);
     }
 
     /// Tab and Shift+Tab move between the card's links, and Enter opens the
     /// one they reached, but only while there's one to go to: otherwise the
     /// keys belong to the app underneath. The search box reads its own keys.
     fn sync_link_keys(&mut self) {
+        // As does the list of languages.
+        let picking = self.translating.as_ref().is_some_and(|t| t.picking.is_some());
         let popup = self
             .popup
             .as_ref()
-            .filter(|p| p.visible && self.search.is_none());
+            .filter(|p| p.visible && self.search.is_none() && !picking);
         let tab = popup.is_some_and(|p| p.has_links());
         let enter = popup.is_some_and(|p| p.focused_link().is_some());
         // Ctrl+T, likewise, only while there's a translation to go to or from.
-        let translate =
-            popup.is_some() && (self.can_translate() || self.translating.is_some());
+        let visible = self.popup.as_ref().is_some_and(|p| p.visible);
+        let translate = visible && (self.can_translate() || self.translating.is_some());
         self.set_link_keys(tab, enter);
         set_hotkeys(self.hwnd, TRANSLATE_KEY, &mut self.translate_key, translate);
     }
@@ -1507,6 +1741,7 @@ impl App {
         match id {
             TIMER_AUTOHIDE => self.dismiss(),
             TIMER_COVERED => self.uncover(),
+            TIMER_TRANSLATING => self.stop_waiting(),
             TIMER_SETTLE => {
                 if let Some(p) = self.popup.as_mut() {
                     p.settle();

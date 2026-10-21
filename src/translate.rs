@@ -64,6 +64,77 @@ pub fn supported(language: &str) -> bool {
     LANGUAGES.iter().any(|(code, _)| *code == language)
 }
 
+/// `language`'s name in English, for languages named otherwise in
+/// [`LANGUAGES`].
+pub fn english_name(language: &str) -> Option<&'static str> {
+    Some(match language {
+        "it" => "Italian",
+        "fr" => "French",
+        "de" => "German",
+        "es" => "Spanish",
+        "pt" => "Portuguese",
+        "nl" => "Dutch",
+        "sv" => "Swedish",
+        "da" => "Danish",
+        "no" => "Norwegian",
+        "fi" => "Finnish",
+        "pl" => "Polish",
+        "cs" => "Czech",
+        "ro" => "Romanian",
+        "hu" => "Hungarian",
+        "el" => "Greek",
+        "tr" => "Turkish",
+        "ru" => "Russian",
+        "uk" => "Ukrainian",
+        "ja" => "Japanese",
+        "ko" => "Korean",
+        "zh-CN" => "Chinese",
+        _ => return None,
+    })
+}
+
+/// The codes of the languages whose name, in their own language or in
+/// English, or whose code, starts with `query` (any of their words does),
+/// accents and case aside, in [`LANGUAGES`]' order. All of them for nothing.
+pub fn search(query: &str) -> Vec<&'static str> {
+    let query = fold(query.trim());
+    LANGUAGES
+        .iter()
+        .filter(|(code, name)| {
+            let names = [Some(*name), english_name(code), Some(*code)];
+            names.into_iter().flatten().any(|n| {
+                fold(n)
+                    .split([' ', '-'])
+                    .any(|word| word.starts_with(&query))
+            })
+        })
+        .map(|(code, _)| *code)
+        .collect()
+}
+
+/// Lower case, and the Latin letters without their accents: "Français" →
+/// "francais".
+fn fold(text: &str) -> String {
+    text.to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ă' => 'a',
+            'ç' | 'č' => 'c',
+            'è' | 'é' | 'ê' | 'ë' | 'ě' => 'e',
+            'ì' | 'í' | 'î' | 'ï' => 'i',
+            'ñ' | 'ň' => 'n',
+            'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' => 'o',
+            'ù' | 'ú' | 'û' | 'ü' | 'ů' => 'u',
+            'š' | 'ș' | 'ş' => 's',
+            'ț' | 'ţ' => 't',
+            'ž' => 'z',
+            'ř' => 'r',
+            'ý' => 'y',
+            c => c,
+        })
+        .collect()
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Translation {
     /// The translation itself.
@@ -486,5 +557,23 @@ mod tests {
         assert_eq!(name("it"), "Italiano");
         assert_eq!(name("xx"), "XX");
         assert!(LANGUAGES.iter().all(|(code, _)| supported(code)));
+        assert!(LANGUAGES
+            .iter()
+            .all(|(code, _)| *code == "en" || english_name(code).is_some()));
+    }
+
+    #[test]
+    fn searches_languages() {
+        assert_eq!(search("").len(), LANGUAGES.len());
+        // In their own language, in English, or by code, accents aside.
+        assert_eq!(search("franc"), ["fr"]);
+        assert_eq!(search("Germ"), ["de"]);
+        assert_eq!(search("deu"), ["de"]);
+        assert_eq!(search("ES"), ["es"]);
+        assert_eq!(search("cest"), ["cs"]);
+        assert_eq!(search("chinese"), ["zh-CN"]);
+        assert_eq!(search("cn"), ["zh-CN"]);
+        assert_eq!(search("  ital "), ["it"]);
+        assert!(search("klingon").is_empty());
     }
 }
