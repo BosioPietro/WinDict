@@ -57,6 +57,31 @@ enum Item {
         width: f32,
         height: f32,
     },
+    /// A language's flag.
+    Flag {
+        flag: Flag,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
+}
+
+/// The flags drawn for the languages WinDict knows.
+#[derive(Clone, Copy)]
+enum Flag {
+    UnitedKingdom,
+    Italy,
+}
+
+impl Flag {
+    fn of(language: &str) -> Option<Flag> {
+        match language {
+            "en" => Some(Flag::UnitedKingdom),
+            "it" => Some(Flag::Italy),
+            _ => None,
+        }
+    }
 }
 
 /// Laid-out content, in DIPs.
@@ -75,7 +100,7 @@ impl Layout {
             .iter()
             .find_map(|item| match item {
                 Item::Text { layout, y, .. } => Some(y + first_line_height(layout)),
-                Item::Rule { .. } | Item::Key { .. } => None,
+                Item::Rule { .. } | Item::Key { .. } | Item::Flag { .. } => None,
             })
             .unwrap_or(0.0)
     }
@@ -218,6 +243,7 @@ struct Formats {
 pub struct Renderer {
     d3d: ID3D11Device,
     _d2d_device: ID2D1Device,
+    d2d: ID2D1Factory1,
     dwrite: IDWriteFactory,
     formats: Formats,
     pub graphics: CompositionGraphicsDevice,
@@ -238,6 +264,7 @@ impl Renderer {
             Ok(Renderer {
                 d3d,
                 _d2d_device: d2d_device,
+                d2d: factory,
                 dwrite,
                 formats,
                 graphics,
@@ -346,7 +373,8 @@ impl Renderer {
 
     /// A suggested word, its first `typed` characters (what was typed) in
     /// bold, and the word it's a form of after an arrow. `badge`, the code of
-    /// its language, goes before it on a cap, when there are several.
+    /// its language, goes before it as its flag, when there are several, or
+    /// on a cap, if it has none.
     pub fn layout_suggestion(
         &self,
         word: &str,
@@ -357,7 +385,19 @@ impl Renderer {
     ) -> Result<Layout> {
         let mut out = Stack::default();
         let mut x = 0.0;
-        if let Some(code) = badge {
+        if let Some(flag) = badge.and_then(Flag::of) {
+            // 3:2, the height of a capital.
+            let (flag_w, flag_h, gap) = (18.0, 12.0, 8.0);
+            let line_h = metrics(&self.text("Ag", &self.formats.suggestion, width)?).1;
+            out.items.push(Item::Flag {
+                flag,
+                x: 0.0,
+                y: ((line_h - flag_h) / 2.0).round(),
+                width: flag_w,
+                height: flag_h,
+            });
+            x = flag_w + gap;
+        } else if let Some(code) = badge {
             // Wide enough for any two letters, so the words line up.
             let (pad_y, min_w, gap) = (1.0, 24.0f32, 8.0);
             let name = self.text(&code.to_uppercase(), &self.formats.footer, 100.0)?;
@@ -851,6 +891,7 @@ impl Renderer {
             let critical = brush(theme.critical())?;
             let divider = brush(theme.divider())?;
             let key = brush(theme.key())?;
+            let flag_edge = brush(theme.flag_edge())?;
             for item in &layout.items {
                 match item {
                     Item::Text {
@@ -906,6 +947,59 @@ impl Renderer {
                         };
                         dc.FillRoundedRectangle(&cap, &key);
                         dc.DrawRoundedRectangle(&cap, &divider, 1.0 / scale, None);
+                    }
+                    Item::Flag {
+                        flag,
+                        x,
+                        y,
+                        width,
+                        height,
+                    } => {
+                        let outline = D2D1_ROUNDED_RECT {
+                            rect: D2D_RECT_F {
+                                left: *x,
+                                top: *y,
+                                right: x + width,
+                                bottom: y + height,
+                            },
+                            radiusX: 2.0,
+                            radiusY: 2.0,
+                        };
+                        let mask = self.d2d.CreateRoundedRectangleGeometry(&outline)?;
+                        let mut layer = D2D1_LAYER_PARAMETERS1 {
+                            contentBounds: outline.rect,
+                            geometricMask: std::mem::ManuallyDrop::new(Some(mask.cast()?)),
+                            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                            maskTransform: Matrix3x2::identity(),
+                            opacity: 1.0,
+                            opacityBrush: std::mem::ManuallyDrop::new(None),
+                            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+                        };
+                        dc.PushLayer(&layer, None);
+                        let mut outer = Matrix3x2::default();
+                        dc.GetTransform(&mut outer);
+                        // Drawn on a 60 by 40 grid.
+                        dc.SetTransform(
+                            &(Matrix3x2::scale(width / 60.0, height / 40.0)
+                                * Matrix3x2::translation(*x, *y)
+                                * outer),
+                        );
+                        let result = draw_flag(dc, *flag);
+                        dc.SetTransform(&outer);
+                        dc.PopLayer();
+                        std::mem::ManuallyDrop::drop(&mut layer.geometricMask);
+                        result?;
+                        let half = 0.5 / scale;
+                        let edge = D2D1_ROUNDED_RECT {
+                            rect: D2D_RECT_F {
+                                left: x + half,
+                                top: y + half,
+                                right: x + width - half,
+                                bottom: y + height - half,
+                            },
+                            ..outline
+                        };
+                        dc.DrawRoundedRectangle(&edge, &flag_edge, 1.0 / scale, None);
                     }
                 }
             }
@@ -1009,6 +1103,55 @@ impl Renderer {
             result
         }
     }
+}
+
+/// Draws `flag` filling 0,0 to 60,40.
+unsafe fn draw_flag(dc: &ID2D1DeviceContext, flag: Flag) -> Result<()> {
+    let brush = |rgb: u32| unsafe {
+        dc.CreateSolidColorBrush(
+            &D2D1_COLOR_F {
+                r: (rgb >> 16) as f32 / 255.0,
+                g: (rgb >> 8 & 0xff) as f32 / 255.0,
+                b: (rgb & 0xff) as f32 / 255.0,
+                a: 1.0,
+            },
+            None,
+        )
+    };
+    let rect = |left: f32, top: f32, right: f32, bottom: f32| D2D_RECT_F {
+        left,
+        top,
+        right,
+        bottom,
+    };
+    let at = |x: f32, y: f32| Vector2 { X: x, Y: y };
+    unsafe {
+        match flag {
+            Flag::UnitedKingdom => {
+                // Bolder white than the real flag's, so it shows at this size.
+                let (blue, red, white) = (brush(0x012169)?, brush(0xC8102E)?, brush(0xFFFFFF)?);
+                dc.FillRectangle(&rect(0.0, 0.0, 60.0, 40.0), &blue);
+                for (from, to) in [
+                    (at(0.0, 0.0), at(60.0, 40.0)),
+                    (at(0.0, 40.0), at(60.0, 0.0)),
+                ] {
+                    dc.DrawLine(from, to, &white, 13.0, None);
+                    dc.DrawLine(from, to, &red, 4.0, None);
+                }
+                dc.FillRectangle(&rect(23.0, 0.0, 37.0, 40.0), &white);
+                dc.FillRectangle(&rect(0.0, 13.0, 60.0, 27.0), &white);
+                dc.FillRectangle(&rect(27.0, 0.0, 33.0, 40.0), &red);
+                dc.FillRectangle(&rect(0.0, 17.0, 60.0, 23.0), &red);
+            }
+            Flag::Italy => {
+                for (i, rgb) in [0x009246, 0xF4F5F0, 0xCE2B37].into_iter().enumerate() {
+                    let left = i as f32 * 20.0;
+                    dc.FillRectangle(&rect(left, 0.0, left + 20.0, 40.0), &brush(rgb)?);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn create_d3d_device() -> Result<ID3D11Device> {

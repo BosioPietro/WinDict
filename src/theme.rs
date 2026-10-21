@@ -220,6 +220,12 @@ impl Theme {
         self.ink(if self.dark { 0.09 } else { 0.08 })
     }
 
+    /// The edge around a language's flag, so its white parts don't melt
+    /// into the card.
+    pub fn flag_edge(&self) -> D2D1_COLOR_F {
+        self.ink(if self.dark { 0.16 } else { 0.28 })
+    }
+
     /// The cap behind a key's name.
     pub fn key(&self) -> D2D1_COLOR_F {
         self.ink(if self.dark { 0.08 } else { 0.05 })
