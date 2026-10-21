@@ -391,6 +391,7 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
         Ok((config, first_run)) => (config, first_run, None),
         Err(e) => (Config::default(), false, Some(e)),
     };
+    ui::set_motion(config.animated());
     unsafe {
         let instance = HINSTANCE(GetModuleHandleW(None)?.0);
         let arrow = LoadCursorW(None, IDC_ARROW)?;
@@ -1996,6 +1997,7 @@ impl App {
                     }
                 }
                 self.cache.clear();
+                ui::set_motion(self.config.animated());
                 self.register_hotkey();
                 self.refresh_settings();
                 if let Err(e) = offline::set_languages(&self.config.languages) {
@@ -2167,6 +2169,11 @@ impl App {
                 self.sync_link_keys();
             }
             Change::UiAutomation(on) => self.config.use_ui_automation = on,
+            Change::Animations(on) => {
+                self.config.animations = Some(on);
+                ui::set_motion(on);
+                return self.save_setting(|_| {});
+            }
             // These don't change any answer: there's nothing to forget.
             Change::TranslateLanguages(from, to) => {
                 return self.save_setting(|c| (c.translate_from, c.translate_to) = (from, to));
@@ -2321,6 +2328,12 @@ impl App {
         if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
             let _ = settings.show_download(language, status);
         }
+    }
+
+    /// Windows turned its animations on or off: so do these, unless set here.
+    fn on_motion_changed(&mut self) {
+        ui::set_motion(self.config.animated());
+        self.refresh_settings();
     }
 
     /// The system's colors changed: the settings window follows them.

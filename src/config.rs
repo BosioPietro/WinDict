@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::translate;
+use crate::{translate, ui};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
@@ -43,6 +43,16 @@ pub struct Config {
     pub translate_to: String,
     /// Sent to MyMemory, and only to it, for its larger daily allowance.
     pub mymemory_email: String,
+    /// Move things into place instead of jumping them there; unset, as
+    /// Windows has it (Accessibility > Visual effects > Animation effects).
+    pub animations: Option<bool>,
+}
+
+impl Config {
+    /// Whether the windows animate.
+    pub fn animated(&self) -> bool {
+        self.animations.unwrap_or_else(ui::system_motion)
+    }
 }
 
 impl Default for Config {
@@ -59,6 +69,7 @@ impl Default for Config {
             translate_from: "en".into(),
             translate_to: "it".into(),
             mymemory_email: String::new(),
+            animations: None,
         }
     }
 }

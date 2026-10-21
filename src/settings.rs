@@ -222,6 +222,7 @@ pub enum Change {
     ShowExamples(bool),
     OnlineLookup(bool),
     UiAutomation(bool),
+    Animations(bool),
     Autostart(bool),
     /// The languages translated from and into when the card can't tell,
     /// as codes.
@@ -237,13 +238,15 @@ enum Switch {
     Online,
     Automation,
     Examples,
+    Animations,
 }
 
-const SWITCHES: [Switch; 4] = [
+const SWITCHES: [Switch; 5] = [
     Switch::Autostart,
     Switch::Online,
     Switch::Automation,
     Switch::Examples,
+    Switch::Animations,
 ];
 
 /// A number stepped through with − and + buttons.
@@ -480,6 +483,12 @@ const SECTIONS: &[(&str, &[Row])] = &[
                 "Examples",
                 "Sentences showing each sense in use",
                 Control::Switch(Switch::Examples),
+            ),
+            row(
+                "\u{E7F8}",
+                "Animations",
+                "Starts as Windows has them; turn on to override",
+                Control::Switch(Switch::Animations),
             ),
         ],
     ),
@@ -1385,6 +1394,10 @@ impl Settings {
                         v.config.show_examples = on;
                         Change::ShowExamples(on)
                     }
+                    Switch::Animations => {
+                        v.config.animations = Some(on);
+                        Change::Animations(on)
+                    }
                 };
                 self.show_switch(sw, true)?;
                 Some(change)
@@ -1760,6 +1773,7 @@ impl Settings {
             Switch::Online => self.values.config.online_lookup,
             Switch::Automation => self.values.config.use_ui_automation,
             Switch::Examples => self.values.config.show_examples,
+            Switch::Animations => self.values.config.animated(),
         }
     }
 
@@ -2131,7 +2145,7 @@ impl Settings {
                 };
                 stretch.InsertKeyFrameWithEasingFunction(0.35, wide, &anim.decelerate)?;
                 stretch.InsertKeyFrameWithEasingFunction(1.0, scale(1.0), &anim.decelerate)?;
-                stretch.SetDuration(ts(PILL_MS))?;
+                stretch.SetDuration(ui::span(PILL_MS))?;
                 v.pill.StartAnimation(&HSTRING::from("Scale"), &stretch)?;
             }
             _ => {
@@ -2532,6 +2546,10 @@ impl Settings {
         let (anim, ring) = (&self.anim, &view.shortcut.ring);
         if !self.recording {
             return anim.scalar(ring, "Opacity", 0.0, 150, 0, &anim.accelerate);
+        }
+        if !ui::motion() {
+            Animator::stop(ring, &["Opacity"]);
+            return ring.SetOpacity(1.0);
         }
         let breathe = anim.compositor.CreateScalarKeyFrameAnimation()?;
         breathe.InsertKeyFrame(0.0, 1.0)?;

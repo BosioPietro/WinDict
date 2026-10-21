@@ -1384,7 +1384,7 @@ fn resizable_outline(
 struct Parts {
     shortcut: Option<ShortcutView>,
     translate: Option<Rect>,
-    switches: [Option<SwitchView>; 4],
+    switches: [Option<SwitchView>; SWITCHES.len()],
     choices: [Option<ChoiceView>; 1],
     notes: [Option<NoteView>; 2],
     counters: [Option<CounterView>; 2],

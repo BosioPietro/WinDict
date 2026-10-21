@@ -387,6 +387,9 @@ pub(super) unsafe extern "system" fn settings_proc(
             if colors {
                 with_app(|app| app.on_colors_changed());
             }
+            if msg == WM_SETTINGCHANGE && wparam.0 == SPI_SETCLIENTAREAANIMATION.0 as usize {
+                with_app(|app| app.on_motion_changed());
+            }
             default()
         }
         _ => default(),

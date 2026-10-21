@@ -634,6 +634,11 @@ impl Loader {
                     ellipse.SetRadius(v2(size / 2.0, size / 2.0))?;
                 }
             }
+            if !ui::motion() {
+                dot.SetOpacity(0.6)?;
+                dot.SetScale(scale(1.0))?;
+                continue;
+            }
             let pulse = anim.compositor.CreateScalarKeyFrameAnimation()?;
             pulse.InsertKeyFrame(0.0, 0.25)?;
             pulse.InsertKeyFrameWithEasingFunction(0.3, 1.0, &anim.decelerate)?;

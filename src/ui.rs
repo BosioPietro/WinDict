@@ -2,6 +2,7 @@
 //! windows that host a composition visual tree, the outline they share,
 //! text sprites, and the animations they move with.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use windows::core::{Interface, Result, BOOL, HSTRING};
@@ -11,6 +12,9 @@ use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::WinRT::Composition::ICompositorDesktopInterop;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::WindowsAndMessaging::{
+    SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+};
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
@@ -121,6 +125,37 @@ pub fn attach(hwnd: HWND, compositor: &Compositor) -> Result<DesktopWindowTarget
 
 pub fn ts(ms: u64) -> TimeSpan {
     TimeSpan::from(Duration::from_millis(ms))
+}
+
+/// Whether things move into place; if not, they jump there.
+static MOTION: AtomicBool = AtomicBool::new(true);
+
+pub fn set_motion(on: bool) {
+    MOTION.store(on, Ordering::Relaxed);
+}
+
+pub fn motion() -> bool {
+    MOTION.load(Ordering::Relaxed)
+}
+
+/// Whether Windows plays animations (Accessibility > Visual effects).
+pub fn system_motion() -> bool {
+    let mut on = BOOL(1);
+    let read = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some(&mut on as *mut BOOL as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    read.is_err() || on.as_bool()
+}
+
+/// How long a movement of `ms` takes: as short as the compositor allows
+/// when there's to be no motion.
+pub fn span(ms: u64) -> TimeSpan {
+    ts(if motion() { ms } else { 1 })
 }
 
 pub fn v2(x: f32, y: f32) -> Vector2 {
@@ -304,6 +339,16 @@ impl Glide {
         ms: u64,
     ) -> Glide {
         let started = Instant::now();
+        if !motion() {
+            return Glide {
+                to,
+                base: to,
+                past: 0.0,
+                kick: 0.0,
+                ms: 0,
+                started,
+            };
+        }
         let (from, velocity) = match previous.filter(Glide::running) {
             Some(g) => {
                 let t = g.ms_at(started);
@@ -423,7 +468,7 @@ impl Glide {
                 a.InsertKeyFrameWithEasingFunction(progress, at, &anim.linear)?;
             }
         }
-        a.SetDuration(ts(self.duration()))?;
+        a.SetDuration(span(self.duration()))?;
         visual
             .cast::<CompositionObject>()?
             .StartAnimation(&HSTRING::from("Offset"), &a)
@@ -585,7 +630,7 @@ impl ScrollFade {
             // From wherever it is now.
             let a = anim.compositor.CreateColorKeyFrameAnimation()?;
             a.InsertKeyFrameWithEasingFunction(1.0, to, &anim.decelerate)?;
-            a.SetDuration(ts(FADE_MS))?;
+            a.SetDuration(span(FADE_MS))?;
             stop.SetColor(to)?;
             stop.StartAnimation(&HSTRING::from("Color"), &a)?;
         }
@@ -736,8 +781,8 @@ impl Animator {
     ) -> Result<()> {
         let anim = self.compositor.CreateScalarKeyFrameAnimation()?;
         anim.InsertKeyFrameWithEasingFunction(1.0, to, ease)?;
-        anim.SetDuration(ts(ms))?;
-        if delay > 0 {
+        anim.SetDuration(span(ms))?;
+        if delay > 0 && motion() {
             anim.SetDelayTime(ts(delay))?;
         }
         target
@@ -754,7 +799,7 @@ impl Animator {
     ) -> Result<()> {
         let anim = self.compositor.CreateVector2KeyFrameAnimation()?;
         anim.InsertKeyFrameWithEasingFunction(1.0, to, &self.decelerate)?;
-        anim.SetDuration(ts(ms))?;
+        anim.SetDuration(span(ms))?;
         target
             .cast::<CompositionObject>()?
             .StartAnimation(&HSTRING::from(property), &anim)
@@ -771,8 +816,8 @@ impl Animator {
     ) -> Result<()> {
         let anim = self.compositor.CreateVector3KeyFrameAnimation()?;
         anim.InsertKeyFrameWithEasingFunction(1.0, to, ease)?;
-        anim.SetDuration(ts(ms))?;
-        if delay > 0 {
+        anim.SetDuration(span(ms))?;
+        if delay > 0 && motion() {
             anim.SetDelayTime(ts(delay))?;
         }
         target
@@ -810,7 +855,7 @@ impl Animator {
         anim.SetInterpolationColorSpace(CompositionColorSpace::Rgb)?;
         anim.InsertKeyFrame(0.0, from)?;
         anim.InsertKeyFrameWithEasingFunction(1.0, to, &self.fade)?;
-        anim.SetDuration(ts(ms))?;
+        anim.SetDuration(span(ms))?;
         brush.SetColor(to)?;
         brush.StartAnimation(&HSTRING::from("Color"), &anim)
     }
@@ -818,6 +863,9 @@ impl Animator {
     /// Shakes `visual`, which rests at `at`, from side to side: a sign that
     /// what was asked for can't be done. `s` is pixels per DIP.
     pub fn shake(&self, visual: &impl Interface, at: Vector3, s: f32) -> Result<()> {
+        if !motion() {
+            return Ok(());
+        }
         let a = self.compositor.CreateVector3KeyFrameAnimation()?;
         let swings = [
             (0.0, 0.0),
