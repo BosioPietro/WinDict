@@ -49,6 +49,11 @@ const GROUP_W: f32 = CARD_W - 2.0 * GROUP_X;
 const GROUP_RADIUS: f32 = 8.0;
 const ROW_H: f32 = 60.0;
 const ROW_PAD: f32 = 16.0;
+/// The icon before each name, and the space after it.
+const ICON_W: f32 = 20.0;
+const ICON_GAP: f32 = 16.0;
+/// Where a row's name and description start.
+const TEXT_X: f32 = ROW_PAD + ICON_W + ICON_GAP;
 /// Between a setting's name and its description.
 const DETAIL_GAP: f32 = 1.0;
 /// Between a setting's description and its control.
@@ -415,13 +420,21 @@ impl Control {
 }
 
 struct Row {
+    /// A Segoe Fluent Icons glyph shown before the name.
+    icon: &'static str,
     title: &'static str,
     detail: &'static str,
     control: Control,
 }
 
-const fn row(title: &'static str, detail: &'static str, control: Control) -> Row {
+const fn row(
+    icon: &'static str,
+    title: &'static str,
+    detail: &'static str,
+    control: Control,
+) -> Row {
     Row {
+        icon,
         title,
         detail,
         control,
@@ -432,8 +445,9 @@ const SECTIONS: &[(&str, &[Row])] = &[
     (
         "General",
         &[
-            row("Shortcut", SHORTCUT_DETAIL, Control::Shortcut),
+            row("\u{E765}", "Shortcut", SHORTCUT_DETAIL, Control::Shortcut),
             row(
+                "\u{E7E8}",
                 "Start with Windows",
                 "Runs WinDict when you sign in",
                 Control::Switch(Switch::Autostart),
@@ -444,21 +458,25 @@ const SECTIONS: &[(&str, &[Row])] = &[
         "Card",
         &[
             row(
+                "\u{E790}",
                 "Theme",
                 "Card and menu colors",
                 Control::Choice(Choice::Theme),
             ),
             row(
+                "\u{E736}",
                 "Definitions",
                 "Senses shown per part of speech",
                 Control::Counter(Counter::Definitions),
             ),
             row(
+                "\u{E8FD}",
                 "Synonyms",
                 "Similar words under each part of speech",
                 Control::Counter(Counter::Synonyms),
             ),
             row(
+                "\u{E8BD}",
                 "Examples",
                 "Sentences showing each sense in use",
                 Control::Switch(Switch::Examples),
@@ -469,13 +487,15 @@ const SECTIONS: &[(&str, &[Row])] = &[
         "Translation",
         &[
             row(
+                "\u{E8C1}",
                 "Default languages",
                 "Translated from and into when the card can\u{2019}t tell",
                 Control::Translate,
             ),
             row(
+                "\u{E715}",
                 "MyMemory email",
-                "Raises the daily translation limit",
+                "Raises the daily limit",
                 Control::Email,
             ),
         ],
@@ -484,17 +504,19 @@ const SECTIONS: &[(&str, &[Row])] = &[
         "Lookup",
         &[
             row(
+                "\u{E753}",
                 "Online dictionary",
                 "For pronunciations, and words the built-in one lacks",
                 Control::Switch(Switch::Online),
             ),
             row(
+                "\u{E8B3}",
                 "Read selections directly",
                 "Leaves the clipboard alone in apps that allow it",
                 Control::Switch(Switch::Automation),
             ),
             // Its description sums up the languages chosen.
-            row("Languages", "English", Control::Languages),
+            row("\u{E774}", "Languages", "English", Control::Languages),
         ],
     ),
 ];
@@ -1007,10 +1029,7 @@ impl Settings {
             self.place_caret(x)?;
         }
         // A click away from the open box shuts its list.
-        let away = !matches!(
-            hit,
-            Some(Hit::Select(_) | Hit::Pick(_) | Hit::Swap)
-        );
+        let away = !matches!(hit, Some(Hit::Select(_) | Hit::Pick(_) | Hit::Swap));
         if away {
             if let Some(side) = self.picking.take().map(|p| p.side) {
                 self.focus = hit.and_then(Hit::stop).or(Some(Stop::Select(side)));
@@ -1705,7 +1724,9 @@ impl Settings {
             return Ok(());
         };
         let s = self.scale;
-        let h = (view.header_h + view.height(self.open)).min(self.room).ceil();
+        let h = (view.header_h + view.height(self.open))
+            .min(self.room)
+            .ceil();
         let old = self.card.1;
         if h == old {
             return Ok(());
@@ -2633,7 +2654,7 @@ mod tests {
         for (_, rows) in SECTIONS {
             for row in *rows {
                 // Room for the name and description beside each control.
-                let room = GROUP_W - 2.0 * ROW_PAD - row.control.width() - CONTROL_GAP;
+                let room = GROUP_W - ROW_PAD - TEXT_X - row.control.width() - CONTROL_GAP;
                 assert!(room >= 120.0, "{}", row.title);
             }
         }

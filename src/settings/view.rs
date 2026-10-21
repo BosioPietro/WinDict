@@ -680,23 +680,28 @@ impl Settings {
             Control::Choice(_) | Control::Counter(_) | Control::Email | Control::Translate => None,
         };
 
-        let room = GROUP_W - 2.0 * ROW_PAD - spec.control.width() - CONTROL_GAP;
+        let room = GROUP_W - ROW_PAD - TEXT_X - spec.control.width() - CONTROL_GAP;
         let title = Text::new(c, group)?;
         let name = r.layout_line(spec.title, Face::Setting, Ink::Primary, room)?;
         let title_size = title.show(r, &name, s, t)?;
         let detail = Text::new(c, group)?;
         let line = r.layout_line(spec.detail, Face::Small, Ink::Secondary, room)?;
         let detail_size = detail.show(r, &line, s, t)?;
+        let icon = Text::new(c, group)?;
+        let glyph = r.layout_line(spec.icon, Face::LargeButton, Ink::Primary, ICON_W)?;
+        let icon_size = icon.show(r, &glyph, s, t)?;
+        let icon_y = row.y + ((row.h - icon_size.Y) / 2.0).round();
+        icon.visual.SetOffset(v3(px(ROW_PAD), icon_y))?;
         let block = title_size.Y + px(DETAIL_GAP) + detail_size.Y;
         let text_y = row.y + ((row.h - block) / 2.0).round();
-        title.visual.SetOffset(v3(px(ROW_PAD), text_y))?;
+        title.visual.SetOffset(v3(px(TEXT_X), text_y))?;
         if matches!(spec.control, Control::Email) {
             // The info symbol follows the name, wherever that ends.
             let (_, name_w, _) = r.layout_field(spec.title, Ink::Primary, 0)?;
             let info = Text::new(c, group)?;
             let glyph = r.layout_line(INFO_GLYPH, Face::Icon, Ink::Secondary, INFO_W)?;
             let size = info.show(r, &glyph, s, t)?;
-            let x = px(ROW_PAD) + (name_w * s).round() + px(INFO_GAP);
+            let x = px(TEXT_X) + (name_w * s).round() + px(INFO_GAP);
             let y = text_y + ((title_size.Y - size.Y) / 2.0).round();
             info.visual.SetOffset(v3(x, y))?;
             let at = Rect {
@@ -707,7 +712,7 @@ impl Settings {
             };
             parts.hits.push((Hit::Info, at.offset(group_at)));
         }
-        let detail_at = v3(px(ROW_PAD), text_y + title_size.Y + px(DETAIL_GAP));
+        let detail_at = v3(px(TEXT_X), text_y + title_size.Y + px(DETAIL_GAP));
         detail.visual.SetOffset(detail_at)?;
         // A description that changes cross-fades from the one before.
         let note = match spec.control {
@@ -858,17 +863,23 @@ impl Settings {
             self.scale,
         );
         let px = |dip: f32| (dip * s).round();
-        let room = GROUP_W - 2.0 * ROW_PAD;
+        let room = GROUP_W - ROW_PAD - TEXT_X;
         let title = Text::new(c, group)?;
         let name = r.layout_line(spec.title, Face::Setting, Ink::Primary, room)?;
         let title_size = title.show(r, &name, s, t)?;
         let top = row.y + px(TRANSLATE_PAD);
-        title.visual.SetOffset(v3(px(ROW_PAD), top))?;
+        title.visual.SetOffset(v3(px(TEXT_X), top))?;
         let detail = Text::new(c, group)?;
         let line = r.layout_line(spec.detail, Face::Small, Ink::Secondary, room)?;
-        detail.show(r, &line, s, t)?;
-        let detail_at = v3(px(ROW_PAD), top + title_size.Y + px(DETAIL_GAP));
+        let detail_size = detail.show(r, &line, s, t)?;
+        let detail_at = v3(px(TEXT_X), top + title_size.Y + px(DETAIL_GAP));
         detail.visual.SetOffset(detail_at)?;
+        let icon = Text::new(c, group)?;
+        let glyph = r.layout_line(spec.icon, Face::LargeButton, Ink::Primary, ICON_W)?;
+        let icon_size = icon.show(r, &glyph, s, t)?;
+        let block = title_size.Y + px(DETAIL_GAP) + detail_size.Y;
+        let icon_y = top + ((block - icon_size.Y) / 2.0).round();
+        icon.visual.SetOffset(v3(px(ROW_PAD), icon_y))?;
 
         let at = v3(px(ROW_PAD), row.y + px(TRANSLATE_HEAD));
         // Under the boxes, so the arrows show through it.
