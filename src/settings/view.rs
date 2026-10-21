@@ -302,7 +302,8 @@ impl Settings {
         body.SetOffset(v3(0.0, header_h))?;
         // As tall as the card allows; `fit` sizes it again when that changes.
         body.SetSize(v2(card_w, (self.card.1 - header_h).max(0.0)))?;
-        content.Children()?.InsertAtTop(&body)?;
+        let fade = ScrollFade::new(c, &content, &body)?;
+        fade.set_scale(c, s)?;
         let scroller = container(c, &body, v3(0.0, 0.0))?;
 
         let (group_x, group_w, row_h) = (px(GROUP_X), card_w - 2.0 * px(GROUP_X), px(ROW_H));
@@ -477,15 +478,7 @@ impl Settings {
         ring.Shapes()?.Append(&shape)?;
         scroller.Children()?.InsertAtTop(&ring)?;
 
-        // The divider under the header and the thumb, shown when it scrolls.
-        let line = Rect {
-            x: 0.0,
-            y: header_h - 1.0,
-            w: card_w,
-            h: 1.0,
-        };
-        let (divider, _) = rounded(c, &content, line, 0.0, t.separator())?;
-        divider.SetOpacity(0.0)?;
+        // The thumb, shown when it scrolls.
         let thumb = c.CreateSpriteVisual()?;
         thumb.SetBrush(&c.CreateColorBrushWithColor(t.thumb())?)?;
         let thumb_clip = c.CreateRoundedRectangleGeometry()?;
@@ -501,8 +494,8 @@ impl Settings {
             close_at,
             close_hover,
             body,
+            fade,
             scroller,
-            divider,
             thumb,
             thumb_clip,
             tip,

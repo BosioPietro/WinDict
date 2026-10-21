@@ -3,8 +3,6 @@
 //! backdrop brush; every animation runs on the system compositor, so motion
 //! stays smooth no matter what our UI thread is doing.
 
-use std::time::Instant;
-
 use windows::core::{Interface, Result, HSTRING, PWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
@@ -18,8 +16,8 @@ use crate::render::{Body, Face, Ink, Link, Mark, Renderer, Target, WORD_SIZE};
 use crate::searchbox::SearchBox;
 use crate::theme::Theme;
 use crate::ui::{
-    self, attach, blink, cubic_bezier, monitor_at, scale, text_sprite, ts, v2, v3, Animator, Frame,
-    MARGIN, RESIZE_MS, SCROLL_EASE,
+    self, attach, blink, monitor_at, scale, text_sprite, ts, v2, v3, Animator, Bursts, Frame, Glide, Push,
+    ScrollFade, MARGIN, RESIZE_MS,
 };
 use crate::win::Window;
 
@@ -56,8 +54,9 @@ const FOCUS_STROKE: f32 = 2.0;
 const FOCUS_RADIUS: f32 = 4.0;
 /// How far, in pixels, rings can reach past the definition's edges.
 const RING_ROOM: f32 = 16.0;
-/// Room kept above and below a link Tab scrolls into view.
-const FOCUS_MARGIN: f32 = 12.0;
+/// Room kept above and below a link Tab scrolls into view, clear of the
+/// body's fades.
+const FOCUS_MARGIN: f32 = 20.0;
 
 // Durations, in ms.
 pub const SHOW_MS: u64 = 340;
@@ -65,11 +64,6 @@ const FADE_IN_MS: u64 = 160;
 const SCROLL_MS: u64 = 140;
 /// How long what the card showed takes to fade out as the search box comes in.
 const MAKE_WAY_MS: u64 = 120;
-
-struct ScrollAnim {
-    from: f32,
-    started: Instant,
-}
 
 /// Where the window goes for a card next to `anchor` inside the monitor's
 /// `work` area, both in screen pixels, at `scale` pixels per DIP. Returns the
@@ -183,7 +177,8 @@ pub struct Popup {
     header_key: (String, Option<String>, u32),
     body_h: f32,
     scroll: f32,
-    scroll_anim: Option<ScrollAnim>,
+    scroll_anim: Option<Glide>,
+    wheel_bursts: Bursts,
     pub visible: bool,
     /// Last, so it goes after everything shown on it.
     _window: Window,
@@ -223,6 +218,8 @@ impl Header {
 /// rendered definition inside it.
 struct Content {
     host: ContainerVisual,
+    /// Shows `host`, faded at the ends it scrolls towards.
+    fade: ScrollFade,
     visual: SpriteVisual,
     brush: CompositionSurfaceBrush,
     links: Vec<Link>,
@@ -240,7 +237,6 @@ impl Content {
     fn new(c: &Compositor, card: &ContainerVisual) -> Result<Content> {
         let host = c.CreateContainerVisual()?;
         host.SetClip(&c.CreateInsetClip()?)?;
-        card.Children()?.InsertAtTop(&host)?;
         let (visual, brush) = text_sprite(c)?;
         host.Children()?.InsertAtTop(&visual)?;
         // Reaches past the definition's edges, which would clip the rings
@@ -255,8 +251,10 @@ impl Content {
         caret.SetBrush(&caret_brush)?;
         caret.SetOpacity(0.0)?;
         visual.Children()?.InsertAtTop(&caret)?;
+        let fade = ScrollFade::new(c, card, &host)?;
         Ok(Content {
             host,
+            fade,
             visual,
             brush,
             links: Vec::new(),
@@ -635,11 +633,8 @@ impl Loader {
     }
 }
 
-/// The divider under the header and the scrollbar thumb, shown only when
-/// the content scrolls.
+/// The scrollbar thumb, shown only when the content scrolls.
 struct ScrollChrome {
-    divider: SpriteVisual,
-    divider_brush: CompositionColorBrush,
     thumb: SpriteVisual,
     thumb_clip: CompositionRoundedRectangleGeometry,
     thumb_brush: CompositionColorBrush,
@@ -647,12 +642,6 @@ struct ScrollChrome {
 
 impl ScrollChrome {
     fn new(c: &Compositor, card: &ContainerVisual) -> Result<ScrollChrome> {
-        let divider = c.CreateSpriteVisual()?;
-        let divider_brush = c.CreateColorBrush()?;
-        divider.SetBrush(&divider_brush)?;
-        divider.SetOpacity(0.0)?;
-        card.Children()?.InsertAtTop(&divider)?;
-
         let thumb = c.CreateSpriteVisual()?;
         let thumb_clip = c.CreateRoundedRectangleGeometry()?;
         thumb.SetClip(&c.CreateGeometricClipWithGeometry(&thumb_clip)?)?;
@@ -662,8 +651,6 @@ impl ScrollChrome {
         card.Children()?.InsertAtTop(&thumb)?;
 
         Ok(ScrollChrome {
-            divider,
-            divider_brush,
             thumb,
             thumb_clip,
             thumb_brush,
@@ -671,7 +658,6 @@ impl ScrollChrome {
     }
 
     fn apply_theme(&self, t: &Theme) -> Result<()> {
-        self.divider_brush.SetColor(t.scroll_divider())?;
         self.thumb_brush.SetColor(t.thumb())
     }
 }
@@ -748,6 +734,7 @@ impl Popup {
             body_h: 0.0,
             scroll: 0.0,
             scroll_anim: None,
+            wheel_bursts: Bursts::default(),
             visible: false,
             _window: window,
         })
@@ -1173,47 +1160,47 @@ impl Popup {
         if max <= 0.0 {
             return Ok(());
         }
-        let step = -(wheel_delta as f32 / 120.0) * 56.0 * self.scale;
-        self.scroll_to((self.scroll + step).clamp(0.0, max))
+        let mut step = -(wheel_delta as f32 / 120.0) * 56.0 * self.scale;
+        // A touchpad's scroll is smoothed already, so it follows at once.
+        let precise = self.wheel_bursts.precise(wheel_delta);
+        if precise {
+            step = self.wheel_bursts.precise_step(step, self.scale);
+        }
+        if !self.wheel_bursts.take(self.scroll + step, max) {
+            return Ok(());
+        }
+        // Past the end, it gives a little, and springs back.
+        let visible = self.visible_scroll();
+        let (to, push) = ui::stretch(visible, self.scroll, step, max, self.scale);
+        let ms = if precise {
+            self.scroll_anim.map_or(0, |glide| glide.easing_left())
+        } else {
+            SCROLL_MS
+        };
+        self.scroll_to(to, push, ms)
     }
 
-    /// Scrolls the body smoothly to `to`, in pixels from the top.
-    fn scroll_to(&mut self, to: f32) -> Result<()> {
+    /// Scrolls the body smoothly to `to`, in pixels from the top, pushed
+    /// past it, over `ms`.
+    fn scroll_to(&mut self, to: f32, push: Push, ms: u64) -> Result<()> {
         // Start from where the content is on screen right now, not from the
         // previous target: restarting from a stale value is what made
         // scrolling feel like it lagged behind the wheel.
-        let from = self.visible_scroll();
-        self.scroll = to;
-        self.scroll_anim = Some(ScrollAnim {
-            from,
-            started: Instant::now(),
-        });
-
+        let (at, max) = (self.scroll, self.max_scroll());
+        self.scroll = to.round();
+        let most = ui::stretch_limit(self.scale);
+        let glide = Glide::new(self.scroll_anim, at, self.scroll, push, max, most, ms);
+        self.scroll_anim = Some(glide);
         let x = PAD_X * self.scale;
-        let anim = self.anim.compositor.CreateVector3KeyFrameAnimation()?;
-        anim.InsertKeyFrame(0.0, v3(x, -from))?;
-        anim.InsertKeyFrameWithEasingFunction(
-            1.0,
-            v3(x, -self.scroll.round()),
-            &self.anim.scroll_ease,
-        )?;
-        anim.SetDuration(ts(SCROLL_MS))?;
-        self.content
-            .visual
-            .StartAnimation(&HSTRING::from("Offset"), &anim)?;
+        glide.play(&self.anim, &self.content.visual, |scroll| v3(x, -scroll))?;
         self.update_scroll_chrome(true)
     }
 
     /// The scroll position currently on screen, following the running animation.
     fn visible_scroll(&self) -> f32 {
-        let Some(anim) = &self.scroll_anim else {
-            return self.scroll;
-        };
-        let t = anim.started.elapsed().as_secs_f32() * 1000.0 / SCROLL_MS as f32;
-        if t >= 1.0 {
-            return self.scroll;
-        }
-        anim.from + (self.scroll - anim.from) * cubic_bezier(SCROLL_EASE, t)
+        self.scroll_anim
+            .filter(Glide::running)
+            .map_or(self.scroll, |glide| glide.at())
     }
 
     /// The link under a point in window coordinates, if any.
@@ -1348,7 +1335,7 @@ impl Popup {
         } else {
             return Ok(());
         };
-        self.scroll_to(to.clamp(0.0, max))
+        self.scroll_to(to.clamp(0.0, max), Push::None, SCROLL_MS)
     }
 
     /// The card's bounds in screen pixels.
@@ -1507,6 +1494,8 @@ impl Popup {
         self.content.caret_brush.SetColor(t.accent)?;
         self.back.apply_theme(&self.renderer, &t, self.scale)?;
         self.translate.apply_theme(&self.renderer, &t, self.scale)?;
+        let c = &self.anim.compositor;
+        self.content.fade.set_scale(c, self.scale)?;
         self.scroll_chrome.apply_theme(&t)
     }
 
@@ -1530,7 +1519,6 @@ impl Popup {
             self.content.host.SetSize(host_size)?;
             self.set_region(card_h, card_h);
         }
-        self.scroll_chrome.divider.SetSize(v2(w, 1.0))?;
         Ok(())
     }
 
@@ -1578,16 +1566,7 @@ impl Popup {
         let max = self.max_scroll();
         let anim = &self.anim;
         let chrome = &self.scroll_chrome;
-        chrome.divider.SetOffset(v3(0.0, self.header_h - 1.0))?;
-        let divider_opacity = if self.scroll > 0.5 { 1.0 } else { 0.0 };
-        anim.scalar(
-            &chrome.divider,
-            "Opacity",
-            divider_opacity,
-            150,
-            0,
-            &anim.decelerate,
-        )?;
+        self.content.fade.show(anim, self.scroll, max, s, animate)?;
 
         if max <= 0.0 {
             Animator::stop(&chrome.thumb, &["Opacity"]);
@@ -1600,13 +1579,10 @@ impl Popup {
         let (_, thumb) = ui::thumb_span(viewport, self.body_h, self.scroll, max, s);
         let y = thumb_y(self.scroll);
         let x = ui::size_thumb(&chrome.thumb, &chrome.thumb_clip, CARD_W * s, thumb, s)?;
-        if animate {
-            // Track the content exactly, starting from where the thumb is now.
-            let a = anim.compositor.CreateVector3KeyFrameAnimation()?;
-            a.InsertKeyFrame(0.0, v3(x, thumb_y(self.visible_scroll())))?;
-            a.InsertKeyFrameWithEasingFunction(1.0, v3(x, y), &anim.scroll_ease)?;
-            a.SetDuration(ts(SCROLL_MS))?;
-            chrome.thumb.StartAnimation(&HSTRING::from("Offset"), &a)?;
+        let glide = self.scroll_anim.filter(|glide| animate && glide.running());
+        if let Some(glide) = glide {
+            // Track the content exactly, from where the thumb is now.
+            glide.play(anim, &chrome.thumb, |scroll| v3(x, thumb_y(scroll)))?;
         } else {
             Animator::stop(&chrome.thumb, &["Offset"]);
             chrome.thumb.SetOffset(v3(x, y))?;

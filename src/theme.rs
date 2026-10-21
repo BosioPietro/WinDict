@@ -115,15 +115,6 @@ impl Theme {
         }
     }
 
-    /// The line under a header, once what's below it has scrolled.
-    pub fn scroll_divider(&self) -> Color {
-        if self.dark {
-            argb(0x1F, 0xFF, 0xFF, 0xFF)
-        } else {
-            argb(0x14, 0x00, 0x00, 0x00)
-        }
-    }
-
     /// The scrollbar's thumb.
     pub fn thumb(&self) -> Color {
         if self.dark {

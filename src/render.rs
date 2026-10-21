@@ -76,7 +76,22 @@ enum Item {
         fill: Option<Paint>,
         stroke: Option<Paint>,
     },
+    /// What's drawn from here to the [`Item::Unfade`] fades out towards
+    /// the top and bottom of the band `y` to `y + height`, where `top` and
+    /// `bottom` say there's more past it.
+    Fade {
+        y: f32,
+        height: f32,
+        top: bool,
+        bottom: bool,
+    },
+    Unfade,
 }
+
+/// How far a list's rows fade out towards an end more of them are past,
+/// and how much of them shows at that end.
+const LIST_FADE: f32 = 16.0;
+const LIST_FADE_EDGE: f32 = 0.25;
 
 /// The colors of an [`Item::Shape`].
 #[derive(Clone, Copy)]
@@ -179,9 +194,12 @@ impl Layout {
             .iter()
             .find_map(|item| match item {
                 Item::Text { layout, y, .. } => Some(y + first_line_height(layout)),
-                Item::Rule { .. } | Item::Key { .. } | Item::Flag { .. } | Item::Shape { .. } => {
-                    None
-                }
+                Item::Rule { .. }
+                | Item::Key { .. }
+                | Item::Flag { .. }
+                | Item::Shape { .. }
+                | Item::Fade { .. }
+                | Item::Unfade => None,
             })
             .unwrap_or(0.0)
     }
@@ -1345,6 +1363,14 @@ impl Renderer {
         let scrolls = total > PICKER_ROWS;
         // Clear of the scrollbar.
         let right = row_x + row_w - SELECT_PAD - if scrolls { 6.0 } else { 0.0 };
+        if scrolls {
+            out.items.push(Item::Fade {
+                y: top + LIST_PAD,
+                height: rows.len() as f32 * ROW_H,
+                top: first > 0,
+                bottom: first + PICKER_ROWS < total,
+            });
+        }
         for (i, code) in rows.iter().enumerate() {
             let y = top + LIST_PAD + i as f32 * ROW_H;
             if picker.highlight == Some(first + i) {
@@ -1418,12 +1444,14 @@ impl Renderer {
             });
         }
         if scrolls {
-            let track = rows.len() as f32 * ROW_H - 4.0;
+            out.items.push(Item::Unfade);
+            // Clear of the list's corners, where its edge curves.
+            let track = height - 2.0 * LIST_RADIUS;
             let thumb_h = (track * PICKER_ROWS as f32 / total as f32).max(16.0);
             let thumb_y = (track - thumb_h) * first as f32 / (total - PICKER_ROWS) as f32;
             out.items.push(Item::Shape {
                 x: width - LIST_PAD - 5.0,
-                y: top + LIST_PAD + 2.0 + thumb_y.round(),
+                y: top + LIST_RADIUS + thumb_y.round(),
                 width: 3.0,
                 height: thumb_h.round(),
                 radius: 1.5,
@@ -1591,6 +1619,7 @@ impl Renderer {
             let divider = brush(theme.divider())?;
             let key = brush(theme.key())?;
             let flag_edge = brush(theme.flag_edge())?;
+            let mut fading = None;
             for item in &layout.items {
                 match item {
                     Item::Text {
@@ -1741,6 +1770,68 @@ impl Renderer {
                         if let Some(p) = stroke {
                             dc.DrawRoundedRectangle(&shape, &paint(*p)?, stroke_w, None);
                         }
+                    }
+                    Item::Fade {
+                        y,
+                        height,
+                        top,
+                        bottom,
+                    } => {
+                        let at = |position: f32, faded: bool| D2D1_GRADIENT_STOP {
+                            position,
+                            color: D2D1_COLOR_F {
+                                r: 0.0,
+                                g: 0.0,
+                                b: 0.0,
+                                a: if faded { LIST_FADE_EDGE } else { 1.0 },
+                            },
+                        };
+                        let length = (LIST_FADE / height).min(0.5);
+                        let stops = [
+                            at(0.0, *top),
+                            at(length, false),
+                            at(1.0 - length, false),
+                            at(1.0, *bottom),
+                        ];
+                        let target: &ID2D1RenderTarget = dc;
+                        let stops = target.CreateGradientStopCollection(
+                            &stops,
+                            D2D1_GAMMA_2_2,
+                            D2D1_EXTEND_MODE_CLAMP,
+                        )?;
+                        let mask = dc.CreateLinearGradientBrush(
+                            &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                                startPoint: Vector2 { X: 0.0, Y: *y },
+                                endPoint: Vector2 {
+                                    X: 0.0,
+                                    Y: y + height,
+                                },
+                            },
+                            None,
+                            &stops,
+                        )?;
+                        let mut layer = D2D1_LAYER_PARAMETERS1 {
+                            contentBounds: D2D_RECT_F {
+                                left: -f32::MAX,
+                                top: -f32::MAX,
+                                right: f32::MAX,
+                                bottom: f32::MAX,
+                            },
+                            geometricMask: std::mem::ManuallyDrop::new(None),
+                            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                            maskTransform: Matrix3x2::identity(),
+                            opacity: 1.0,
+                            opacityBrush: std::mem::ManuallyDrop::new(Some(mask.cast()?)),
+                            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+                        };
+                        dc.PushLayer(&layer, None);
+                        std::mem::ManuallyDrop::drop(&mut layer.opacityBrush);
+                        // Kept until the layer's popped.
+                        fading = Some(mask);
+                    }
+                    Item::Unfade => {
+                        dc.PopLayer();
+                        drop(fading.take());
                     }
                 }
             }

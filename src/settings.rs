@@ -11,8 +11,6 @@
 
 mod view;
 
-use std::time::Instant;
-
 use windows::core::{Result, HSTRING};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
@@ -32,7 +30,7 @@ use crate::render::{Align, Face, Ink, Layout, Picker, Renderer, Side, Target, PI
 use crate::selection;
 use crate::theme::Theme;
 use crate::ui::{
-    self, cubic_bezier, scale, ts, v2, v3, Animator, Frame, Text, MARGIN, SCROLL_EASE,
+    self, scale, ts, v2, v3, Animator, Bursts, Frame, Glide, Push, ScrollFade, Text, MARGIN,
 };
 use crate::win::Window;
 
@@ -124,8 +122,9 @@ const EDIT_W: f32 = 16.0;
 const CAPS_GAP: f32 = 8.0;
 const FOCUS_OUTSET: f32 = 3.0;
 const FOCUS_STROKE: f32 = 2.0;
-/// Room kept above and below a control Tab scrolls into view.
-const FOCUS_MARGIN: f32 = 12.0;
+/// Room kept above and below a control Tab scrolls into view, clear of the
+/// fades at the ends of what scrolls.
+const FOCUS_MARGIN: f32 = 20.0;
 /// The ring round the shortcut while it's being recorded.
 const RECORD_INSET: f32 = 3.0;
 const RECORD_RADIUS: f32 = 6.0;
@@ -696,8 +695,9 @@ struct View {
     close_hover: SpriteVisual,
     /// Clips the scrolling part below the header.
     body: ContainerVisual,
+    /// Shows `body`, faded at the ends it scrolls towards.
+    fade: ScrollFade,
     scroller: ContainerVisual,
-    divider: SpriteVisual,
     thumb: SpriteVisual,
     thumb_clip: CompositionRoundedRectangleGeometry,
     tip: TipView,
@@ -814,8 +814,9 @@ pub struct Settings {
     /// Whether the window is the active one, for the caret to show.
     active: bool,
     scroll: f32,
-    /// Where the running scroll started, and when.
-    scroll_anim: Option<(f32, Instant)>,
+    /// The scroll last started, which may still be running.
+    scroll_anim: Option<Glide>,
+    wheel_bursts: Bursts,
     pub visible: bool,
     /// Last, so it goes after everything shown on it.
     /// The tallest the card gets, in pixels. The window is made for that,
@@ -869,6 +870,7 @@ impl Settings {
             active: true,
             scroll: 0.0,
             scroll_anim: None,
+            wheel_bursts: Bursts::default(),
             visible: false,
             room: 0.0,
             _window: window,
@@ -1165,8 +1167,28 @@ impl Settings {
                 return self.relayout();
             }
         }
-        let step = -(delta as f32 / 120.0) * WHEEL_STEP * self.scale;
-        self.scroll_to(self.scroll + step)
+        let mut step = -(delta as f32 / 120.0) * WHEEL_STEP * self.scale;
+        // Past the end, it gives a little, and springs back.
+        let max = self.max_scroll();
+        if max <= 0.0 {
+            return Ok(());
+        }
+        // A touchpad's scroll is smoothed already, so it follows at once.
+        let precise = self.wheel_bursts.precise(delta);
+        if precise {
+            step = self.wheel_bursts.precise_step(step, self.scale);
+        }
+        if !self.wheel_bursts.take(self.scroll + step, max) {
+            return Ok(());
+        }
+        let visible = self.visible_scroll();
+        let (to, push) = ui::stretch(visible, self.scroll, step, max, self.scale);
+        let ms = if precise {
+            self.scroll_anim.map_or(0, |glide| glide.easing_left())
+        } else {
+            SCROLL_MS
+        };
+        self.glide_to(to, push, ms)
     }
 
     /// The shortcut just recorded couldn't be used: it goes back to
@@ -1913,47 +1935,34 @@ impl Settings {
     /// The scroll position on screen right now, following the running
     /// animation.
     fn visible_scroll(&self) -> f32 {
-        let Some((from, started)) = self.scroll_anim else {
-            return self.scroll;
-        };
-        let t = started.elapsed().as_secs_f32() * 1000.0 / SCROLL_MS as f32;
-        if t >= 1.0 {
-            return self.scroll;
-        }
-        from + (self.scroll - from) * cubic_bezier(SCROLL_EASE, t)
+        self.scroll_anim
+            .filter(Glide::running)
+            .map_or(self.scroll, |glide| glide.at())
     }
 
-    /// Scrolls to `to`, starting from where the content is on screen now,
-    /// not from the last target, which would lag behind the wheel.
+    /// Scrolls to `to`.
     fn scroll_to(&mut self, to: f32) -> Result<()> {
-        let to = to.clamp(0.0, self.max_scroll()).round();
-        if to == self.scroll {
+        self.glide_to(to.clamp(0.0, self.max_scroll()), Push::None, SCROLL_MS)
+    }
+
+    /// Scrolls to `to`, pushed past it, over `ms`, starting from where the
+    /// content is on screen now, not from the last target, which would lag
+    /// behind the wheel.
+    fn glide_to(&mut self, to: f32, push: Push, ms: u64) -> Result<()> {
+        let to = to.round();
+        if to == self.scroll && push == Push::None {
             return Ok(());
         }
-        let from = self.visible_scroll();
+        let (max, most) = (self.max_scroll(), ui::stretch_limit(self.scale));
+        let glide = Glide::new(self.scroll_anim, self.scroll, to, push, max, most, ms);
         self.scroll = to;
-        self.scroll_anim = Some((from, Instant::now()));
+        self.scroll_anim = Some(glide);
         self.show_tip(false)?;
         if let Some(view) = &self.view {
-            self.glide(&view.scroller, v3(0.0, -from), v3(0.0, -to))?;
+            glide.play(&self.anim, &view.scroller, |scroll| v3(0.0, -scroll))?;
         }
-        self.show_scroll(true)
-    }
-
-    /// Moves `visual` from `from` to `to` the way scrolling does.
-    fn glide(
-        &self,
-        visual: &impl windows::core::Interface,
-        from: Vector3,
-        to: Vector3,
-    ) -> Result<()> {
-        let a = self.anim.compositor.CreateVector3KeyFrameAnimation()?;
-        a.InsertKeyFrame(0.0, from)?;
-        a.InsertKeyFrameWithEasingFunction(1.0, to, &self.anim.scroll_ease)?;
-        a.SetDuration(ts(SCROLL_MS))?;
-        visual
-            .cast::<CompositionObject>()?
-            .StartAnimation(&HSTRING::from("Offset"), &a)
+        // Content that's there at once has its thumb there at once too.
+        self.show_scroll(glide.running())
     }
 
     /// Scrolls just enough to show `rect`, in the scroller.
@@ -1973,15 +1982,14 @@ impl Settings {
         }
     }
 
-    /// The divider under the header, once scrolled, and the scrollbar thumb.
+    /// The fades at the ends of what scrolls, and the scrollbar thumb.
     fn show_scroll(&self, animate: bool) -> Result<()> {
         let Some(view) = &self.view else {
             return Ok(());
         };
         let (anim, s) = (&self.anim, self.scale);
-        let divider = if self.scroll > 0.5 { 1.0 } else { 0.0 };
-        anim.scalar(&view.divider, "Opacity", divider, 150, 0, &anim.decelerate)?;
         let max = self.max_scroll();
+        view.fade.show(anim, self.scroll, max, s, animate)?;
         if max <= 0.0 {
             Animator::stop(&view.thumb, &["Opacity"]);
             return view.thumb.SetOpacity(0.0);
@@ -1991,12 +1999,12 @@ impl Settings {
         let (top, thumb) = ui::thumb_span(viewport, content_h, self.scroll, max, s);
         let x = ui::size_thumb(&view.thumb, &view.thumb_clip, self.card.0, thumb, s)?;
         let to = v3(x, view.header_h + top);
-        let started = self
-            .scroll_anim
-            .filter(|(_, at)| at.elapsed().as_millis() < SCROLL_MS as u128);
-        if let (true, Some((from, _))) = (animate, started) {
-            let (from_top, _) = ui::thumb_span(viewport, content_h, from, max, s);
-            self.glide(&view.thumb, v3(x, view.header_h + from_top), to)?;
+        let started = self.scroll_anim.filter(Glide::running);
+        if let (true, Some(glide)) = (animate, started) {
+            glide.play(anim, &view.thumb, |scroll| {
+                let (top, _) = ui::thumb_span(viewport, content_h, scroll, max, s);
+                v3(x, view.header_h + top)
+            })?;
         } else if animate {
             anim.vector3(&view.thumb, "Offset", to, SCROLL_MS, 0, &anim.decelerate)?;
         } else {
