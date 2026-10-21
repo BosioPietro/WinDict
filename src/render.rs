@@ -1044,7 +1044,7 @@ impl Renderer {
     ) -> Result<()> {
         // Room for the languages' rings, which reach above them.
         out.y += 4.0;
-        self.layout_direction(out, card, width)?;
+        self.layout_direction(out, (card.from, card.to), card.picker.as_ref(), width)?;
         if let Some(picker) = &card.picker {
             let current = match picker.side {
                 Side::From => card.from,
@@ -1102,12 +1102,44 @@ impl Renderer {
         Ok(())
     }
 
+    /// The boxes of a translation's languages, with the list under the one
+    /// being picked, as the settings show them.
+    pub fn layout_languages(
+        &self,
+        from: &str,
+        to: &str,
+        picker: Option<&Picker>,
+        width: f32,
+    ) -> Result<Layout> {
+        let mut out = Stack::default();
+        self.layout_direction(&mut out, (from, to), picker, width)?;
+        if let Some(picker) = picker {
+            let current = match picker.side {
+                Side::From => from,
+                Side::To => to,
+            };
+            self.layout_picker(&mut out, picker, current, width)?;
+        }
+        Ok(Layout {
+            items: out.items,
+            width,
+            height: out.y,
+            links: out.links,
+        })
+    }
+
     /// A box for each language, which lists the others to pick from, and
     /// the arrows between them, which swap them.
-    fn layout_direction(&self, out: &mut Stack, card: &TranslationCard, width: f32) -> Result<()> {
+    fn layout_direction(
+        &self,
+        out: &mut Stack,
+        (from, to): (&str, &str),
+        picker: Option<&Picker>,
+        width: f32,
+    ) -> Result<()> {
         let box_w = ((width - SWAP_W - 2.0 * SWAP_GAP) / 2.0).floor();
-        let open = |side| card.picker.as_ref().filter(|p| p.side == side);
-        self.layout_select(out, 0.0, box_w, Side::From, card.from, open(Side::From))?;
+        let open = |side| picker.filter(|p| p.side == side);
+        self.layout_select(out, 0.0, box_w, Side::From, from, open(Side::From))?;
         let x = box_w + SWAP_GAP;
         let icon = self.text(SWAP_ICON, &self.formats.button, SWAP_W)?;
         let (_, icon_h, _) = metrics(&icon);
@@ -1125,7 +1157,7 @@ impl Renderer {
             height: SELECT_H,
             target: Target::Swap,
         });
-        self.layout_select(out, width - box_w, box_w, Side::To, card.to, open(Side::To))?;
+        self.layout_select(out, width - box_w, box_w, Side::To, to, open(Side::To))?;
         out.y += SELECT_H;
         Ok(())
     }

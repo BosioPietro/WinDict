@@ -1,7 +1,7 @@
 //! Ties everything together on the UI thread: hotkey → selection → lookup → card.
 
 pub(crate) mod edit;
-mod picking;
+pub(crate) mod picking;
 mod procs;
 
 use std::cell::{Cell, RefCell};
@@ -2123,8 +2123,9 @@ impl App {
             }
             Change::UiAutomation(on) => self.config.use_ui_automation = on,
             // These don't change any answer: there's nothing to forget.
-            Change::TranslateFrom(code) => return self.save_setting(|c| c.translate_from = code),
-            Change::TranslateTo(code) => return self.save_setting(|c| c.translate_to = code),
+            Change::TranslateLanguages(from, to) => {
+                return self.save_setting(|c| (c.translate_from, c.translate_to) = (from, to));
+            }
             Change::MyMemoryEmail(email) => {
                 return self.save_setting(|c| c.mymemory_email = email);
             }

@@ -47,7 +47,8 @@ impl Settings {
             return Ok(());
         };
         let s = self.scale;
-        let room = (work.bottom - work.top) as f32 - 2.0 * (SCREEN_GAP * s).round();
+        let room = ((work.bottom - work.top) as f32 - 2.0 * (SCREEN_GAP * s).round())
+            .min((MAX_CARD_H * s).round());
         let w = (CARD_W * s).round();
         let h = (view.header_h + view.height(self.open)).min(room).ceil();
         self.card = (w, h);
@@ -184,6 +185,9 @@ impl Settings {
         let scroller = container(c, &body, v3(0.0, 0.0))?;
 
         let (group_x, group_w, row_h) = (px(GROUP_X), card_w - 2.0 * px(GROUP_X), px(ROW_H));
+        let languages_layout = self.layout_languages()?;
+        let translate_h =
+            px(TRANSLATE_HEAD) + (languages_layout.height * s).ceil() + px(TRANSLATE_FOOT);
         let mut parts = Parts::default();
         let mut list = None;
         let mut y = 0.0;
@@ -198,7 +202,14 @@ impl Settings {
             y += label_size.Y + px(LABEL_GAP);
 
             let group_at = v3(group_x, y);
-            let group_h = rows.len() as f32 * row_h;
+            let heights: Vec<f32> = rows
+                .iter()
+                .map(|row| match row.control {
+                    Control::Translate => translate_h,
+                    _ => row_h,
+                })
+                .collect();
+            let group_h: f32 = heights.iter().sum();
             // The group with the languages row has room for the list under
             // it, which the clip and outline show as it opens.
             let listed = rows
@@ -225,14 +236,17 @@ impl Settings {
             clip.SetCornerRadius(v2(px(GROUP_RADIUS), px(GROUP_RADIUS)))?;
             group.SetClip(&c.CreateGeometricClipWithGeometry(&clip)?)?;
             rounded(c, &group, open, 0.0, t.group())?;
+            let mut row_y = 0.0;
             for (j, spec) in rows.iter().enumerate() {
                 let row = Rect {
                     x: 0.0,
-                    y: j as f32 * row_h,
+                    y: row_y,
                     w: group_w,
-                    h: row_h,
+                    h: heights[j],
                 };
-                self.build_row(&mut parts, &group, group_at, spec, row, j > 0)?;
+                row_y += heights[j];
+                let divided = j > 0;
+                self.build_row(&mut parts, &group, group_at, spec, row, divided)?;
             }
             let built = match listed {
                 true => Some(self.build_list(&mut parts, &group, group_at, group_h, group_w)?),
@@ -358,6 +372,7 @@ impl Settings {
                 .collect::<Option<_>>()
                 .ok_or_else(missing)?,
             field: parts.field.ok_or_else(missing)?,
+            translate_at: parts.translate.ok_or_else(missing)?,
             hits: parts.hits,
             stops: parts.stops,
             ring,
@@ -497,6 +512,9 @@ impl Settings {
             };
             rounded(c, group, line, 0.0, t.separator())?;
         }
+        if matches!(spec.control, Control::Translate) {
+            return self.build_translate(parts, group, group_at, spec, row);
+        }
         // Rows that are clicked as a whole light up under the pointer.
         let hover = match spec.control {
             Control::Shortcut | Control::Switch(_) | Control::Languages => {
@@ -504,7 +522,7 @@ impl Settings {
                 hover.SetOpacity(0.0)?;
                 Some(hover)
             }
-            Control::Choice(_) | Control::Counter(_) | Control::Email => None,
+            Control::Choice(_) | Control::Counter(_) | Control::Email | Control::Translate => None,
         };
 
         let room = GROUP_W - 2.0 * ROW_PAD - spec.control.width() - CONTROL_GAP;
@@ -632,7 +650,7 @@ impl Settings {
                 });
             }
             Control::Counter(counter) => {
-                let (view, at, buttons) = self.build_counter(counter, group, right, middle)?;
+                let (view, at, buttons) = self.build_counter(group, right, middle)?;
                 for (up, button) in [false, true].into_iter().zip(buttons) {
                     parts.hits.push((Hit::Step(counter, up), place(button)));
                 }
@@ -642,6 +660,7 @@ impl Settings {
                     .push((Stop::Counter(counter), place(at).outset(outset), radius));
                 parts.counters[counter as usize] = Some(view);
             }
+            Control::Translate => {}
             Control::Languages => {
                 let chevron = Text::new(c, group)?;
                 let line = r.layout_line(CHEVRON_GLYPH, Face::Icon, Ink::Secondary, CHEVRON_W)?;
@@ -662,6 +681,74 @@ impl Settings {
                 parts.languages = Some((hover, chevron.visual));
             }
         }
+        Ok(())
+    }
+
+    /// The default languages: the setting's name and description over the
+    /// translate card's boxes (the `languages` layout), the swap button
+    /// between them and, when one is open, the list to pick from.
+    fn build_translate(
+        &self,
+        parts: &mut Parts,
+        group: &ContainerVisual,
+        group_at: Vector3,
+        spec: &Row,
+        row: Rect,
+    ) -> Result<()> {
+        let languages = &self.layout_languages()?;
+        let (c, r, t, s) = (
+            &self.anim.compositor,
+            &self.renderer,
+            &self.theme,
+            self.scale,
+        );
+        let px = |dip: f32| (dip * s).round();
+        let room = GROUP_W - 2.0 * ROW_PAD;
+        let title = Text::new(c, group)?;
+        let name = r.layout_line(spec.title, Face::Setting, Ink::Primary, room)?;
+        let title_size = title.show(r, &name, s, t)?;
+        let top = row.y + px(TRANSLATE_PAD);
+        title.visual.SetOffset(v3(px(ROW_PAD), top))?;
+        let detail = Text::new(c, group)?;
+        let line = r.layout_line(spec.detail, Face::Small, Ink::Secondary, room)?;
+        detail.show(r, &line, s, t)?;
+        let detail_at = v3(px(ROW_PAD), top + title_size.Y + px(DETAIL_GAP));
+        detail.visual.SetOffset(detail_at)?;
+
+        let boxes = Text::new(c, group)?;
+        boxes.show(r, languages, s, t)?;
+        let at = v3(px(ROW_PAD), row.y + px(TRANSLATE_HEAD));
+        boxes.visual.SetOffset(at)?;
+        let place = |rect: Rect| rect.offset(group_at);
+        for link in &languages.links {
+            let rect = place(Rect {
+                x: at.X + link.x * s,
+                y: at.Y + link.y * s,
+                w: link.width * s,
+                h: link.height * s,
+            });
+            match &link.target {
+                Target::Language(side) => {
+                    parts.hits.push((Hit::Select(*side), rect));
+                    let stop = (Stop::Select(*side), rect, px(SELECT_RING_RADIUS));
+                    parts.stops.push(stop);
+                }
+                Target::Swap => {
+                    parts.hits.push((Hit::Swap, rect));
+                    let stop = (Stop::Swap, rect, px(SWAP_RING_RADIUS));
+                    parts.stops.push(stop);
+                }
+                Target::Pick(code) => {
+                    let matches = self.picking.as_ref().map(|p| &p.matches);
+                    let found = matches.and_then(|m| m.iter().position(|c| c == code));
+                    if let Some(i) = found {
+                        parts.hits.push((Hit::Pick(i), rect));
+                    }
+                }
+                _ => {}
+            }
+        }
+        parts.translate = Some(place(row));
         Ok(())
     }
 
@@ -861,12 +948,11 @@ impl Settings {
         Ok((view, at))
     }
 
-    /// `counter`'s value between − and + buttons, ending at `right` and
+    /// A number between − and + buttons, ending at `right` and
     /// centred on `middle`, in `group`. Returns it, its bounds and its
     /// buttons'.
     fn build_counter(
         &self,
-        counter: Counter,
         group: &ContainerVisual,
         right: f32,
         middle: f32,
@@ -878,7 +964,7 @@ impl Settings {
             self.scale,
         );
         let px = |dip: f32| (dip * s).round();
-        let (b, value_w) = (px(STEP_SIZE), px(counter.value_w()));
+        let (b, value_w) = (px(STEP_SIZE), px(VALUE_W));
         let at = Rect {
             x: right - 2.0 * b - value_w,
             y: (middle - b / 2.0).round(),
@@ -996,10 +1082,11 @@ fn outline(
 #[derive(Default)]
 struct Parts {
     shortcut: Option<ShortcutView>,
+    translate: Option<Rect>,
     switches: [Option<SwitchView>; 4],
     choices: [Option<ChoiceView>; 1],
     notes: [Option<NoteView>; 2],
-    counters: [Option<CounterView>; 4],
+    counters: [Option<CounterView>; 2],
     field: Option<FieldView>,
     /// The languages row's hover and chevron.
     languages: Option<(SpriteVisual, SpriteVisual)>,

@@ -21,14 +21,14 @@ use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
 use crate::app::edit::{Input, LineEdit, Motion};
+use crate::app::picking::Picking;
 use crate::config::{Config, ThemeMode};
 use crate::dicts;
 use crate::hotkey::{self, held_modifiers, is_modifier, Hotkey};
 use crate::popup;
-use crate::render::{Align, Face, Ink, Layout, Renderer};
+use crate::render::{Align, Face, Ink, Layout, Picker, Renderer, Side, Target, PICKER_ROWS};
 use crate::selection;
 use crate::theme::Theme;
-use crate::translate;
 use crate::ui::{self, scale, ts, v2, v3, Animator, Frame, Text, MARGIN};
 use crate::win::Window;
 
@@ -56,6 +56,8 @@ const LABEL_GAP: f32 = 8.0;
 const FOOTER_GAP: f32 = 16.0;
 const PAD_BOTTOM: f32 = 18.0;
 const SCREEN_GAP: f32 = 16.0;
+/// The tallest the card grows before it scrolls.
+const MAX_CARD_H: f32 = 520.0;
 const SWITCH_W: f32 = 40.0;
 const SWITCH_H: f32 = 20.0;
 const KNOB: f32 = 12.0;
@@ -70,8 +72,6 @@ const PILL_RADIUS: f32 = 4.0;
 const STEP_SIZE: f32 = 30.0;
 const STEP_RADIUS: f32 = 6.0;
 const VALUE_W: f32 = 40.0;
-/// A counter's value when it's a language's name.
-const LANGUAGE_W: f32 = 100.0;
 /// The text field.
 const FIELD_W: f32 = 190.0;
 const FIELD_H: f32 = 32.0;
@@ -86,6 +86,16 @@ const INFO_GAP: f32 = 6.0;
 const INFO_W: f32 = 16.0;
 /// How wide the info tooltip grows before wrapping.
 const TIP_W: f32 = 300.0;
+/// The default languages' row: the room for its name and description above
+/// the boxes, and under them.
+const TRANSLATE_PAD: f32 = 12.0;
+const TRANSLATE_HEAD: f32 = 64.0;
+const TRANSLATE_FOOT: f32 = 16.0;
+/// Corner radii of the rings round the boxes and the swap button.
+const SELECT_RING_RADIUS: f32 = 8.0;
+const SWAP_RING_RADIUS: f32 = 6.0;
+/// How many languages a notch of the mouse wheel scrolls their list by.
+const WHEEL_ROWS: f32 = 3.0;
 /// A language in the list under the languages row.
 const LANGUAGE_H: f32 = 40.0;
 const CHECK_SIZE: f32 = 20.0;
@@ -193,8 +203,7 @@ pub enum Change {
     Autostart(bool),
     /// The languages translated from and into when the card can't tell,
     /// as codes.
-    TranslateFrom(String),
-    TranslateTo(String),
+    TranslateLanguages(String, String),
     MyMemoryEmail(String),
     OpenConfig,
     Close,
@@ -215,22 +224,14 @@ const SWITCHES: [Switch; 4] = [
     Switch::Examples,
 ];
 
-/// A setting stepped through with − and + buttons: a number, or a
-/// language, by its place in [`translate::LANGUAGES`].
+/// A number stepped through with − and + buttons.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Counter {
     Definitions,
     Synonyms,
-    TranslateFrom,
-    TranslateTo,
 }
 
-const COUNTERS: [Counter; 4] = [
-    Counter::Definitions,
-    Counter::Synonyms,
-    Counter::TranslateFrom,
-    Counter::TranslateTo,
-];
+const COUNTERS: [Counter; 2] = [Counter::Definitions, Counter::Synonyms];
 
 impl Counter {
     /// The lowest and highest values.
@@ -238,31 +239,18 @@ impl Counter {
         match self {
             Counter::Definitions => (1, 10),
             Counter::Synonyms => (0, 12),
-            Counter::TranslateFrom | Counter::TranslateTo => (0, translate::LANGUAGES.len() - 1),
         }
     }
 
     fn text(self, n: usize) -> String {
-        match self {
-            Counter::TranslateFrom | Counter::TranslateTo => translate::LANGUAGES
-                .get(n)
-                .map(|(_, name)| name.to_string())
-                .unwrap_or_default(),
-            _ if n == 0 => "Off".into(),
+        match n {
+            0 => "Off".into(),
             _ => n.to_string(),
         }
     }
 
-    /// How wide the value between the buttons is.
-    fn value_w(self) -> f32 {
-        match self {
-            Counter::Definitions | Counter::Synonyms => VALUE_W,
-            Counter::TranslateFrom | Counter::TranslateTo => LANGUAGE_W,
-        }
-    }
-
     fn width(self) -> f32 {
-        2.0 * STEP_SIZE + self.value_w()
+        2.0 * STEP_SIZE + VALUE_W
     }
 }
 
@@ -334,6 +322,12 @@ enum Hit {
     Email,
     /// The info symbol beside it, with its tooltip.
     Info,
+    /// A default language's box, which lists the others to pick from.
+    Select(Side),
+    /// The button between them, which swaps them.
+    Swap,
+    /// A language in that list, by its place among the matches.
+    Pick(usize),
     Config,
 }
 
@@ -345,6 +339,8 @@ enum Stop {
     Choice(Choice),
     Counter(Counter),
     Email,
+    Select(Side),
+    Swap,
     Languages,
     Language(usize),
     Config,
@@ -361,7 +357,9 @@ impl Hit {
             Hit::Languages => Some(Stop::Languages),
             Hit::Language(i) => Some(Stop::Language(i)),
             Hit::Email => Some(Stop::Email),
-            Hit::Info => None,
+            Hit::Info | Hit::Pick(_) => None,
+            Hit::Select(side) => Some(Stop::Select(side)),
+            Hit::Swap => Some(Stop::Swap),
             Hit::Config => Some(Stop::Config),
         }
     }
@@ -379,6 +377,10 @@ enum Control {
     /// The field for the MyMemory email, with an info symbol after the
     /// setting's name.
     Email,
+    /// The default languages' boxes, with the list under the one being
+    /// picked. It's taller than the other rows, and as tall as the list
+    /// when that's open.
+    Translate,
 }
 
 impl Control {
@@ -390,6 +392,7 @@ impl Control {
             Control::Counter(counter) => counter.width(),
             Control::Languages => CHEVRON_W,
             Control::Email => FIELD_W,
+            Control::Translate => 0.0,
         }
     }
 }
@@ -449,14 +452,9 @@ const SECTIONS: &[(&str, &[Row])] = &[
         "Translation",
         &[
             row(
-                "Translate from",
-                "If the card can\u{2019}t tell the language",
-                Control::Counter(Counter::TranslateFrom),
-            ),
-            row(
-                "Translate into",
-                "If the card can\u{2019}t tell which to use",
-                Control::Counter(Counter::TranslateTo),
+                "Default languages",
+                "Translated from and into when the card can\u{2019}t tell",
+                Control::Translate,
             ),
             row(
                 "MyMemory email",
@@ -683,6 +681,8 @@ struct View {
     choices: Vec<ChoiceView>,
     notes: Vec<NoteView>,
     counters: Vec<CounterView>,
+    /// The default languages' row, in the scroller.
+    translate_at: Rect,
     /// Where things can be clicked, in the scroller.
     hits: Vec<(Hit, Rect)>,
     /// Where Tab stops, and the corner radius of the ring there, in the scroller.
@@ -750,6 +750,8 @@ pub struct Settings {
     downloads: Vec<Option<(String, bool)>>,
     /// The choice whose pill is gliding over, and the option it's leaving.
     pill_from: Option<(Choice, usize)>,
+    /// The list a default language is being picked from, while it's open.
+    picking: Option<Picking>,
     /// What's typed in the email field.
     email: LineEdit,
     /// How far the field's text is scrolled left, in pixels.
@@ -802,6 +804,7 @@ impl Settings {
             open: false,
             downloads: dicts::languages().map(|_| None).collect(),
             pill_from: None,
+            picking: None,
             email,
             email_shift: 0.0,
             active: true,
@@ -823,7 +826,7 @@ impl Settings {
         (self.hovered, self.pressed, self.focus) = (None, None, None);
         (self.ring, self.recording, self.scroll) = (false, false, 0.0);
         self.notes = NOTES.map(|note| (note.usual(&self.values), false));
-        self.open = false;
+        (self.open, self.picking) = (false, None);
         self.downloads.fill(None);
         self.email = LineEdit::new(&self.values.config.mymemory_email, MAX_EMAIL_CHARS);
         (self.email_shift, self.active) = (0.0, true);
@@ -960,6 +963,9 @@ impl Settings {
         if self.recording {
             return self.record(key);
         }
+        if self.picking.is_some() {
+            return self.picker_key(key);
+        }
         let shift = hotkey::is_held(VK_SHIFT);
         let ctrl = hotkey::is_held(VK_CONTROL);
         let change = match (key, self.focus) {
@@ -995,6 +1001,8 @@ impl Settings {
             (VK_SPACE | VK_RETURN, Some(Stop::Shortcut)) => self.activate(Hit::Shortcut)?,
             (VK_SPACE | VK_RETURN, Some(Stop::Switch(sw))) => self.activate(Hit::Switch(sw))?,
             (VK_SPACE | VK_RETURN, Some(Stop::Config)) => self.activate(Hit::Config)?,
+            (VK_SPACE | VK_RETURN, Some(Stop::Select(side))) => self.activate(Hit::Select(side))?,
+            (VK_SPACE | VK_RETURN, Some(Stop::Swap)) => self.activate(Hit::Swap)?,
             (VK_SPACE | VK_RETURN, Some(Stop::Languages)) => self.activate(Hit::Languages)?,
             (VK_RIGHT, Some(Stop::Languages)) => {
                 self.set_open(true)?;
@@ -1027,9 +1035,16 @@ impl Settings {
     }
 
     /// A character was typed (one UTF-16 unit of WM_CHAR): it goes in the
-    /// email field, when that has the focus.
+    /// box of the language being picked, or else in the email field, when
+    /// that has the focus.
     pub fn char(&mut self, unit: u16) -> Result<Option<Change>> {
-        if self.recording || self.focus != Some(Stop::Email) {
+        if self.recording {
+            return Ok(None);
+        }
+        if self.picking.is_some() {
+            return self.type_language(unit);
+        }
+        if self.focus != Some(Stop::Email) {
             return Ok(None);
         }
         let before = self.email.text().to_owned();
@@ -1073,6 +1088,13 @@ impl Settings {
 
     /// Scrolls by a mouse wheel delta.
     pub fn wheel(&mut self, delta: i32) -> Result<()> {
+        // The list of languages goes first, until it can't go any further.
+        if let Some(picking) = self.picking.as_mut() {
+            let rows = -(delta as f32 / 120.0 * WHEEL_ROWS).round() as isize;
+            if picking.scroll(rows) {
+                return self.relayout();
+            }
+        }
         let step = -(delta as f32 / 120.0) * WHEEL_STEP * self.scale;
         self.scroll_to(self.scroll + step)
     }
@@ -1245,8 +1267,209 @@ impl Settings {
                 None
             }
             Hit::Language(i) => self.tick(i)?,
+            Hit::Select(side) => {
+                self.open_picker(side)?;
+                None
+            }
+            Hit::Swap => self.swap_languages()?,
+            Hit::Pick(i) => {
+                let code = self
+                    .picking
+                    .as_ref()
+                    .and_then(|p| p.matches.get(i).copied());
+                match code {
+                    Some(code) => self.pick(code)?,
+                    None => None,
+                }
+            }
             Hit::Email | Hit::Info => None,
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // The default languages
+
+    /// The language on `side`, as a code.
+    fn language(&self, side: Side) -> &str {
+        let config = &self.values.config;
+        match side {
+            Side::From => &config.translate_from,
+            Side::To => &config.translate_to,
+        }
+    }
+
+    /// The change to make once the languages are as they are now.
+    fn languages_changed(&self) -> Change {
+        let config = &self.values.config;
+        Change::TranslateLanguages(config.translate_from.clone(), config.translate_to.clone())
+    }
+
+    /// The boxes of the default languages, with the list under the one
+    /// being picked.
+    fn layout_languages(&self) -> Result<Layout> {
+        let picker = self.picking.as_ref().map(|p| Picker {
+            side: p.side,
+            query: p.query.text(),
+            caret: p.query.caret_utf16(),
+            matches: &p.matches,
+            first: p.first,
+            highlight: p.highlight,
+        });
+        let width = GROUP_W - 2.0 * ROW_PAD;
+        let config = &self.values.config;
+        let (from, to) = (&config.translate_from, &config.translate_to);
+        self.renderer
+            .layout_languages(from, to, picker.as_ref(), width)
+    }
+
+    /// Builds the window's view again, for what the default languages show
+    /// to have changed, which can change the height of the row too.
+    fn relayout(&mut self) -> Result<()> {
+        self.replace_view(false)?;
+        self.refit()
+    }
+
+    /// Lists the languages `side`'s can be picked from, or shuts the list
+    /// again if it's open on that side.
+    fn open_picker(&mut self, side: Side) -> Result<()> {
+        let open = self.picking.take().map(|p| p.side);
+        if open != Some(side) {
+            self.picking = Some(Picking::new(side, self.language(side)));
+        }
+        self.focus = Some(Stop::Select(side));
+        self.relayout()?;
+        let Some(view) = &self.view else {
+            return Ok(());
+        };
+        let rect = view.translate_at;
+        if self.picking.is_some() {
+            self.scroll_into_view(rect)?;
+        }
+        Ok(())
+    }
+
+    /// Swaps the languages.
+    fn swap_languages(&mut self) -> Result<Option<Change>> {
+        self.picking = None;
+        let config = &mut self.values.config;
+        std::mem::swap(&mut config.translate_from, &mut config.translate_to);
+        self.relayout()?;
+        Ok(Some(self.languages_changed()))
+    }
+
+    /// Makes `code` the language of the side being picked, closing the list.
+    /// The other side's language swaps them round.
+    fn pick(&mut self, code: &str) -> Result<Option<Change>> {
+        let Some(side) = self.picking.take().map(|p| p.side) else {
+            return Ok(None);
+        };
+        self.focus = Some(Stop::Select(side));
+        let config = &mut self.values.config;
+        let (picked, other) = match side {
+            Side::From => (&mut config.translate_from, &mut config.translate_to),
+            Side::To => (&mut config.translate_to, &mut config.translate_from),
+        };
+        let changed = code != picked.as_str();
+        if code == other.as_str() {
+            std::mem::swap(picked, other);
+        } else {
+            *picked = code.to_owned();
+        }
+        self.relayout()?;
+        Ok(changed.then(|| self.languages_changed()))
+    }
+
+    /// Narrows the list of languages down with a character typed.
+    fn type_language(&mut self, unit: u16) -> Result<Option<Change>> {
+        let hwnd = self.hwnd;
+        let Some(side) = self.picking.as_ref().map(|p| p.side) else {
+            return Ok(None);
+        };
+        let current = self.language(side).to_owned();
+        let Some(picking) = self.picking.as_mut() else {
+            return Ok(None);
+        };
+        match picking.query.type_unit(unit) {
+            Input::Edited => {}
+            Input::Paste => {
+                let pasted = selection::clipboard_text(hwnd).unwrap_or_default();
+                picking.query.paste(&pasted);
+            }
+            // The key going down picked it already.
+            Input::Enter | Input::Nothing => return Ok(None),
+        }
+        picking.refilter(&current);
+        self.relayout()?;
+        Ok(None)
+    }
+
+    /// A key pressed while the list of languages is open: Up, Down, Tab,
+    /// Shift+Tab, Page Up and Page Down move the highlight, Enter picks it,
+    /// Esc shuts the list, and the others move the caret in the box.
+    fn picker_key(&mut self, key: VIRTUAL_KEY) -> Result<Option<Change>> {
+        let ctrl = hotkey::is_held(VK_CONTROL);
+        let Some(side) = self.picking.as_ref().map(|p| p.side) else {
+            return Ok(None);
+        };
+        let current = self.language(side).to_owned();
+        let Some(picking) = self.picking.as_mut() else {
+            return Ok(None);
+        };
+        match key {
+            VK_ESCAPE => {
+                self.picking = None;
+                self.focus = Some(Stop::Select(side));
+                self.relayout()?;
+                return Ok(None);
+            }
+            VK_RETURN => {
+                return match picking.highlighted() {
+                    Some(code) => self.pick(code),
+                    None => Ok(None),
+                };
+            }
+            _ => {}
+        }
+        let page = PICKER_ROWS as isize;
+        let step = match key {
+            VK_DOWN => Some(1),
+            VK_UP => Some(-1),
+            VK_TAB if hotkey::is_held(VK_SHIFT) => Some(-1),
+            VK_TAB => Some(1),
+            VK_NEXT => Some(page),
+            VK_PRIOR => Some(-page),
+            _ => None,
+        };
+        if let Some(by) = step {
+            picking.step(by);
+            self.relayout()?;
+            return Ok(None);
+        }
+        let edit = &mut picking.query;
+        let changed = match key {
+            VK_LEFT if ctrl => edit.move_caret(Motion::WordBack),
+            VK_LEFT => edit.move_caret(Motion::CharBack),
+            VK_RIGHT if ctrl => edit.move_caret(Motion::WordForward),
+            VK_RIGHT => edit.move_caret(Motion::CharForward),
+            VK_HOME => edit.move_caret(Motion::Start),
+            VK_END => edit.move_caret(Motion::End),
+            VK_DELETE => {
+                let to = if ctrl {
+                    Motion::WordForward
+                } else {
+                    Motion::CharForward
+                };
+                if edit.delete(to) {
+                    picking.refilter(&current);
+                }
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.relayout()?;
+        }
+        Ok(None)
     }
 
     /// The email field's text changed from `before`, or may have: shows
@@ -1355,7 +1578,7 @@ impl Settings {
             y: (window.top + window.bottom) / 2,
         });
         let gap = (SCREEN_GAP * s).round();
-        let room = (work.bottom - work.top) as f32 - 2.0 * gap;
+        let room = ((work.bottom - work.top) as f32 - 2.0 * gap).min((MAX_CARD_H * s).round());
         let h = (view.header_h + view.height(self.open)).min(room).ceil();
         let old = self.card.1;
         if h == old {
@@ -1417,40 +1640,18 @@ impl Settings {
 
     fn count(&self, counter: Counter) -> usize {
         let config = &self.values.config;
-        let language = |code: &str| {
-            translate::LANGUAGES
-                .iter()
-                .position(|(c, _)| *c == code)
-                .unwrap_or(0)
-        };
         match counter {
             Counter::Definitions => config.max_definitions,
             Counter::Synonyms => config.max_synonyms,
-            Counter::TranslateFrom => language(&config.translate_from),
-            Counter::TranslateTo => language(&config.translate_to),
         }
     }
 
-    /// Where `counter` goes counting up or down one, if it can. Languages
-    /// skip the one on the other side, for a word not to be translated
-    /// into its own.
+    /// Where `counter` goes counting up or down one, if it can.
     fn next(&self, counter: Counter, up: bool) -> Option<usize> {
         let (lo, hi) = counter.range();
-        let other = match counter {
-            Counter::TranslateFrom => Some(self.count(Counter::TranslateTo)),
-            Counter::TranslateTo => Some(self.count(Counter::TranslateFrom)),
-            _ => None,
-        };
-        let mut n = self.count(counter);
-        loop {
-            n = if up { n + 1 } else { n.checked_sub(1)? };
-            if n < lo || n > hi {
-                return None;
-            }
-            if Some(n) != other {
-                return Some(n);
-            }
-        }
+        let n = self.count(counter);
+        let n = if up { n + 1 } else { n.checked_sub(1)? };
+        (lo..=hi).contains(&n).then_some(n)
     }
 
     /// Which of `choice`'s options is chosen.
@@ -1487,7 +1688,6 @@ impl Settings {
             }
             return Ok(None);
         };
-        let code = || translate::LANGUAGES[next].0.to_owned();
         let change = match counter {
             Counter::Definitions => {
                 self.values.config.max_definitions = next;
@@ -1496,14 +1696,6 @@ impl Settings {
             Counter::Synonyms => {
                 self.values.config.max_synonyms = next;
                 Change::MaxSynonyms(next)
-            }
-            Counter::TranslateFrom => {
-                self.values.config.translate_from = code();
-                Change::TranslateFrom(code())
-            }
-            Counter::TranslateTo => {
-                self.values.config.translate_to = code();
-                Change::TranslateTo(code())
             }
         };
         self.show_count(counter, Some(up))?;
@@ -1599,7 +1791,18 @@ impl Settings {
         }
         let old = std::mem::replace(&mut self.hovered, hit);
         self.show_hover(old)?;
-        self.show_hover(hit)
+        self.show_hover(hit)?;
+        // Over the list of languages, the highlight moves along.
+        if let Some(Hit::Pick(i)) = hit {
+            let moved = self.picking.as_mut().is_some_and(|p| {
+                let code = p.matches.get(i).copied();
+                code.is_some_and(|code| p.highlight(code))
+            });
+            if moved {
+                self.relayout()?;
+            }
+        }
+        Ok(())
     }
 
     fn set_pressed(&mut self, hit: Option<Hit>) -> Result<()> {
@@ -1825,7 +2028,7 @@ impl Settings {
         let v = &mut view.counters[counter as usize];
         std::mem::swap(&mut v.value, &mut v.old);
         let text = counter.text(n);
-        let w = counter.value_w();
+        let w = VALUE_W;
         let line = r.layout_aligned(&text, Face::Value, Ink::Primary, w, Align::Center)?;
         let size = v.value.show(r, &line, s, t)?;
         let rest = v3(0.0, ((v.host_h - size.Y) / 2.0).round());
@@ -2183,7 +2386,9 @@ impl Settings {
             Some(Hit::Languages) => fade(&view.languages.hover),
             Some(Hit::Language(i)) => fade(&view.languages.items[i].hover),
             Some(Hit::Email) => fade(&view.field.hover),
-            Some(Hit::Info | Hit::Config) | None => Ok(()),
+            Some(Hit::Info | Hit::Select(_) | Hit::Swap | Hit::Pick(_) | Hit::Config) | None => {
+                Ok(())
+            }
         }
     }
 
@@ -2288,8 +2493,6 @@ mod tests {
         }
         assert_eq!(Counter::Synonyms.text(0), "Off");
         assert_eq!(Counter::Definitions.text(4), "4");
-        assert_eq!(Counter::TranslateTo.text(0), "English");
-        let (_, hi) = Counter::TranslateFrom.range();
-        assert!(!Counter::TranslateFrom.text(hi).is_empty());
+        assert_eq!(Counter::Definitions.text(1), "1");
     }
 }

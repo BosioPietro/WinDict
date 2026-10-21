@@ -9,7 +9,7 @@ use super::edit::LineEdit;
 /// No language's name is longer, in any of the ways it can be searched.
 const MAX_QUERY_CHARS: usize = 12;
 
-pub(super) struct Picking {
+pub(crate) struct Picking {
     pub side: Side,
     /// What's typed to narrow the list down.
     pub query: LineEdit,
