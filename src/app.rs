@@ -23,7 +23,7 @@ use crate::config::{self, Config};
 use crate::dictionary::{self, Definition, Detail, Lookup, NormalizeError};
 use crate::dicts;
 use crate::hotkey;
-use crate::i18n::{fill, tr};
+use crate::i18n::{self, fill, tr};
 use crate::menu::{Command, Menu};
 use crate::offline;
 use crate::online;
@@ -384,6 +384,7 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
         Ok((config, first_run)) => (config, first_run, None),
         Err(e) => (Config::default(), false, Some(e)),
     };
+    i18n::set(config.ui_language);
     ui::set_motion(config.animated());
     unsafe {
         let instance = HINSTANCE(GetModuleHandleW(None)?.0);
@@ -1980,6 +1981,7 @@ impl App {
                     Err(e) => return self.tray.notify(tr().settings_not_reloaded, &e),
                 }
                 self.cache.clear();
+                i18n::set(self.config.ui_language);
                 ui::set_motion(self.config.animated());
                 self.register_hotkey();
                 self.refresh_settings();
@@ -2138,6 +2140,13 @@ impl App {
                 let theme = self.theme();
                 if let Some(settings) = self.settings.as_mut() {
                     let _ = settings.retheme(theme);
+                }
+            }
+            Change::Interface(language) => {
+                self.config.ui_language = language;
+                i18n::set(language);
+                if let Some(settings) = self.settings.as_mut() {
+                    let _ = settings.relanguage();
                 }
             }
             Change::Language(language, on) => return self.tick_language(language, on),

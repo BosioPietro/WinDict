@@ -1394,7 +1394,7 @@ struct Parts {
     shortcut: Option<ShortcutView>,
     translate: Option<Rect>,
     switches: [Option<SwitchView>; SWITCHES.len()],
-    choices: [Option<ChoiceView>; 1],
+    choices: [Option<ChoiceView>; CHOICES.len()],
     notes: [Option<NoteView>; 2],
     counters: [Option<CounterView>; 2],
     field: Option<FieldView>,

@@ -27,7 +27,7 @@ use crate::app::picking::Picking;
 use crate::config::{Config, ThemeMode};
 use crate::dicts;
 use crate::hotkey::{self, held_modifiers, is_modifier, Hotkey};
-use crate::i18n::{tr, Strings};
+use crate::i18n::{tr, Language, Strings};
 use crate::popup;
 use crate::render::{Align, Face, Ink, Layout, Picker, Renderer, Side, Target, PICKER_ROWS};
 use crate::selection;
@@ -206,6 +206,8 @@ pub enum Change {
     RecordingStopped,
     Hotkey(String),
     Theme(ThemeMode),
+    /// The language WinDict is shown in.
+    Interface(Language),
     /// A language's code, like "en", turned on or off.
     Language(String, bool),
     MaxDefinitions(usize),
@@ -280,14 +282,17 @@ const THEMES: [(ThemeMode, Label); 3] = [
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Choice {
     Theme,
+    Language,
 }
 
-const CHOICES: [Choice; 1] = [Choice::Theme];
+const CHOICES: [Choice; 2] = [Choice::Theme, Choice::Language];
 
 impl Choice {
     fn names(self) -> Vec<&'static str> {
         match self {
             Choice::Theme => THEMES.iter().map(|(_, name)| name(tr())).collect(),
+            // Each in itself, so that it's found whichever language this is.
+            Choice::Language => Language::ALL.iter().map(|l| l.name()).collect(),
         }
     }
 }
@@ -459,6 +464,12 @@ const SECTIONS: &[(Label, &[Row])] = &[
                 |s| s.start_with_windows,
                 |s| s.start_with_windows_detail,
                 Control::Switch(Switch::Autostart),
+            ),
+            row(
+                "\u{F2B7}",
+                |s| s.language,
+                |s| s.language_detail,
+                Control::Choice(Choice::Language),
             ),
         ],
     ),
@@ -938,6 +949,7 @@ impl Settings {
         (self.ring, self.recording, self.scroll) = (false, false, 0.0);
         self.scroll_anim = None;
         self.notes = NOTES.map(|note| (note.usual(&self.values), false));
+        self.retitle();
         (self.open, self.picking) = (false, None);
         self.downloads.fill(None);
         self.email = LineEdit::new(&self.values.config.mymemory_email, MAX_EMAIL_CHARS);
@@ -1320,6 +1332,20 @@ impl Settings {
         self.replace_view(true)
     }
 
+    /// Shows the window in the language now current, cross-fading to it.
+    pub fn relanguage(&mut self) -> Result<()> {
+        self.notes = NOTES.map(|note| (note.usual(&self.values), false));
+        self.retitle();
+        self.replace_view(true)
+    }
+
+    /// Names the window in the language now current, as the taskbar shows it.
+    fn retitle(&self) {
+        unsafe {
+            let _ = SetWindowTextW(self.hwnd, &HSTRING::from(tr().settings_window_title));
+        }
+    }
+
     /// Shows `values` changed from elsewhere, cross-fading to them.
     pub fn refresh(&mut self, theme: Theme, values: Values) -> Result<()> {
         (self.values, self.recording) = (values, false);
@@ -1327,6 +1353,7 @@ impl Settings {
             self.email = LineEdit::new(&self.values.config.mymemory_email, MAX_EMAIL_CHARS);
         }
         self.notes = NOTES.map(|note| (note.usual(&self.values), false));
+        self.retitle();
         self.theme = theme;
         let (anim, renderer, s) = (&self.anim, &self.renderer, self.scale);
         self.frame.fade_theme(anim, renderer, &theme, s, THEME_MS)?;
@@ -1811,6 +1838,7 @@ impl Settings {
         let config = &self.values.config;
         match choice {
             Choice::Theme => THEMES.iter().position(|(mode, _)| *mode == config.theme),
+            Choice::Language => Language::ALL.iter().position(|&l| l == config.ui_language),
         }
         .unwrap_or(0)
     }
@@ -1825,6 +1853,11 @@ impl Settings {
                 let mode = THEMES[i].0;
                 self.values.config.theme = mode;
                 Change::Theme(mode)
+            }
+            Choice::Language => {
+                let language = Language::ALL[i];
+                self.values.config.ui_language = language;
+                Change::Interface(language)
             }
         };
         self.show_choice(choice, true)?;
@@ -2659,7 +2692,9 @@ impl Settings {
             // The corners take exactly the radius, so a pill, whose radius is
             // half its height, doesn't have them overlap and squash.
             let side = (2.0 * radius).ceil() + 1.0;
-            let mask = self.renderer.draw_rounded(side, side, radius, Some(stroke))?;
+            let mask = self
+                .renderer
+                .draw_rounded(side, side, radius, Some(stroke))?;
             view.ring_source.SetSurface(&mask)?;
             view.ring_grid.SetInsets(radius)?;
             view.ring_radius.set(radius);

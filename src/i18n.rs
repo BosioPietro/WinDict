@@ -13,8 +13,13 @@
 //! What stays as it is: names of languages (each in itself, so they can be
 //! found whichever language WinDict is in), key names, and "WinDict".
 
+mod it;
+
 use std::fmt::Display;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use serde::{Deserialize, Serialize};
+use windows::Win32::Globalization::GetUserDefaultUILanguage;
 
 macro_rules! strings {
     ($($(#[$doc:meta])* $name:ident: $text:expr,)*) => {
@@ -27,6 +32,14 @@ macro_rules! strings {
         pub const EN: Strings = Strings {
             $($name: $text,)*
         };
+
+        #[cfg(test)]
+        impl Strings {
+            /// Every string, by name.
+            fn all(&self) -> Vec<(&'static str, &'static str)> {
+                vec![$((stringify!($name), self.$name),)*]
+            }
+        }
     };
 }
 
@@ -122,6 +135,8 @@ strings! {
     settings: "Settings",
     settings_window_title: "WinDict Settings",
     config_link: "Open config.json",
+    language: "Language",
+    language_detail: "The language WinDict is shown in",
     off: "Off",
     theme_system: "System",
     theme_light: "Light",
@@ -200,17 +215,44 @@ strings! {
 }
 
 /// The languages WinDict can be shown in.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
 pub enum Language {
     English,
+    Italian,
 }
 
 impl Language {
-    pub const ALL: &'static [Language] = &[Language::English];
+    pub const ALL: &'static [Language] = &[Language::English, Language::Italian];
 
     fn strings(self) -> &'static Strings {
         match self {
             Language::English => &EN,
+            Language::Italian => &it::IT,
+        }
+    }
+
+    /// The language's name, in itself.
+    pub fn name(self) -> &'static str {
+        match self {
+            Language::English => "English",
+            Language::Italian => "Italiano",
+        }
+    }
+
+    /// The language Windows is shown in, or English if WinDict has no
+    /// translation for it.
+    pub fn system() -> Language {
+        Language::from_lang_id(unsafe { GetUserDefaultUILanguage() })
+    }
+
+    /// The language a Windows language identifier (LANGID) is of, whatever
+    /// its region: the low ten bits are the language, the rest the region.
+    fn from_lang_id(id: u16) -> Language {
+        const LANG_ITALIAN: u16 = 0x10;
+        match id & 0x3FF {
+            LANG_ITALIAN => Language::Italian,
+            _ => Language::English,
         }
     }
 }
@@ -220,8 +262,6 @@ impl Language {
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
 
 /// Shows WinDict in `language` from now on.
-// Nothing calls it until there is a setting to choose the language by.
-#[allow(dead_code)]
 pub fn set(language: Language) {
     let index = Language::ALL.iter().position(|&l| l == language);
     CURRENT.store(index.unwrap_or(0), Ordering::Relaxed);
@@ -311,6 +351,38 @@ mod tests {
         };
         assert_eq!(PARTIAL.menu_quit, "Esci");
         assert_eq!(PARTIAL.menu_reload, EN.menu_reload);
+    }
+
+    #[test]
+    fn reads_system_languages() {
+        // Italy's, Switzerland's, and the neutral Italian.
+        for id in [0x0410, 0x0810, 0x0010] {
+            assert_eq!(Language::from_lang_id(id), Language::Italian);
+        }
+        // English, and what WinDict has no translation for.
+        for id in [0x0409, 0x0809, 0x040C, 0x0000] {
+            assert_eq!(Language::from_lang_id(id), Language::English);
+        }
+    }
+
+    #[test]
+    fn translations_keep_their_values() {
+        // A translation that dropped or misspelled a `{name}` would lose the
+        // value, or show the braces.
+        fn names(text: &str) -> Vec<&str> {
+            let mut names: Vec<_> = text
+                .split('{')
+                .skip(1)
+                .filter_map(|s| s.split('}').next())
+                .collect();
+            names.sort_unstable();
+            names
+        }
+        for language in Language::ALL {
+            for ((name, text), (_, english)) in language.strings().all().into_iter().zip(EN.all()) {
+                assert_eq!(names(text), names(english), "{language:?}: {name}");
+            }
+        }
     }
 
     #[test]

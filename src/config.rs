@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::Language;
 use crate::{translate, ui};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -20,6 +21,9 @@ pub enum ThemeMode {
 pub struct Config {
     /// Global shortcut, e.g. "Ctrl+Alt+D", "Win+Shift+F1".
     pub hotkey: String,
+    /// The language WinDict is shown in, "english" or "italian". Unset, it's
+    /// the language of Windows if WinDict has it, else English.
+    pub ui_language: Language,
     /// "system", "dark" or "light".
     pub theme: ThemeMode,
     /// Max definitions shown per part of speech.
@@ -59,6 +63,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             hotkey: "Ctrl+Alt+D".into(),
+            ui_language: Language::system(),
             theme: ThemeMode::System,
             max_definitions: 4,
             max_synonyms: 6,
@@ -183,6 +188,16 @@ mod tests {
             parse(br#"{"max_definitions": 0}"#).unwrap().max_definitions,
             1
         );
+    }
+
+    #[test]
+    fn reads_the_interface_language() {
+        let language = |json: &str| parse(json.as_bytes()).unwrap().ui_language;
+        assert_eq!(language(r#"{"ui_language": "italian"}"#), Language::Italian);
+        assert_eq!(language(r#"{"ui_language": "english"}"#), Language::English);
+        // Unset, it's the system's.
+        assert_eq!(language("{}"), Language::system());
+        assert!(parse(br#"{"ui_language": "klingon"}"#).is_err());
     }
 
     #[test]
