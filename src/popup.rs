@@ -869,10 +869,14 @@ impl Popup {
         let s = self.scale;
         let content_w = CARD_W - 2.0 * PAD_X;
         let indent = if self.back.shown { BACK_INDENT } else { 0.0 };
-        let room = if self.translate.shown { TRANSLATE_ROOM } else { 0.0 };
-        let header_layout = self
-            .renderer
-            .layout_header(word, phonetic, content_w - room, indent)?;
+        let room = if self.translate.shown {
+            TRANSLATE_ROOM
+        } else {
+            0.0
+        };
+        let header_layout =
+            self.renderer
+                .layout_header(word, phonetic, content_w - room, indent)?;
         let body_layout = self.renderer.layout_body(&body, content_w, PAD_BOTTOM)?;
         let header_surface = self.renderer.draw(&header_layout, s, &self.theme)?;
         let body_surface = self.renderer.draw(&body_layout, s, &self.theme)?;

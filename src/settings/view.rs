@@ -790,7 +790,7 @@ impl Settings {
         Ok((ChoiceView { pill, labels, rest }, at, segments))
     }
 
-/// A text field ending at `right` and centred on `middle`, in `group`.
+    /// A text field ending at `right` and centred on `middle`, in `group`.
     /// Returns it, with where its text goes in `group`, and its bounds.
     fn build_field(
         &self,

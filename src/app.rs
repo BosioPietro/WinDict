@@ -1245,7 +1245,10 @@ impl App {
     /// go: otherwise they belong to the app underneath.
     fn sync_back_keys(&mut self) {
         // Backspace edits what's typed in the list of languages.
-        let picking = self.translating.as_ref().is_some_and(|t| t.picking.is_some());
+        let picking = self
+            .translating
+            .as_ref()
+            .is_some_and(|t| t.picking.is_some());
         let wanted = (!self.history.is_empty() || self.translating.is_some()) && !picking;
         set_hotkeys(self.hwnd, BACK_KEYS, &mut self.back_keys, wanted);
     }
@@ -1331,7 +1334,12 @@ impl App {
             return;
         }
         unsafe {
-            SetTimer(Some(self.hwnd), TIMER_TRANSLATING, TRANSLATING_WAIT_MS, None);
+            SetTimer(
+                Some(self.hwnd),
+                TIMER_TRANSLATING,
+                TRANSLATING_WAIT_MS,
+                None,
+            );
         }
         self.request += 1;
         let (id, events) = (self.request, self.events.clone());
@@ -1540,7 +1548,10 @@ impl App {
         let Some(Target::Pick(code)) = target else {
             return;
         };
-        if self.picking().is_some_and(|(picking, _)| picking.highlight(&code)) {
+        if self
+            .picking()
+            .is_some_and(|(picking, _)| picking.highlight(&code))
+        {
             self.show_translation(Transition::Refine, None);
         }
     }
@@ -1645,7 +1656,10 @@ impl App {
     /// keys belong to the app underneath. The search box reads its own keys.
     fn sync_link_keys(&mut self) {
         // As does the list of languages.
-        let picking = self.translating.as_ref().is_some_and(|t| t.picking.is_some());
+        let picking = self
+            .translating
+            .as_ref()
+            .is_some_and(|t| t.picking.is_some());
         let popup = self
             .popup
             .as_ref()

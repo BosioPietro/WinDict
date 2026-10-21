@@ -130,8 +130,7 @@ fn parse(bytes: &[u8]) -> Result<Config, String> {
     if !translate::supported(&config.translate_from) {
         config.translate_from = defaults.translate_from.clone();
     }
-    if !translate::supported(&config.translate_to) || config.translate_to == config.translate_from
-    {
+    if !translate::supported(&config.translate_to) || config.translate_to == config.translate_from {
         config.translate_to = [defaults.translate_to, defaults.translate_from]
             .into_iter()
             .find(|l| *l != config.translate_from)
@@ -190,12 +189,21 @@ mod tests {
     #[test]
     fn reads_translation_languages() {
         let config = parse(br#"{"translate_from": "fr", "translate_to": "de"}"#).unwrap();
-        assert_eq!((config.translate_from.as_str(), config.translate_to.as_str()), ("fr", "de"));
+        assert_eq!(
+            (config.translate_from.as_str(), config.translate_to.as_str()),
+            ("fr", "de")
+        );
         assert!(config.mymemory_email.is_empty());
         let config = parse(br#"{"translate_from": "xx", "translate_to": "en"}"#).unwrap();
-        assert_eq!((config.translate_from.as_str(), config.translate_to.as_str()), ("en", "it"));
+        assert_eq!(
+            (config.translate_from.as_str(), config.translate_to.as_str()),
+            ("en", "it")
+        );
         let config = parse(br#"{"translate_from": "it", "translate_to": "it"}"#).unwrap();
-        assert_eq!((config.translate_from.as_str(), config.translate_to.as_str()), ("it", "en"));
+        assert_eq!(
+            (config.translate_from.as_str(), config.translate_to.as_str()),
+            ("it", "en")
+        );
         let config = parse(br#"{"mymemory_email": " me@example.com "}"#).unwrap();
         assert_eq!(config.mymemory_email, "me@example.com");
     }

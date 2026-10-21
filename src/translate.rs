@@ -42,10 +42,16 @@ pub const LANGUAGES: &[(&str, &str)] = &[
     ("cs", "\u{10C}e\u{161}tina"),
     ("ro", "Rom\u{E2}n\u{103}"),
     ("hu", "Magyar"),
-    ("el", "\u{395}\u{3BB}\u{3BB}\u{3B7}\u{3BD}\u{3B9}\u{3BA}\u{3AC}"),
+    (
+        "el",
+        "\u{395}\u{3BB}\u{3BB}\u{3B7}\u{3BD}\u{3B9}\u{3BA}\u{3AC}",
+    ),
     ("tr", "T\u{FC}rk\u{E7}e"),
     ("ru", "\u{420}\u{443}\u{441}\u{441}\u{43A}\u{438}\u{439}"),
-    ("uk", "\u{423}\u{43A}\u{440}\u{430}\u{457}\u{43D}\u{441}\u{44C}\u{43A}\u{430}"),
+    (
+        "uk",
+        "\u{423}\u{43A}\u{440}\u{430}\u{457}\u{43D}\u{441}\u{44C}\u{43A}\u{430}",
+    ),
     ("ja", "\u{65E5}\u{672C}\u{8A9E}"),
     ("ko", "\u{D55C}\u{AD6D}\u{C5B4}"),
     ("zh-CN", "\u{4E2D}\u{6587}"),
@@ -231,8 +237,12 @@ fn get(host: &str, path: &str) -> Result<Vec<u8>, String> {
     match http::get(host, path) {
         Ok((200, body)) => Ok(body),
         Ok((429, _)) => Err("Too many translations, try again in a moment.".into()),
-        Ok((code, _)) => Err(format!("The translation service returned an error ({code}).")),
-        Err(_) => Err("Couldn\u{2019}t reach the translation service. Check your connection.".into()),
+        Ok((code, _)) => Err(format!(
+            "The translation service returned an error ({code})."
+        )),
+        Err(_) => {
+            Err("Couldn\u{2019}t reach the translation service. Check your connection.".into())
+        }
     }
 }
 
@@ -472,7 +482,10 @@ mod tests {
         assert_eq!(t.groups.len(), 1);
         assert_eq!(t.groups[0].part_of_speech, "verb");
         assert_eq!(t.groups[0].terms[1].text, "personificare");
-        assert_eq!(t.groups[0].terms[0].back, ["embody", "incarnate", "personify"]);
+        assert_eq!(
+            t.groups[0].terms[0].back,
+            ["embody", "incarnate", "personify"]
+        );
     }
 
     #[test]
@@ -538,18 +551,67 @@ mod tests {
         let default = ("en", "fr");
         let pick = |found: &[&str], enabled: &[String]| pick(found, enabled, default);
         // From the language the word is in, to the other one.
-        assert_eq!(pick(&["it"], &both), Direction { from: "it".into(), to: "en".into(), sure: true });
-        assert_eq!(pick(&["en"], &both), Direction { from: "en".into(), to: "it".into(), sure: true });
+        assert_eq!(
+            pick(&["it"], &both),
+            Direction {
+                from: "it".into(),
+                to: "en".into(),
+                sure: true
+            }
+        );
+        assert_eq!(
+            pick(&["en"], &both),
+            Direction {
+                from: "en".into(),
+                to: "it".into(),
+                sure: true
+            }
+        );
         // In both: a guess, from the card's first.
-        assert_eq!(pick(&["it", "en"], &both), Direction { from: "it".into(), to: "en".into(), sure: false });
-        assert_eq!(pick(&["en", "it"], &both), Direction { from: "en".into(), to: "it".into(), sure: false });
+        assert_eq!(
+            pick(&["it", "en"], &both),
+            Direction {
+                from: "it".into(),
+                to: "en".into(),
+                sure: false
+            }
+        );
+        assert_eq!(
+            pick(&["en", "it"], &both),
+            Direction {
+                from: "en".into(),
+                to: "it".into(),
+                sure: false
+            }
+        );
         // One language: into the default.
         let english = ["en".to_string()];
-        assert_eq!(pick(&["en"], &english), Direction { from: "en".into(), to: "fr".into(), sure: true });
+        assert_eq!(
+            pick(&["en"], &english),
+            Direction {
+                from: "en".into(),
+                to: "fr".into(),
+                sure: true
+            }
+        );
         // Nothing found: the defaults.
-        assert_eq!(pick(&[], &english), Direction { from: "en".into(), to: "fr".into(), sure: true });
+        assert_eq!(
+            pick(&[], &english),
+            Direction {
+                from: "en".into(),
+                to: "fr".into(),
+                sure: true
+            }
+        );
         // Already in the default target language: into the other default.
-        assert_eq!(pick(&["fr"], &english), Direction { from: "fr".into(), to: "en".into(), sure: true });
+        assert_eq!(
+            pick(&["fr"], &english),
+            Direction {
+                from: "fr".into(),
+                to: "en".into(),
+                sure: true
+            }
+        );
     }
 
     #[test]
