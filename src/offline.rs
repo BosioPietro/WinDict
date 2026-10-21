@@ -19,6 +19,7 @@ use windows::Win32::System::Memory::{
 };
 
 use crate::dictionary::{self, percent_encode, Definition, Detail, Meaning, Sense, MAX_ANTONYMS};
+use crate::i18n::{fill, tr};
 
 static ENGLISH: &[u8] = include_bytes!("../data/english.wdict");
 
@@ -85,9 +86,7 @@ fn open(language: &str) -> Result<Arc<Dictionary>, String> {
     }
     // It names a file: nothing that could lead out of the folder.
     if language.is_empty() || !language.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
-        return Err(format!(
-            "\u{201C}{language}\u{201D} isn't a language code, like \u{201C}en\u{201D}."
-        ));
+        return Err(fill(tr().not_language_code, &[("language", &language)]));
     }
     open_file(&dicts_dir().join(format!("{language}.wdict")), language).map(Arc::new)
 }
@@ -96,9 +95,9 @@ fn open_file(path: &std::path::Path, language: &str) -> Result<Dictionary, Strin
     let file = Mapping::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let dictionary = Dictionary::new(Data::File(file));
     if dictionary.info.language != language {
-        return Err(format!(
-            "{} isn't a WinDict dictionary for \u{201C}{language}\u{201D}, or is for another version of WinDict.",
-            path.display()
+        return Err(fill(
+            tr().not_dictionary,
+            &[("path", &path.display()), ("language", &language)],
         ));
     }
     Ok(dictionary)
@@ -769,7 +768,7 @@ impl Dict<'_> {
                 let note = entry
                     .redirects
                     .first()
-                    .map(|b| format!("Also a form of \u{201C}{b}\u{201D}"));
+                    .map(|b| fill(tr().also_form_of, &[("word", b)]));
                 return build(&candidate, &entry, note);
             }
             // An inflected form ("ran", "walked"): show its base.
@@ -778,7 +777,7 @@ impl Dict<'_> {
                     return build(
                         base,
                         &base_entry,
-                        Some(format!("Base form of \u{201C}{word}\u{201D}")),
+                        Some(fill(tr().base_form_of, &[("word", &word)])),
                     );
                 }
             }

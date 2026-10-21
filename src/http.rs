@@ -9,6 +9,8 @@ use std::sync::OnceLock;
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Networking::WinHttp::*;
 
+use crate::i18n::tr;
+
 /// How long each step may take, in ms: resolving the name, connecting,
 /// sending, and receiving.
 const TIMEOUTS_MS: [i32; 4] = [4000, 4000, 4000, 8000];
@@ -55,7 +57,7 @@ fn session() -> Result<&'static Handle, String> {
         Handle(h)
     });
     if session.0.is_null() {
-        Err("Could not initialise the network stack.".into())
+        Err(tr().network_init_failed.into())
     } else {
         Ok(session)
     }
@@ -67,7 +69,7 @@ pub fn get(host: &str, path: &str) -> Result<(u32, Vec<u8>), String> {
     let status = fetch(host, path, |chunk| {
         body.extend_from_slice(chunk);
         if body.len() > MAX_BODY {
-            return Err("The dictionary response was unexpectedly large.".into());
+            return Err(tr().response_too_large.into());
         }
         Ok(())
     })?;
@@ -82,7 +84,7 @@ pub fn fetch(
     path: &str,
     mut sink: impl FnMut(&[u8]) -> Result<(), String>,
 ) -> Result<u32, String> {
-    let offline = || "Couldn't reach the dictionary. Check your connection.".to_string();
+    let offline = || tr().network_unavailable.to_string();
     unsafe {
         let session = session()?;
         let connect = Handle(WinHttpConnect(

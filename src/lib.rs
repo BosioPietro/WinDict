@@ -17,6 +17,8 @@
 //!   the colors of `theme`.
 //! - `config`, `hotkey`, `autostart`, `tray`: settings and their storage, the
 //!   shortcut, "Start with Windows", and the notification-area icon.
+//! - `i18n`: every string the user reads, so a language is a table, not a
+//!   change across the code.
 //! - `win`: safe wrappers for the Win32 calls shared across modules.
 
 mod app;
@@ -26,6 +28,7 @@ mod dictionary;
 mod dicts;
 mod hotkey;
 mod http;
+mod i18n;
 mod menu;
 mod offline;
 mod online;

@@ -8,6 +8,7 @@ use serde::Deserialize;
 use crate::dictionary::{
     percent_encode, Definition, Lookup, Meaning, Sense, MAX_ANTONYMS, WIKIZIONARIO,
 };
+use crate::i18n::{fill, tr};
 use crate::offline::sentence;
 use crate::online::{fetch, strip_html};
 
@@ -26,7 +27,7 @@ pub fn lookup_extract(word: &str, max_senses: usize, max_synonyms: usize) -> Loo
                 parse_extract(&extract_entries(body), max_senses, max_synonyms)
             }) {
                 Lookup::Found(def) => Lookup::Found(Definition {
-                    note: Some(format!("Base form of \u{201C}{word}\u{201D}")),
+                    note: Some(fill(tr().base_form_of, &[("word", &word)])),
                     ..def
                 }),
                 other => other,

@@ -1,0 +1,329 @@
+//! The words WinDict shows, kept apart from the code that shows them.
+//!
+//! Every user-facing string is a field of [`Strings`], read with [`t`]:
+//! `tr().quit`. [`EN`] is the table the others are made from. A new language
+//! is a `Strings` of its own that lists what it translates and takes the
+//! rest from English with `..EN`, so a missing string reads in English
+//! instead of not at all; then it's added to [`Language`]. Nothing outside
+//! this module needs to know which language is current.
+//!
+//! A string that has a value in it holds `{name}` where it goes, filled in
+//! with [`fill`]: the translation decides where it falls in the sentence.
+//!
+//! What stays as it is: names of languages (each in itself, so they can be
+//! found whichever language WinDict is in), key names, and "WinDict".
+
+use std::fmt::Display;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+macro_rules! strings {
+    ($($(#[$doc:meta])* $name:ident: $text:expr,)*) => {
+        /// Every string, in one language.
+        pub struct Strings {
+            $($(#[$doc])* pub $name: &'static str,)*
+        }
+
+        /// English, which the other languages fall back on.
+        pub const EN: Strings = Strings {
+            $($name: $text,)*
+        };
+    };
+}
+
+strings! {
+    // Notifications from the tray icon.
+    settings_not_loaded: "Settings not loaded, using the defaults",
+    settings_not_reloaded: "Settings not reloaded, nothing changed",
+    settings_not_saved: "Settings not saved",
+    dictionary_not_loaded: "Dictionary not loaded",
+    running: "WinDict is running",
+    /// `{hotkey}`.
+    running_detail: "Select a word anywhere and press {hotkey}.",
+    shortcut_unavailable: "Shortcut unavailable",
+    /// `{hotkey}`.
+    shortcut_unavailable_detail: "{hotkey} is already used by another app. Choose another one in Settings.",
+    shortcut_invalid: "Invalid shortcut",
+    draw_window_failed: "WinDict couldn\u{2019}t draw its window",
+    draw_menu_failed: "WinDict couldn\u{2019}t draw its menu",
+    draw_settings_failed: "WinDict couldn\u{2019}t draw its settings",
+    /// `{language}`: a dictionary that couldn't be downloaded at start.
+    not_downloaded: "{language} not downloaded",
+    settings_reloaded: "Settings reloaded",
+    /// `{hotkey}`.
+    settings_reloaded_detail: "Look up words with {hotkey}.",
+    /// `{percent}`: how far a dictionary's download has got.
+    downloading: "Downloading\u{2026} {percent}%",
+
+    // The card: messages.
+    too_long: "That\u{2019}s a lot of text",
+    too_long_detail: "Select a single word or a short phrase.",
+    nothing_selected: "Nothing selected",
+    /// `{hotkey}`.
+    nothing_selected_detail: "Select a word in any app, then press {hotkey}.",
+    not_found: "No definition found",
+    not_found_detail: "This word isn\u{2019}t in the dictionary.",
+    not_found_check_spelling: "This word isn\u{2019}t in the dictionary. Check the spelling?",
+    lookup_failed: "Couldn\u{2019}t look that up",
+    /// `{word}`, which is the link.
+    did_you_mean: "Did you mean {word}?",
+
+    // The card: the search box.
+    search_placeholder: "Type a word to look it up",
+    search_title: "No text selected",
+    /// Opened again from the card itself, where nothing was meant to be selected.
+    search_again_title: "Look up another word",
+    search_too_long: "Try a single word or a short phrase",
+    no_suggestions: "No matches in the offline dictionary",
+    no_suggestions_online: "No offline matches \u{2014} Enter searches online",
+    /// Beside the Enter key.
+    key_look_up: "Look up",
+    /// Beside the Esc key.
+    key_close: "Close",
+
+    // The card: a definition.
+    similar: "Similar",
+    opposite: "Opposite",
+    /// `{word}`: shown when a word is a form of another.
+    also_form_of: "Also a form of \u{201C}{word}\u{201D}",
+    /// `{word}`: shown when the definition is of the word's base form.
+    base_form_of: "Base form of \u{201C}{word}\u{201D}",
+    pos_noun: "noun",
+    pos_verb: "verb",
+    pos_adjective: "adjective",
+    pos_adverb: "adverb",
+    pos_phrase: "phrase",
+    pos_interjection: "interjection",
+    pos_pronoun: "pronoun",
+    pos_preposition: "preposition",
+    pos_conjunction: "conjunction",
+    pos_article: "article",
+    pos_abbreviation: "abbreviation",
+    pos_other: "other",
+
+    // The card: translating.
+    back_tip: "Back (Backspace)",
+    translate_tip: "Translate (Ctrl+T)",
+    swap_tip: "Swap languages",
+    /// `{word}`, `{from}`, `{to}`.
+    translate_ambiguous: "\u{201C}{word}\u{201D} is a word in both {from} and {to}.",
+    /// `{language}`.
+    translate_into: "Translate into {language}",
+    translating: "Translating\u{2026}",
+    translate_failed: "Couldn\u{2019}t translate it",
+    /// The heading over translations that have no part of speech.
+    also: "Also",
+    no_languages_match: "No languages match",
+
+    // The tray menu.
+    menu_reload: "Reload settings",
+    menu_quit: "Quit",
+
+    // Settings: the window.
+    settings: "Settings",
+    settings_window_title: "WinDict Settings",
+    config_link: "Open config.json",
+    off: "Off",
+    theme_system: "System",
+    theme_light: "Light",
+    theme_dark: "Dark",
+    /// Over the info symbol by the email field.
+    email_tip: "MyMemory, the translator used when Google Translate can\u{2019}t \
+        be reached, allows 5,000 characters a day, or 50,000 with an email address. \
+        It\u{2019}s sent only to MyMemory, with the words translated.",
+
+    // Settings: recording a shortcut.
+    shortcut_detail: "Looks up the selected word",
+    recording_detail: "Press the new shortcut, or Esc to cancel",
+    recording_hint: "Press keys",
+    needs_modifier: "Hold Ctrl, Alt or Win with the key",
+    unusable_key: "That key can\u{2019}t be part of a shortcut",
+    shortcut_taken: "Already used by Windows or another app",
+
+    // Settings: sections and rows, each with its description under it.
+    general: "General",
+    shortcut: "Shortcut",
+    start_with_windows: "Start with Windows",
+    start_with_windows_detail: "Runs WinDict when you sign in",
+    card: "Card",
+    theme: "Theme",
+    theme_detail: "Card and menu colors",
+    definitions: "Definitions",
+    definitions_detail: "Senses shown per part of speech",
+    synonyms: "Synonyms",
+    synonyms_detail: "Similar words under each part of speech",
+    examples: "Examples",
+    examples_detail: "Sentences showing each sense in use",
+    animations: "Animations",
+    animations_detail: "Starts as Windows has them; turn on to override",
+    translation: "Translation",
+    default_languages: "Default languages",
+    default_languages_detail: "Translated from and into when the card can\u{2019}t tell",
+    mymemory_email: "MyMemory email",
+    mymemory_email_detail: "Raises the daily limit",
+    lookup: "Lookup",
+    online_dictionary: "Online dictionary",
+    online_dictionary_detail: "For pronunciations, and words the built-in one lacks",
+    read_selection: "Read selections directly",
+    read_selection_detail: "Leaves the clipboard alone in apps that allow it",
+    languages: "Languages",
+
+    // Errors, which reach the user as the detail of a message.
+    /// `{hotkey}`.
+    hotkey_many_keys: "\"{hotkey}\" has more than one non-modifier key",
+    /// `{key}`, `{hotkey}`.
+    hotkey_unknown_key: "Unknown key \"{key}\" in \"{hotkey}\"",
+    /// `{hotkey}`.
+    hotkey_no_key: "\"{hotkey}\" has no key besides modifiers",
+    /// `{hotkey}`.
+    hotkey_no_modifier: "\"{hotkey}\" needs at least one modifier (Ctrl, Alt, Shift, Win)",
+    network_unavailable: "Couldn't reach the dictionary. Check your connection.",
+    network_init_failed: "Could not initialise the network stack.",
+    response_too_large: "The dictionary response was unexpectedly large.",
+    too_many_lookups: "Too many lookups, try again in a moment.",
+    /// `{code}`: an HTTP status.
+    lookup_service_error: "The dictionary service returned an error ({code}).",
+    too_many_translations: "Too many translations, try again in a moment.",
+    /// `{code}`: an HTTP status.
+    translation_service_error: "The translation service returned an error ({code}).",
+    translation_unreachable: "Couldn\u{2019}t reach the translation service. Check your connection.",
+    no_translation: "Google Translate had no translation.",
+    /// `{language}`.
+    not_language_code: "\u{201C}{language}\u{201D} isn't a language code, like \u{201C}en\u{201D}.",
+    /// `{path}`, `{language}`.
+    not_dictionary: "{path} isn't a WinDict dictionary for \u{201C}{language}\u{201D}, or is for another version of WinDict.",
+    download_unreachable: "Couldn\u{2019}t connect. Try again later.",
+    download_damaged: "The download was damaged. Try again.",
+    /// `{status}`: an HTTP status.
+    download_status: "The download failed ({status}).",
+    /// `{reason}`: why the file couldn't be written.
+    save_failed: "Couldn\u{2019}t save it: {reason}",
+}
+
+/// The languages WinDict can be shown in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Language {
+    English,
+}
+
+impl Language {
+    pub const ALL: &'static [Language] = &[Language::English];
+
+    fn strings(self) -> &'static Strings {
+        match self {
+            Language::English => &EN,
+        }
+    }
+}
+
+/// Index into [`Language::ALL`]. Read from the threads that look words up,
+/// so it's atomic; it changes only when the setting does.
+static CURRENT: AtomicUsize = AtomicUsize::new(0);
+
+/// Shows WinDict in `language` from now on.
+// Nothing calls it until there is a setting to choose the language by.
+#[allow(dead_code)]
+pub fn set(language: Language) {
+    let index = Language::ALL.iter().position(|&l| l == language);
+    CURRENT.store(index.unwrap_or(0), Ordering::Relaxed);
+}
+
+fn current() -> Language {
+    Language::ALL[CURRENT.load(Ordering::Relaxed).min(Language::ALL.len() - 1)]
+}
+
+/// The strings of the current language.
+pub fn tr() -> &'static Strings {
+    current().strings()
+}
+
+/// `template` with each `{name}` replaced by its value in `args`. A name
+/// that isn't in `args` is left as it is, braces included.
+pub fn fill(template: &str, args: &[(&str, &dyn Display)]) -> String {
+    let mut out = String::with_capacity(template.len() + 16);
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        rest = &rest[open..];
+        let value = rest
+            .find('}')
+            .and_then(|close| args.iter().find(|(name, _)| *name == &rest[1..close]));
+        match value {
+            Some((name, value)) => {
+                out.push_str(&value.to_string());
+                rest = &rest[name.len() + 2..];
+            }
+            None => {
+                out.push('{');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+impl Strings {
+    /// How a part of speech, as the dictionaries name it ("noun"), is
+    /// written. Anything else, like what a translator calls one, as it is.
+    pub fn part_of_speech<'a>(&'a self, key: &'a str) -> &'a str {
+        match key {
+            "noun" => self.pos_noun,
+            "verb" => self.pos_verb,
+            "adjective" => self.pos_adjective,
+            "adverb" => self.pos_adverb,
+            "phrase" => self.pos_phrase,
+            "interjection" => self.pos_interjection,
+            "pronoun" => self.pos_pronoun,
+            "preposition" => self.pos_preposition,
+            "conjunction" => self.pos_conjunction,
+            "article" => self.pos_article,
+            "abbreviation" => self.pos_abbreviation,
+            "other" => self.pos_other,
+            _ => key,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fills_in_values() {
+        assert_eq!(
+            fill("{a} and {b}, {a}", &[("a", &1), ("b", &"two")]),
+            "1 and two, 1"
+        );
+        // Where a translation puts them is up to it.
+        assert_eq!(fill("{b}{a}", &[("a", &1), ("b", &"two")]), "two1");
+        // Unknown names, stray braces and values holding braces are kept.
+        assert_eq!(fill("{x} { {a}", &[("a", &"{b}"), ("b", &0)]), "{x} { {b}");
+        assert_eq!(fill("no values", &[]), "no values");
+        assert_eq!(fill("open {", &[]), "open {");
+    }
+
+    #[test]
+    fn languages_inherit_english() {
+        // How a translation is written: what it doesn't list reads in English.
+        const PARTIAL: Strings = Strings {
+            menu_quit: "Esci",
+            ..EN
+        };
+        assert_eq!(PARTIAL.menu_quit, "Esci");
+        assert_eq!(PARTIAL.menu_reload, EN.menu_reload);
+    }
+
+    #[test]
+    fn names_parts_of_speech() {
+        assert_eq!(EN.part_of_speech("noun"), "noun");
+        assert_eq!(EN.part_of_speech("nom"), "nom");
+    }
+
+    #[test]
+    fn templates_name_their_values() {
+        // A template that lost a name would show it to the user.
+        let hotkey: &dyn Display = &"Ctrl+D";
+        assert!(!fill(EN.running_detail, &[("hotkey", hotkey)]).contains('{'));
+        assert!(EN.did_you_mean.contains("{word}"));
+    }
+}

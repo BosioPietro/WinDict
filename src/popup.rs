@@ -12,6 +12,7 @@ use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
+use crate::i18n::tr;
 use crate::render::{Body, Face, Ink, Link, Mark, Renderer, Target, WORD_SIZE};
 use crate::searchbox::SearchBox;
 use crate::theme::Theme;
@@ -41,15 +42,12 @@ const BACK_RADIUS: f32 = 5.0;
 const BACK_SLIDE: f32 = 10.0;
 /// "Back" in Segoe Fluent Icons and Segoe MDL2 Assets.
 const BACK_GLYPH: &str = "\u{E72B}";
-const BACK_TIP: &str = "Back (Backspace)";
 /// The translate button's left edge: mirrors the back button's, at the right.
 const TRANSLATE_X: f32 = CARD_W - BACK_X - BACK_SIZE;
 /// How much narrower the heading is beside the translate button.
 const TRANSLATE_ROOM: f32 = CARD_W - PAD_X - TRANSLATE_X + 6.0;
 /// "Translate" in Segoe Fluent Icons and Segoe MDL2 Assets.
 const TRANSLATE_GLYPH: &str = "\u{E8C1}";
-const TRANSLATE_TIP: &str = "Translate (Ctrl+T)";
-const SWAP_TIP: &str = "Swap languages";
 /// The swap button's tooltip's tool, after the back and translate buttons'.
 const SWAP_TOOL: usize = 3;
 /// The ring around the link Tab moved to, as on Windows 11 controls.
@@ -327,7 +325,7 @@ impl Content {
             swap_geometry,
             swap_brush,
             swap_hovered: false,
-            swap_tip: create_tooltip(hwnd, SWAP_TIP, SWAP_TOOL),
+            swap_tip: create_tooltip(hwnd, tr().swap_tip, SWAP_TOOL),
             swap_tip_rect: RECT::default(),
         })
     }
@@ -772,7 +770,7 @@ impl Popup {
             BACK_GLYPH,
             Face::Button,
             Ink::Primary,
-            BACK_TIP,
+            tr().back_tip,
             1,
             BACK_X,
             -BACK_SLIDE,
@@ -786,7 +784,7 @@ impl Popup {
             TRANSLATE_GLYPH,
             Face::LargeButton,
             Ink::Accent,
-            TRANSLATE_TIP,
+            tr().translate_tip,
             2,
             TRANSLATE_X,
             0.0,

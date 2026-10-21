@@ -9,6 +9,7 @@ use windows::UI::Color;
 use windows::UI::Composition::*;
 use windows_numerics::Vector3;
 
+use crate::i18n;
 use crate::theme::rgb;
 use crate::ui::RESIZE_MS;
 
@@ -259,7 +260,7 @@ impl Settings {
 
         // The header: the heading, the version under it, and the close button.
         let title = Text::new(c, &content)?;
-        let heading = r.layout_line("Settings", Face::Heading, Ink::Primary, 300.0)?;
+        let heading = r.layout_line(i18n::tr().settings, Face::Heading, Ink::Primary, 300.0)?;
         let title_size = title.show(r, &heading, s, t)?;
         let title_at = v3(px(LABEL_X), px(PAD_TOP));
         title.visual.SetOffset(title_at)?;
@@ -318,6 +319,7 @@ impl Settings {
         let mut spare = None;
         let mut slack_y = 0.0;
         for (i, (name, rows)) in SECTIONS.iter().enumerate() {
+            let name = name(i18n::tr());
             y += if i == 0 { px(2.0) } else { px(SECTION_GAP) };
             let label = Text::new(c, &parent)?;
             let caps = r.layout_label(name, Ink::Accent, 300.0)?;
@@ -428,7 +430,7 @@ impl Settings {
         let footer_at = v3(0.0, y);
         let footer = container(c, &parent, footer_at)?;
         let link = Text::new(c, &footer)?;
-        let link_size = link.show(r, &r.layout_link(CONFIG_LINK)?, s, t)?;
+        let link_size = link.show(r, &r.layout_link(i18n::tr().config_link)?, s, t)?;
         let link_at = Rect {
             x: px(LABEL_X),
             y: 0.0,
@@ -490,8 +492,8 @@ impl Settings {
         thumb.SetOpacity(0.0)?;
         content.Children()?.InsertAtTop(&thumb)?;
         let tips = vec![
-            (Hit::Info, self.build_tip(&content, EMAIL_TIP)?),
-            (Hit::Swap, self.build_tip(&content, SWAP_TIP)?),
+            (Hit::Info, self.build_tip(&content, i18n::tr().email_tip)?),
+            (Hit::Swap, self.build_tip(&content, i18n::tr().swap_tip)?),
         ];
 
         Ok(View {
@@ -689,10 +691,10 @@ impl Settings {
 
         let room = GROUP_W - ROW_PAD - TEXT_X - spec.control.width() - CONTROL_GAP;
         let title = Text::new(c, group)?;
-        let name = r.layout_line(spec.title, Face::Setting, Ink::Primary, room)?;
+        let name = r.layout_line(spec.title(), Face::Setting, Ink::Primary, room)?;
         let title_size = title.show(r, &name, s, t)?;
         let detail = Text::new(c, group)?;
-        let line = r.layout_line(spec.detail, Face::Small, Ink::Secondary, room)?;
+        let line = r.layout_line(spec.detail(), Face::Small, Ink::Secondary, room)?;
         let detail_size = detail.show(r, &line, s, t)?;
         let icon = Text::new(c, group)?;
         let glyph = r.layout_line(spec.icon, Face::LargeButton, Ink::Primary, ICON_W)?;
@@ -704,7 +706,7 @@ impl Settings {
         title.visual.SetOffset(v3(px(TEXT_X), text_y))?;
         if matches!(spec.control, Control::Email) {
             // The info symbol follows the name, wherever that ends.
-            let (_, name_w, _) = r.layout_field(spec.title, Ink::Primary, 0)?;
+            let (_, name_w, _) = r.layout_field(spec.title(), Ink::Primary, 0)?;
             let info = Text::new(c, group)?;
             let glyph = r.layout_line(INFO_GLYPH, Face::Icon, Ink::Secondary, INFO_W)?;
             let size = info.show(r, &glyph, s, t)?;
@@ -872,12 +874,12 @@ impl Settings {
         let px = |dip: f32| (dip * s).round();
         let room = GROUP_W - ROW_PAD - TEXT_X;
         let title = Text::new(c, group)?;
-        let name = r.layout_line(spec.title, Face::Setting, Ink::Primary, room)?;
+        let name = r.layout_line(spec.title(), Face::Setting, Ink::Primary, room)?;
         let title_size = title.show(r, &name, s, t)?;
         let top = row.y + px(TRANSLATE_PAD);
         title.visual.SetOffset(v3(px(TEXT_X), top))?;
         let detail = Text::new(c, group)?;
-        let line = r.layout_line(spec.detail, Face::Small, Ink::Secondary, room)?;
+        let line = r.layout_line(spec.detail(), Face::Small, Ink::Secondary, room)?;
         let detail_size = detail.show(r, &line, s, t)?;
         let detail_at = v3(px(TEXT_X), top + title_size.Y + px(DETAIL_GAP));
         detail.visual.SetOffset(detail_at)?;

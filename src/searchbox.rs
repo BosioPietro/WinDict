@@ -8,6 +8,7 @@ use windows::core::{Interface, Result, HSTRING};
 use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
+use crate::i18n::tr;
 use crate::popup::{CARD_W, PAD_TOP, PAD_X};
 use crate::render::{Face, Ink, Renderer, QUERY_SIZE, SUGGESTION_SIZE};
 use crate::theme::Theme;
@@ -30,7 +31,6 @@ const CARET_W: f32 = 1.5;
 const DRIFT: f32 = 6.0;
 /// "Search" in Segoe Fluent Icons and Segoe MDL2 Assets.
 const SEARCH_GLYPH: &str = "\u{E721}";
-const KEYS: [(&str, &str); 2] = [("Enter", "Look up"), ("Esc", "Close")];
 /// How many suggestions fit under the field.
 pub(crate) const MAX_SUGGESTIONS: usize = 5;
 const LIST_GAP: f32 = 6.0;
@@ -308,7 +308,7 @@ impl SearchBox {
         Animator::stop(&self.highlight, &["Opacity", "Offset"]);
         self.highlight.SetOpacity(0.0)?;
 
-        let keys = renderer.layout_keys(&KEYS)?;
+        let keys = renderer.layout_keys(&[("Enter", tr().key_look_up), ("Esc", tr().key_close)])?;
         self.footer_h = self.footer.show(renderer, &keys, s, theme)?.Y;
         let footer_at = v3(title_at.X, self.footer_y(0));
         let height = self.height(0);

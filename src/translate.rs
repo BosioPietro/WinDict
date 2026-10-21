@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::dictionary::percent_encode;
 use crate::http;
+use crate::i18n::{fill, tr};
 
 const GOOGLE_HOST: &str = "translate.googleapis.com";
 const GOOGLE_WEB_HOST: &str = "translate-pa.googleapis.com";
@@ -239,13 +240,9 @@ pub fn translate(
 fn get(host: &str, path: &str) -> Result<Vec<u8>, String> {
     match http::get(host, path) {
         Ok((200, body)) => Ok(body),
-        Ok((429, _)) => Err("Too many translations, try again in a moment.".into()),
-        Ok((code, _)) => Err(format!(
-            "The translation service returned an error ({code})."
-        )),
-        Err(_) => {
-            Err("Couldn\u{2019}t reach the translation service. Check your connection.".into())
-        }
+        Ok((429, _)) => Err(tr().too_many_translations.into()),
+        Ok((code, _)) => Err(fill(tr().translation_service_error, &[("code", &code)])),
+        Err(_) => Err(tr().translation_unreachable.into()),
     }
 }
 
@@ -257,7 +254,7 @@ fn google(word: &str, from: &str, to: &str) -> Result<Translation, String> {
         percent_encode(word)
     );
     let body = get(GOOGLE_HOST, &path)?;
-    parse_google(&body).ok_or_else(|| "Google Translate had no translation.".into())
+    parse_google(&body).ok_or_else(|| tr().no_translation.into())
 }
 
 /// The endpoint translate.google.com asks, with its dictionary. Its model
@@ -272,7 +269,7 @@ fn google_web(word: &str, from: &str, to: &str) -> Result<Translation, String> {
         percent_encode(word)
     );
     let body = get(GOOGLE_WEB_HOST, &path)?;
-    parse_google_web(&body).ok_or_else(|| "Google Translate had no translation.".into())
+    parse_google_web(&body).ok_or_else(|| tr().no_translation.into())
 }
 
 /// Reads the website endpoint's answer: the translation, then the

@@ -8,6 +8,7 @@ use std::io::Write;
 use windows::Win32::Security::Cryptography::{BCryptHash, BCRYPT_SHA256_ALG_HANDLE};
 
 use crate::http;
+use crate::i18n::{fill, tr};
 use crate::offline;
 
 pub struct Download {
@@ -79,10 +80,14 @@ fn fetch(
     let mut bytes = Vec::with_capacity(download.size as usize);
     let mut shown = 0;
     let path = format!("{RELEASE}{}", download.file);
+    // More than it said it was: what to say is picked below, once the fetch
+    // has returned, so the sink needs no words.
+    let mut oversized = false;
     let status = http::fetch(HOST, &path, |chunk| {
         bytes.extend_from_slice(chunk);
         if bytes.len() as u64 > download.size {
-            return Err(DAMAGED.into());
+            oversized = true;
+            return Err(String::new());
         }
         let percent = (bytes.len() as u64 * 100 / download.size.max(1)) as u32;
         if percent != shown {
@@ -91,23 +96,28 @@ fn fetch(
         }
         Ok(())
     })
-    .map_err(|e| if e == DAMAGED { e } else { OFFLINE.into() })?;
+    .map_err(|_| if oversized { damaged() } else { offline() })?;
     if status != 200 {
-        return Err(format!("The download failed ({status})."));
+        return Err(fill(tr().download_status, &[("status", &status)]));
     }
     if !download.matches(&bytes) {
-        return Err(DAMAGED.into());
+        return Err(damaged());
     }
     file.write_all(&bytes)
         .and_then(|()| file.sync_all())
         .map_err(unsaved)
 }
 
-const OFFLINE: &str = "Couldn\u{2019}t connect. Try again later.";
-const DAMAGED: &str = "The download was damaged. Try again.";
+fn offline() -> String {
+    tr().download_unreachable.into()
+}
+
+fn damaged() -> String {
+    tr().download_damaged.into()
+}
 
 fn unsaved(e: std::io::Error) -> String {
-    format!("Couldn\u{2019}t save it: {}", e.kind())
+    fill(tr().save_failed, &[("reason", &e.kind())])
 }
 
 impl Download {

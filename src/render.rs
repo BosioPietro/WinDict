@@ -17,6 +17,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::dictionary::{self, percent_encode, Definition};
 use crate::dicts;
+use crate::i18n::{fill, tr};
 use crate::theme::{to_d2d, Theme};
 use crate::translate::{self, Translation};
 
@@ -969,13 +970,17 @@ impl Renderer {
         }
         if let Some(word) = suggestion {
             out.y += 8.0;
-            let ask = "Did you mean ";
+            // Where the word falls is up to the translation; the link is just it.
+            let (before, after) = tr()
+                .did_you_mean
+                .split_once("{word}")
+                .unwrap_or((tr().did_you_mean, ""));
             // DirectWrite counts UTF-16 code units.
             let range = DWRITE_TEXT_RANGE {
-                startPosition: ask.encode_utf16().count() as u32,
+                startPosition: before.encode_utf16().count() as u32,
                 length: word.encode_utf16().count() as u32,
             };
-            let line = self.text(&format!("{ask}{word}?"), &self.formats.body, width)?;
+            let line = self.text(&format!("{before}{word}{after}"), &self.formats.body, width)?;
             unsafe {
                 let _ = line.SetUnderline(true, range);
             }
@@ -1044,7 +1049,7 @@ impl Renderer {
                 });
                 out.y += 14.0;
             }
-            let pos = self.spaced_caps(&meaning.part_of_speech, width)?;
+            let pos = self.spaced_caps(tr().part_of_speech(&meaning.part_of_speech), width)?;
             let (_, h) = out.text(pos, 0.0, Ink::Accent);
             out.y += h + 6.0;
 
@@ -1067,10 +1072,16 @@ impl Renderer {
                 out.y += 9.0;
             }
             if !meaning.synonyms.is_empty() {
-                self.layout_related(out, "Similar", &meaning.synonyms, indent, width - indent)?;
+                self.layout_related(out, tr().similar, &meaning.synonyms, indent, width - indent)?;
             }
             if !meaning.antonyms.is_empty() {
-                self.layout_related(out, "Opposite", &meaning.antonyms, indent, width - indent)?;
+                self.layout_related(
+                    out,
+                    tr().opposite,
+                    &meaning.antonyms,
+                    indent,
+                    width - indent,
+                )?;
             }
         }
         Ok(())
@@ -1150,11 +1161,13 @@ impl Renderer {
         out.y += 16.0;
         match card.state {
             Translated::Asking => {
-                let ask = format!(
-                    "\u{201C}{}\u{201D} is a word in both {} and {}.",
-                    card.word,
-                    translate::name(card.from),
-                    translate::name(card.to)
+                let ask = fill(
+                    tr().translate_ambiguous,
+                    &[
+                        ("word", &card.word),
+                        ("from", &translate::name(card.from)),
+                        ("to", &translate::name(card.to)),
+                    ],
                 );
                 let (_, h) = out.text(
                     self.text(&ask, &self.formats.body, width)?,
@@ -1162,7 +1175,10 @@ impl Renderer {
                     Ink::Secondary,
                 );
                 out.y += h + 8.0;
-                let label = format!("Translate into {}", translate::name(card.to));
+                let label = fill(
+                    tr().translate_into,
+                    &[("language", &translate::name(card.to))],
+                );
                 let line = self.text(&label, &self.formats.body, width)?;
                 let all = DWRITE_TEXT_RANGE {
                     startPosition: 0,
@@ -1183,12 +1199,12 @@ impl Renderer {
             }
             Translated::Waiting => {}
             Translated::Loading => {
-                let line = self.text("Translating\u{2026}", &self.formats.body, width)?;
+                let line = self.text(tr().translating, &self.formats.body, width)?;
                 let (_, h) = out.text(line, 0.0, Ink::Tertiary);
                 out.y += h;
             }
             Translated::Failed(error) => {
-                self.layout_message(out, "Couldn\u{2019}t translate it", error, None, width)?;
+                self.layout_message(out, tr().translate_failed, error, None, width)?;
             }
             Translated::Done(translation) => {
                 self.layout_translated(out, card, translation, width)?
@@ -1392,7 +1408,7 @@ impl Renderer {
         let line_h = metrics(&self.text("Ag", format, width)?).1;
         let (row_x, row_w) = (LIST_PAD, width - 2.0 * LIST_PAD);
         if rows.is_empty() {
-            let line = self.text("No languages match", format, row_w)?;
+            let line = self.text(tr().no_languages_match, format, row_w)?;
             out.items.push(Item::Text {
                 layout: line,
                 x: row_x + SELECT_PAD,
@@ -1532,8 +1548,8 @@ impl Renderer {
             });
             out.y += 14.0;
             let label = match group.part_of_speech.as_str() {
-                "" => "Also",
-                pos => pos,
+                "" => tr().also,
+                pos => tr().part_of_speech(pos),
             };
             let (_, h) = out.text(self.spaced_caps(label, width)?, 0.0, Ink::Accent);
             out.y += h + 6.0;

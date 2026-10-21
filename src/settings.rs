@@ -27,6 +27,7 @@ use crate::app::picking::Picking;
 use crate::config::{Config, ThemeMode};
 use crate::dicts;
 use crate::hotkey::{self, held_modifiers, is_modifier, Hotkey};
+use crate::i18n::{tr, Strings};
 use crate::popup;
 use crate::render::{Align, Face, Ink, Layout, Picker, Renderer, Side, Target, PICKER_ROWS};
 use crate::selection;
@@ -182,20 +183,8 @@ const CHEVRON_GLYPH: &str = "\u{E70D}";
 const CHECK_GLYPH: &str = "\u{E73E}";
 const INFO_GLYPH: &str = "\u{E946}";
 
-const SHORTCUT_DETAIL: &str = "Looks up the selected word";
-const RECORDING_DETAIL: &str = "Press the new shortcut, or Esc to cancel";
-const RECORDING_HINT: &str = "Press keys";
-const NEEDS_MODIFIER: &str = "Hold Ctrl, Alt or Win with the key";
-const UNUSABLE_KEY: &str = "That key can\u{2019}t be part of a shortcut";
-pub const SHORTCUT_TAKEN: &str = "Already used by Windows or another app";
-const CONFIG_LINK: &str = "Open config.json";
 const EMAIL_PLACEHOLDER: &str = "name@example.com";
-/// Over the info symbol by the email field.
-const EMAIL_TIP: &str = "MyMemory, the translator used when Google Translate can\u{2019}t \
-    be reached, allows 5,000 characters a day, or 50,000 with an email address. \
-    It\u{2019}s sent only to MyMemory, with the words translated.";
-/// Over the button between the default languages.
-const SWAP_TIP: &str = "Swap languages";
+
 /// The longest an email address can be.
 const MAX_EMAIL_CHARS: usize = 254;
 
@@ -271,7 +260,7 @@ impl Counter {
 
     fn text(self, n: usize) -> String {
         match n {
-            0 => "Off".into(),
+            0 => tr().off.into(),
             _ => n.to_string(),
         }
     }
@@ -281,10 +270,10 @@ impl Counter {
     }
 }
 
-const THEMES: [(ThemeMode, &str); 3] = [
-    (ThemeMode::System, "System"),
-    (ThemeMode::Light, "Light"),
-    (ThemeMode::Dark, "Dark"),
+const THEMES: [(ThemeMode, Label); 3] = [
+    (ThemeMode::System, |s| s.theme_system),
+    (ThemeMode::Light, |s| s.theme_light),
+    (ThemeMode::Dark, |s| s.theme_dark),
 ];
 
 /// A setting chosen from a few options, side by side.
@@ -298,7 +287,7 @@ const CHOICES: [Choice; 1] = [Choice::Theme];
 impl Choice {
     fn names(self) -> Vec<&'static str> {
         match self {
-            Choice::Theme => THEMES.iter().map(|(_, name)| *name).collect(),
+            Choice::Theme => THEMES.iter().map(|(_, name)| name(tr())).collect(),
         }
     }
 }
@@ -325,7 +314,7 @@ const NOTES: [Note; 2] = [Note::Shortcut, Note::Language];
 impl Note {
     fn usual(self, values: &Values) -> String {
         match self {
-            Note::Shortcut => SHORTCUT_DETAIL.into(),
+            Note::Shortcut => tr().shortcut_detail.into(),
             Note::Language => summary(&values.config.languages),
         }
     }
@@ -424,20 +413,29 @@ impl Control {
     }
 }
 
+/// A string of the current language, picked out of its [`Strings`]: the rows
+/// are consts, written before the language is known.
+type Label = fn(&Strings) -> &'static str;
+
 struct Row {
     /// A Segoe Fluent Icons glyph shown before the name.
     icon: &'static str,
-    title: &'static str,
-    detail: &'static str,
+    title: Label,
+    detail: Label,
     control: Control,
 }
 
-const fn row(
-    icon: &'static str,
-    title: &'static str,
-    detail: &'static str,
-    control: Control,
-) -> Row {
+impl Row {
+    fn title(&self) -> &'static str {
+        (self.title)(tr())
+    }
+
+    fn detail(&self) -> &'static str {
+        (self.detail)(tr())
+    }
+}
+
+const fn row(icon: &'static str, title: Label, detail: Label, control: Control) -> Row {
     Row {
         icon,
         title,
@@ -446,88 +444,98 @@ const fn row(
     }
 }
 
-const SECTIONS: &[(&str, &[Row])] = &[
+const SECTIONS: &[(Label, &[Row])] = &[
     (
-        "General",
+        |s| s.general,
         &[
-            row("\u{E765}", "Shortcut", SHORTCUT_DETAIL, Control::Shortcut),
+            row(
+                "\u{E765}",
+                |s| s.shortcut,
+                |s| s.shortcut_detail,
+                Control::Shortcut,
+            ),
             row(
                 "\u{E7E8}",
-                "Start with Windows",
-                "Runs WinDict when you sign in",
+                |s| s.start_with_windows,
+                |s| s.start_with_windows_detail,
                 Control::Switch(Switch::Autostart),
             ),
         ],
     ),
     (
-        "Card",
+        |s| s.card,
         &[
             row(
                 "\u{E790}",
-                "Theme",
-                "Card and menu colors",
+                |s| s.theme,
+                |s| s.theme_detail,
                 Control::Choice(Choice::Theme),
             ),
             row(
                 "\u{E736}",
-                "Definitions",
-                "Senses shown per part of speech",
+                |s| s.definitions,
+                |s| s.definitions_detail,
                 Control::Counter(Counter::Definitions),
             ),
             row(
                 "\u{E8FD}",
-                "Synonyms",
-                "Similar words under each part of speech",
+                |s| s.synonyms,
+                |s| s.synonyms_detail,
                 Control::Counter(Counter::Synonyms),
             ),
             row(
                 "\u{E8BD}",
-                "Examples",
-                "Sentences showing each sense in use",
+                |s| s.examples,
+                |s| s.examples_detail,
                 Control::Switch(Switch::Examples),
             ),
             row(
                 "\u{E7F8}",
-                "Animations",
-                "Starts as Windows has them; turn on to override",
+                |s| s.animations,
+                |s| s.animations_detail,
                 Control::Switch(Switch::Animations),
             ),
         ],
     ),
     (
-        "Translation",
+        |s| s.translation,
         &[
             row(
                 "\u{E8C1}",
-                "Default languages",
-                "Translated from and into when the card can\u{2019}t tell",
+                |s| s.default_languages,
+                |s| s.default_languages_detail,
                 Control::Translate,
             ),
             row(
                 "\u{E715}",
-                "MyMemory email",
-                "Raises the daily limit",
+                |s| s.mymemory_email,
+                |s| s.mymemory_email_detail,
                 Control::Email,
             ),
         ],
     ),
     (
-        "Lookup",
+        |s| s.lookup,
         &[
             row(
                 "\u{E753}",
-                "Online dictionary",
-                "For pronunciations, and words the built-in one lacks",
+                |s| s.online_dictionary,
+                |s| s.online_dictionary_detail,
                 Control::Switch(Switch::Online),
             ),
             row(
                 "\u{E8B3}",
-                "Read selections directly",
-                "Leaves the clipboard alone in apps that allow it",
+                |s| s.read_selection,
+                |s| s.read_selection_detail,
                 Control::Switch(Switch::Automation),
             ),
-            // Its description sums up the languages chosen.
-            row("\u{E774}", "Languages", "English", Control::Languages),
+            // Its description sums up the languages chosen, each in itself.
+            row(
+                "\u{E774}",
+                |s| s.languages,
+                |_| "English",
+                Control::Languages,
+            ),
         ],
     ),
 ];
@@ -1850,7 +1858,7 @@ impl Settings {
         self.recording = true;
         self.preview = held_modifiers();
         self.show_caps(false)?;
-        self.set_note(Note::Shortcut, RECORDING_DETAIL, false)?;
+        self.set_note(Note::Shortcut, tr().recording_detail, false)?;
         self.show_recording()
     }
 
@@ -1858,7 +1866,7 @@ impl Settings {
     fn stop_recording(&mut self) -> Result<()> {
         self.recording = false;
         self.show_caps(true)?;
-        self.set_note(Note::Shortcut, SHORTCUT_DETAIL, false)?;
+        self.set_note(Note::Shortcut, tr().shortcut_detail, false)?;
         self.show_recording()
     }
 
@@ -1876,9 +1884,9 @@ impl Settings {
         // Shift alone would take a capital letter away from every app.
         let strong = modifiers.0 & (MOD_CONTROL | MOD_ALT | MOD_WIN).0 != 0;
         let complaint = if hotkey::key_name(vk).is_none() {
-            Some(UNUSABLE_KEY)
+            Some(tr().unusable_key)
         } else if !strong && !hotkey::is_function_key(vk) {
-            Some(NEEDS_MODIFIER)
+            Some(tr().needs_modifier)
         } else {
             None
         };
@@ -2233,7 +2241,13 @@ impl Settings {
         let layout: Layout = if self.recording {
             let held = hotkey::modifier_names(self.preview);
             if held.is_empty() {
-                r.layout_aligned(RECORDING_HINT, Face::Menu, Ink::Accent, 160.0, Align::Right)?
+                r.layout_aligned(
+                    tr().recording_hint,
+                    Face::Menu,
+                    Ink::Accent,
+                    160.0,
+                    Align::Right,
+                )?
             } else {
                 r.layout_caps(&held)?
             }
@@ -2690,7 +2704,7 @@ mod tests {
             for row in *rows {
                 // Room for the name and description beside each control.
                 let room = GROUP_W - ROW_PAD - TEXT_X - row.control.width() - CONTROL_GAP;
-                assert!(room >= 120.0, "{}", row.title);
+                assert!(room >= 120.0, "{}", row.title());
             }
         }
     }

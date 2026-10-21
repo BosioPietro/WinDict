@@ -3,6 +3,8 @@
 
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 
+use crate::i18n::{fill, tr};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Hotkey {
     pub modifiers: HOT_KEY_MODIFIERS,
@@ -58,19 +60,20 @@ pub fn parse(text: &str) -> Result<Hotkey, String> {
             "win" | "windows" | "super" | "meta" => modifiers |= MOD_WIN,
             key => {
                 if vk.is_some() {
-                    return Err(format!("\"{text}\" has more than one non-modifier key"));
+                    return Err(fill(tr().hotkey_many_keys, &[("hotkey", &text)]));
                 }
-                vk = Some(
-                    key_code(key).ok_or_else(|| format!("Unknown key \"{part}\" in \"{text}\""))?,
-                );
+                vk = Some(key_code(key).ok_or_else(|| {
+                    fill(
+                        tr().hotkey_unknown_key,
+                        &[("key", &part), ("hotkey", &text)],
+                    )
+                })?);
             }
         }
     }
-    let vk = vk.ok_or_else(|| format!("\"{text}\" has no key besides modifiers"))?;
+    let vk = vk.ok_or_else(|| fill(tr().hotkey_no_key, &[("hotkey", &text)]))?;
     if modifiers.0 == 0 && !is_function_key(vk) {
-        return Err(format!(
-            "\"{text}\" needs at least one modifier (Ctrl, Alt, Shift, Win)"
-        ));
+        return Err(fill(tr().hotkey_no_modifier, &[("hotkey", &text)]));
     }
     Ok(Hotkey { modifiers, vk })
 }

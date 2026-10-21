@@ -9,6 +9,7 @@ use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::Vector3;
 
+use crate::i18n::tr;
 use crate::render::{Face, Ink, Renderer};
 use crate::theme::Theme;
 use crate::ui::{self, scale, v2, v3, Animator, Frame, MARGIN};
@@ -91,11 +92,11 @@ fn entries(hotkey: &str, autostart: bool) -> Vec<Entry> {
             label: format!("WinDict  -  {hotkey}"),
         },
         Entry::separator(),
-        Entry::command(Command::Autostart, "Start with Windows", autostart),
-        Entry::command(Command::Settings, "Settings", false),
-        Entry::command(Command::Reload, "Reload settings", false),
+        Entry::command(Command::Autostart, tr().start_with_windows, autostart),
+        Entry::command(Command::Settings, tr().settings, false),
+        Entry::command(Command::Reload, tr().menu_reload, false),
         Entry::separator(),
-        Entry::command(Command::Quit, "Quit", false),
+        Entry::command(Command::Quit, tr().menu_quit, false),
     ]
 }
 

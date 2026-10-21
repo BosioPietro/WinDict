@@ -12,6 +12,7 @@ use crate::dictionary::{
     self, percent_encode, Definition, Detail, Lookup, Meaning, Sense, MAX_ANTONYMS, WIKTIONARY,
 };
 use crate::http;
+use crate::i18n::{fill, tr};
 use crate::wikizionario;
 
 /// How long the first source for a language gets to answer alone before
@@ -178,10 +179,8 @@ pub fn fetch(host: &str, path: &str, parse: impl FnOnce(&[u8]) -> Option<Definit
     match http::get(host, path) {
         Ok((200, body)) => parse(&body).map_or(Lookup::NotFound, Lookup::Found),
         Ok((404, _)) => Lookup::NotFound,
-        Ok((429, _)) => Lookup::Failed("Too many lookups, try again in a moment.".into()),
-        Ok((code, _)) => Lookup::Failed(format!(
-            "The dictionary service returned an error ({code})."
-        )),
+        Ok((429, _)) => Lookup::Failed(tr().too_many_lookups.into()),
+        Ok((code, _)) => Lookup::Failed(fill(tr().lookup_service_error, &[("code", &code)])),
         Err(e) => Lookup::Failed(e),
     }
 }

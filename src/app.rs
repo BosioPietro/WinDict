@@ -23,6 +23,7 @@ use crate::config::{self, Config};
 use crate::dictionary::{self, Definition, Detail, Lookup, NormalizeError};
 use crate::dicts;
 use crate::hotkey;
+use crate::i18n::{fill, tr};
 use crate::menu::{Command, Menu};
 use crate::offline;
 use crate::online;
@@ -30,7 +31,7 @@ use crate::popup::{self, Popup, Transition};
 use crate::render::{self, Body, Side, Target, TranslationCard, PICKER_ROWS};
 use crate::searchbox::MAX_SUGGESTIONS;
 use crate::selection::{self, Capturer, Selection};
-use crate::settings::{self, Change, Settings, Values};
+use crate::settings::{Change, Settings, Values};
 use crate::theme::Theme;
 use crate::translate::{self, Translation};
 use crate::tray::{self, Tray};
@@ -131,16 +132,8 @@ const TRANSLATION_CACHE_SIZE: usize = 32;
 const WHEEL_ROWS: f32 = 3.0;
 /// How many words "back" remembers.
 const HISTORY_SIZE: usize = 50;
-const SEARCH_PLACEHOLDER: &str = "Type a word to look it up";
-const SEARCH_TITLE: &str = "No text selected";
-/// Opened again from the card itself, where nothing was meant to be selected.
-const SEARCH_AGAIN_TITLE: &str = "Look up another word";
-const SEARCH_TOO_LONG: &str = "Try a single word or a short phrase";
 /// Suggestions start with this many letters typed: fewer match too much.
 const SUGGEST_AFTER: usize = 2;
-/// Under the field when the bundled dictionary has nothing to suggest.
-const NO_SUGGESTIONS: &str = "No matches in the offline dictionary";
-const NO_SUGGESTIONS_ONLINE: &str = "No offline matches \u{2014} Enter searches online";
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -520,14 +513,13 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             app.install(download, true);
         }
         if let Some(e) = config_error {
-            app.tray
-                .notify("Settings not loaded, using the defaults", &e);
+            app.tray.notify(tr().settings_not_loaded, &e);
         } else if let Some(e) = dictionary_error {
-            app.tray.notify("Dictionary not loaded", &e);
+            app.tray.notify(tr().dictionary_not_loaded, &e);
         } else if first_run && app.hotkey_ok {
             app.tray.notify(
-                "WinDict is running",
-                &format!("Select a word anywhere and press {}.", app.config.hotkey),
+                tr().running,
+                &fill(tr().running_detail, &[("hotkey", &app.config.hotkey)]),
             );
         }
         APP.with(|a| *a.borrow_mut() = Some(app));
@@ -561,13 +553,13 @@ impl App {
         match self.bind_hotkey() {
             Ok(()) => {}
             Err(Unbound::Taken) => self.tray.notify(
-                "Shortcut unavailable",
-                &format!(
-                    "{} is already used by another app. Choose another one in Settings.",
-                    self.config.hotkey
+                tr().shortcut_unavailable,
+                &fill(
+                    tr().shortcut_unavailable_detail,
+                    &[("hotkey", &self.config.hotkey)],
                 ),
             ),
-            Err(Unbound::Invalid(e)) => self.tray.notify("Invalid shortcut", &e),
+            Err(Unbound::Invalid(e)) => self.tray.notify(tr().shortcut_invalid, &e),
         }
     }
 
@@ -597,8 +589,7 @@ impl App {
             match Popup::new(window, self.compositor.clone(), self.theme()) {
                 Ok(p) => self.popup = Some(p),
                 Err(e) => {
-                    self.tray
-                        .notify("WinDict couldn't draw its window", &e.message());
+                    self.tray.notify(tr().draw_window_failed, &e.message());
                     return None;
                 }
             }
@@ -615,8 +606,7 @@ impl App {
             match Menu::new(window, self.compositor.clone(), self.theme()) {
                 Ok(m) => self.menu = Some(m),
                 Err(e) => {
-                    self.tray
-                        .notify("WinDict couldn't draw its menu", &e.message());
+                    self.tray.notify(tr().draw_menu_failed, &e.message());
                     return None;
                 }
             }
@@ -626,9 +616,10 @@ impl App {
 
     fn ensure_settings(&mut self, theme: Theme, values: Values) -> Option<&mut Settings> {
         if self.settings.is_none() {
+            let title = HSTRING::from(tr().settings_window_title);
             let window = Window::create(
                 SETTINGS_CLASS,
-                w!("WinDict Settings"),
+                PCWSTR(title.as_ptr()),
                 WS_EX_NOREDIRECTIONBITMAP | WS_EX_APPWINDOW,
                 WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX,
             )
@@ -636,8 +627,7 @@ impl App {
             match Settings::new(window, self.compositor.clone(), theme, values) {
                 Ok(s) => self.settings = Some(s),
                 Err(e) => {
-                    self.tray
-                        .notify("WinDict couldn't draw its settings", &e.message());
+                    self.tray.notify(tr().draw_settings_failed, &e.message());
                     return None;
                 }
             }
@@ -660,7 +650,7 @@ impl App {
             return if self.search.is_some() {
                 self.dismiss()
             } else {
-                self.open_search(SEARCH_AGAIN_TITLE, None)
+                self.open_search(tr().search_again_title, None)
             };
         }
         unsafe {
@@ -704,10 +694,9 @@ impl App {
         let word = match dictionary::normalize(&text) {
             Ok(word) => word,
             Err(NormalizeError::TooLong) => {
-                let detail = "Select a single word or a short phrase.";
-                return self.show_message(anchor, "That\u{2019}s a lot of text", detail, true);
+                return self.show_message(anchor, tr().too_long, tr().too_long_detail, true);
             }
-            Err(NormalizeError::Empty) => return self.open_search(SEARCH_TITLE, anchor),
+            Err(NormalizeError::Empty) => return self.open_search(tr().search_title, anchor),
         };
         let query = Query {
             word,
@@ -733,19 +722,18 @@ impl App {
         // With no caret to open at (an image, a game), the middle of the
         // screen the app is on.
         let anchor = anchor_or_centre(anchor, previous);
-        if let Err(e) = popup.show_search(anchor, theme, title, SEARCH_PLACEHOLDER) {
-            self.tray
-                .notify("WinDict couldn't draw its window", &e.message());
+        if let Err(e) = popup.show_search(anchor, theme, title, tr().search_placeholder) {
+            self.tray.notify(tr().draw_window_failed, &e.message());
             return;
         }
         let hwnd = popup.hwnd;
         self.on_shown(false);
         if !selection::take_foreground(hwnd) {
-            let detail = format!(
-                "Select a word in any app, then press {}.",
-                self.config.hotkey
+            let detail = fill(
+                tr().nothing_selected_detail,
+                &[("hotkey", &self.config.hotkey)],
             );
-            return self.show_message(None, "Nothing selected", &detail, true);
+            return self.show_message(None, tr().nothing_selected, &detail, true);
         }
         // Opened again from the card itself, it keeps the original app.
         if previous != hwnd {
@@ -857,9 +845,9 @@ impl App {
         // has nothing, and whether Enter will still look further.
         let note =
             (suggest && search.suggestions.is_empty()).then_some(if self.config.online_lookup {
-                NO_SUGGESTIONS_ONLINE
+                tr().no_suggestions_online
             } else {
-                NO_SUGGESTIONS
+                tr().no_suggestions
             });
         // With several languages, each says which it's in.
         let items: Vec<_> = search
@@ -899,7 +887,7 @@ impl App {
             Err(NormalizeError::Empty) => None,
             Err(NormalizeError::TooLong) if !search.error => {
                 search.error = true;
-                Some(SEARCH_TOO_LONG)
+                Some(tr().search_too_long)
             }
             Err(NormalizeError::TooLong) => None,
         };
@@ -1037,10 +1025,10 @@ impl App {
                 word,
                 None,
                 Body::Message {
-                    title: "No definition found",
+                    title: tr().not_found,
                     detail: match correction {
-                        Some(_) => "This word isn\u{2019}t in the dictionary.",
-                        None => "This word isn\u{2019}t in the dictionary. Check the spelling?",
+                        Some(_) => tr().not_found_detail,
+                        None => tr().not_found_check_spelling,
                     },
                     suggestion: correction,
                 },
@@ -1049,7 +1037,7 @@ impl App {
                 word,
                 None,
                 Body::Message {
-                    title: "Couldn\u{2019}t look that up",
+                    title: tr().lookup_failed,
                     detail: error,
                     suggestion: correction,
                 },
@@ -1158,8 +1146,7 @@ impl App {
         };
         let _ = popup.set_translate(translate);
         if let Err(e) = popup.show(anchor, theme, title, phonetic, body) {
-            self.tray
-                .notify("WinDict couldn't draw its window", &e.message());
+            self.tray.notify(tr().draw_window_failed, &e.message());
             return;
         }
         self.on_shown(auto_hide);
@@ -1914,8 +1901,7 @@ impl App {
             return;
         };
         if let Err(e) = menu.show(win::cursor_pos(), theme, &hotkey, autostart::is_enabled()) {
-            self.tray
-                .notify("WinDict couldn't draw its menu", &e.message());
+            self.tray.notify(tr().draw_menu_failed, &e.message());
             return;
         }
         CARD_RECT.set(menu.card_rect());
@@ -1991,22 +1977,21 @@ impl App {
             Command::Reload => {
                 match config::load() {
                     Ok((config, _)) => self.config = config,
-                    Err(e) => {
-                        return self
-                            .tray
-                            .notify("Settings not reloaded, nothing changed", &e)
-                    }
+                    Err(e) => return self.tray.notify(tr().settings_not_reloaded, &e),
                 }
                 self.cache.clear();
                 ui::set_motion(self.config.animated());
                 self.register_hotkey();
                 self.refresh_settings();
                 if let Err(e) = offline::set_languages(&self.config.languages) {
-                    self.tray.notify("Dictionary not loaded", &e);
+                    self.tray.notify(tr().dictionary_not_loaded, &e);
                 } else if self.hotkey_ok {
                     self.tray.notify(
-                        "Settings reloaded",
-                        &format!("Look up words with {}.", self.config.hotkey),
+                        tr().settings_reloaded,
+                        &fill(
+                            tr().settings_reloaded_detail,
+                            &[("hotkey", &self.config.hotkey)],
+                        ),
                     );
                 }
             }
@@ -2057,8 +2042,7 @@ impl App {
             return;
         };
         if let Err(e) = settings.show(win::cursor_pos(), theme, values) {
-            self.tray
-                .notify("WinDict couldn't draw its settings", &e.message());
+            self.tray.notify(tr().draw_settings_failed, &e.message());
             return;
         }
         selection::take_foreground(settings.hwnd);
@@ -2140,7 +2124,7 @@ impl App {
                     self.config.hotkey = previous;
                     self.register_hotkey();
                     let why = match &unbound {
-                        Unbound::Taken => settings::SHORTCUT_TAKEN,
+                        Unbound::Taken => tr().shortcut_taken,
                         Unbound::Invalid(e) => e,
                     };
                     if let Some(settings) = self.settings.as_mut() {
@@ -2192,7 +2176,7 @@ impl App {
     fn save_setting(&mut self, change: impl FnOnce(&mut Config)) {
         change(&mut self.config);
         if let Err(e) = config::save(&self.config) {
-            self.tray.notify("Settings not saved", &e);
+            self.tray.notify(tr().settings_not_saved, &e);
         }
     }
 
@@ -2257,7 +2241,7 @@ impl App {
         if !shown {
             return;
         }
-        let note = format!("Downloading\u{2026} {percent}%");
+        let note = fill(tr().downloading, &[("percent", &percent)]);
         self.show_download(language, Some((&note, false)));
     }
 
@@ -2289,7 +2273,7 @@ impl App {
             // At start, the one there is (if any) is used as it is.
             Err(e) if installing.quiet => {
                 if !offline::languages().iter().any(|l| l == language) {
-                    let title = format!("{} not downloaded", download.name);
+                    let title = fill(tr().not_downloaded, &[("language", &download.name)]);
                     self.tray.notify(&title, &e);
                 }
             }
@@ -2305,12 +2289,12 @@ impl App {
     fn use_languages(&mut self) {
         self.config.languages.sort_by_key(|l| language_rank(l));
         if let Err(e) = offline::set_languages(&self.config.languages) {
-            self.tray.notify("Dictionary not loaded", &e);
+            self.tray.notify(tr().dictionary_not_loaded, &e);
         }
         // Online answers are for the languages there were.
         self.cache.clear();
         if let Err(e) = config::save(&self.config) {
-            self.tray.notify("Settings not saved", &e);
+            self.tray.notify(tr().settings_not_saved, &e);
         }
         self.show_languages();
     }
