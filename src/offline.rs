@@ -1,7 +1,7 @@
 //! The offline dictionaries, in the format `tools/build_dict.py` describes.
 //!
-//! English (Open English WordNet) is embedded in the executable; another
-//! language is read from `%LOCALAPPDATA%\WinDict\dicts\<language>.wdict`.
+//! English (Open English WordNet) is embedded in the executable; other
+//! languages are read from `%LOCALAPPDATA%\WinDict\dicts\<language>.wdict`.
 //! Either way the file is read in place: Windows only pages in the parts a
 //! lookup touches (the block index plus a few small compressed blocks), so
 //! it costs no memory while the app sits idle.
@@ -18,7 +18,7 @@ use windows::Win32::System::Memory::{
     PAGE_READONLY,
 };
 
-use crate::dictionary::{percent_encode, Definition, Detail, Meaning, Sense, MAX_ANTONYMS};
+use crate::dictionary::{self, percent_encode, Definition, Detail, Meaning, Sense, MAX_ANTONYMS};
 
 static ENGLISH: &[u8] = include_bytes!("../data/english.wdict");
 
@@ -28,34 +28,55 @@ const HEADER: usize = 28;
 /// file from taking all the memory.
 const MAX_BLOCK: usize = 1 << 20;
 
-/// The dictionary lookups use, which the `language` setting picks.
-static ACTIVE: RwLock<Option<Arc<Dictionary>>> = RwLock::new(None);
+/// The dictionaries lookups use, in order of preference, which the
+/// `languages` setting picks.
+static ACTIVE: RwLock<Vec<Arc<Dictionary>>> = RwLock::new(Vec::new());
 
+/// `word` in every language it's in, the preferred one first.
 pub fn lookup(word: &str, detail: Detail) -> Option<Definition> {
-    active().lookup(word, detail)
+    let found = active()
+        .iter()
+        .filter_map(|d| d.lookup(word, detail))
+        .collect();
+    dictionary::combine(found, &languages())
 }
 
-/// The dictionary lookups use: English until [`set_language`] picks another.
-pub fn active() -> Arc<Dictionary> {
-    ACTIVE
-        .read()
-        .ok()
-        .and_then(|a| a.clone())
-        .unwrap_or_else(english)
-}
-
-/// Looks words up in `language` ("en", "it"): English is built in, others
-/// are read from their file. If that can't be, English is used, and the
-/// error says why.
-pub fn set_language(language: &str) -> Result<(), String> {
-    let (dictionary, result) = match open(language) {
-        Ok(dictionary) => (dictionary, Ok(())),
-        Err(e) => (english(), Err(e)),
-    };
-    if let Ok(mut active) = ACTIVE.write() {
-        *active = Some(dictionary);
+/// The dictionaries lookups use, in order of preference: English until
+/// [`set_languages`] picks others.
+pub fn active() -> Vec<Arc<Dictionary>> {
+    match ACTIVE.read() {
+        Ok(active) if !active.is_empty() => active.clone(),
+        _ => vec![english()],
     }
-    result
+}
+
+/// The languages of the dictionaries in use, in order of preference.
+pub fn languages() -> Vec<String> {
+    active().iter().map(|d| d.language().to_string()).collect()
+}
+
+/// Looks words up in `languages` ("en", "it"), in that order of preference:
+/// English is built in, others are read from their file. Those that can't
+/// be are left out, and the error says why; English is used if none can.
+pub fn set_languages(languages: &[String]) -> Result<(), String> {
+    let mut dictionaries = Vec::new();
+    let mut errors = Vec::new();
+    for language in languages {
+        match open(language) {
+            Ok(dictionary) => dictionaries.push(dictionary),
+            Err(e) => errors.push(e),
+        }
+    }
+    if dictionaries.is_empty() {
+        dictionaries.push(english());
+    }
+    if let Ok(mut active) = ACTIVE.write() {
+        *active = dictionaries;
+    }
+    match errors.is_empty() {
+        true => Ok(()),
+        false => Err(errors.join("\n")),
+    }
 }
 
 fn open(language: &str) -> Result<Arc<Dictionary>, String> {
@@ -98,12 +119,11 @@ pub fn dicts_dir() -> PathBuf {
     base.join("WinDict").join("dicts")
 }
 
-/// The page for `word` at `source`, if it's the active dictionary's.
+/// The page for `word` at `source`, if it's a dictionary in use.
 pub fn link(source: &str, word: &str) -> Option<String> {
-    let dictionary = active();
-    let info = &dictionary.info;
-    let link = info.link.as_ref().filter(|_| info.name == source)?;
-    Some(link.replace("{}", &percent_encode(word)))
+    let active = active();
+    let info = &active.iter().find(|d| d.info.name == source)?.info;
+    Some(info.link.as_ref()?.replace("{}", &percent_encode(word)))
 }
 
 /// An offline dictionary, embedded or read from a file.
@@ -153,7 +173,10 @@ impl Dictionary {
 
     pub fn lookup(&self, word: &str, detail: Detail) -> Option<Definition> {
         let def = self.dict()?.lookup(word, detail, self.info.name)?;
-        Some(detail.apply(def))
+        Some(detail.apply(Definition {
+            language: self.info.language.clone(),
+            ..def
+        }))
     }
 }
 
@@ -248,16 +271,17 @@ pub struct Suggestion {
     pub typed: usize,
 }
 
-/// Every word the dictionary defines, to suggest from as the search box is
-/// typed in. Building it reads the whole dictionary (a few tens of ms), so
-/// it's made when the search box first needs it and dropped with the box.
+/// Every word the dictionaries define, to suggest from as the search box is
+/// typed in. Building it reads the whole dictionaries (a few tens of ms
+/// each), so it's made when the search box first needs it and dropped with
+/// the box.
 pub struct Words {
     /// Each word's key, followed by its display form when that differs.
     text: String,
     /// In key order.
     words: Vec<Word>,
     /// Where they're from, for the forms of words.
-    dictionary: Arc<Dictionary>,
+    dictionaries: Vec<Arc<Dictionary>>,
 }
 
 struct Word {
@@ -268,20 +292,34 @@ struct Word {
 }
 
 impl Words {
-    /// The active dictionary's words.
+    /// The words of the dictionaries in use.
     pub fn load() -> Words {
         Words::of(active())
     }
 
-    fn of(dictionary: Arc<Dictionary>) -> Words {
+    fn of(dictionaries: Vec<Arc<Dictionary>>) -> Words {
         let mut words = Words {
             text: String::new(),
             words: Vec::new(),
-            dictionary: dictionary.clone(),
+            dictionaries,
         };
-        let Some(dict) = dictionary.dict() else {
-            return words;
-        };
+        for dictionary in words.dictionaries.clone() {
+            if let Some(dict) = dictionary.dict() {
+                words.add(&dict);
+            }
+        }
+        // Each dictionary's are in key order; together, they're put back in
+        // it. Stable: a word in several languages keeps their order.
+        if words.dictionaries.len() > 1 {
+            let mut list = std::mem::take(&mut words.words);
+            list.sort_by(|a, b| words.key(a).cmp(words.key(b)));
+            words.words = list;
+        }
+        words
+    }
+
+    fn add(&mut self, dict: &Dict) {
+        let words = self;
         for block in 0..dict.entry_blocks {
             let Some(text) = dict.entry_block(block) else {
                 continue;
@@ -316,7 +354,6 @@ impl Words {
                 words.text.push_str(&display);
             }
         }
-        words
     }
 
     fn key(&self, word: &Word) -> &str {
@@ -397,7 +434,11 @@ impl Words {
         // form of, only once it's typed in full.
         let defined = out.first().is_some_and(|s| s.word.to_lowercase() == typed);
         if !defined {
-            if let Some(base) = self.dictionary.dict().and_then(|d| d.base_of(typed)) {
+            let base = self
+                .dictionaries
+                .iter()
+                .find_map(|d| d.dict().and_then(|d| d.base_of(typed)));
+            if let Some(base) = base {
                 out.insert(
                     0,
                     Suggestion {
@@ -793,10 +834,12 @@ impl Dict<'_> {
         }
         Some(Definition {
             word: entry.display.clone().unwrap_or_else(|| key.to_string()),
+            language: String::new(),
             phonetic: None,
             meanings,
             note,
             sources: vec![source],
+            others: Vec::new(),
         })
     }
 }
@@ -968,7 +1011,7 @@ mod tests {
             let dictionary = open_file(&path, "en").unwrap();
             let dog = dictionary.lookup("dog", DETAIL).unwrap();
             assert_eq!(dog.meanings[0].part_of_speech, "noun");
-            assert!(Words::of(Arc::new(open_file(&path, "en").unwrap()))
+            assert!(Words::of(vec![Arc::new(open_file(&path, "en").unwrap())])
                 .suggest("walked", 5)
                 .iter()
                 .any(|s| s.base.as_deref() == Some("walk")));
@@ -997,12 +1040,16 @@ mod tests {
         for code in ["../evil", "C:\\x", "", "EN"] {
             assert!(open(code).is_err(), "{code}");
         }
-        assert!(set_language("../evil").is_err());
-        assert_eq!(active().language(), "en");
-        assert!(set_language("zz").is_err());
-        assert_eq!(active().language(), "en");
-        assert!(set_language("en").is_ok());
-        assert!(lookup("dog", DETAIL).is_some());
+        let set = |languages: &[&str]| {
+            set_languages(&languages.iter().map(|l| l.to_string()).collect::<Vec<_>>())
+        };
+        assert!(set(&["../evil"]).is_err());
+        assert_eq!(languages(), ["en"]);
+        // Those that can be read are used.
+        assert!(set(&["zz", "en"]).is_err());
+        assert_eq!(languages(), ["en"]);
+        assert!(set(&["en"]).is_ok());
+        assert_eq!(find("dog").language, "en");
     }
 
     #[test]

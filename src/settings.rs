@@ -3,7 +3,8 @@
 //! card it's a composition visual tree, so all its motion runs on the system
 //! compositor: the card rises in with its parts a beat after one another,
 //! switches slide, the chosen theme's pill glides over, numbers roll, a new
-//! shortcut's keys rise into place, and the focus ring follows Tab from
+//! shortcut's keys rise into place, the list of languages opens out of its
+//! row as the card grows to fit it, and the focus ring follows Tab from
 //! control to control. Changing the theme cross-fades the whole window.
 
 mod view;
@@ -63,6 +64,15 @@ const PILL_RADIUS: f32 = 4.0;
 const STEP_SIZE: f32 = 30.0;
 const STEP_RADIUS: f32 = 6.0;
 const VALUE_W: f32 = 40.0;
+/// A language in the list under the languages row.
+const LANGUAGE_H: f32 = 40.0;
+const CHECK_SIZE: f32 = 20.0;
+const CHECK_RADIUS: f32 = 4.0;
+/// Between a language's box and its name.
+const CHECK_GAP: f32 = 12.0;
+/// The room for how a language's download is going, on its right.
+const STATUS_W: f32 = 260.0;
+const CHEVRON_W: f32 = 16.0;
 /// How wide each control is, for the description beside it to stay clear.
 const SHORTCUT_W: f32 = 150.0;
 const COUNTER_W: f32 = 2.0 * STEP_SIZE + VALUE_W;
@@ -100,6 +110,11 @@ const FOCUS_MS: u64 = 200;
 const PRESS_MS: u64 = 90;
 const SCROLL_MS: u64 = 180;
 const THEME_MS: u64 = 300;
+/// As long as the card takes to grow or shrink.
+const EXPAND_MS: u64 = ui::RESIZE_MS;
+/// Once the card has shrunk, the window does.
+const SETTLE_MS: u32 = ui::RESIZE_MS as u32 + 60;
+const TIMER_SETTLE: usize = 1;
 const BREATHE_MS: u64 = 1600;
 
 // Segoe Fluent Icons and Segoe MDL2 Assets.
@@ -107,9 +122,10 @@ const CLOSE_GLYPH: &str = "\u{E8BB}";
 const EDIT_GLYPH: &str = "\u{E70F}";
 const MINUS_GLYPH: &str = "\u{E738}";
 const PLUS_GLYPH: &str = "\u{E710}";
+const CHEVRON_GLYPH: &str = "\u{E70D}";
+const CHECK_GLYPH: &str = "\u{E73E}";
 
 const SHORTCUT_DETAIL: &str = "Looks up the selected word";
-const LANGUAGE_DETAIL: &str = "The dictionary words are looked up in";
 const RECORDING_DETAIL: &str = "Press the new shortcut, or Esc to cancel";
 const RECORDING_HINT: &str = "Press keys";
 const NEEDS_MODIFIER: &str = "Hold Ctrl, Alt or Win with the key";
@@ -135,8 +151,8 @@ pub enum Change {
     RecordingStopped,
     Hotkey(String),
     Theme(ThemeMode),
-    /// A language's code, like "en".
-    Language(String),
+    /// A language's code, like "en", turned on or off.
+    Language(String, bool),
     MaxDefinitions(usize),
     MaxSynonyms(usize),
     ShowExamples(bool),
@@ -198,23 +214,26 @@ const THEMES: [(ThemeMode, &str); 3] = [
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Choice {
     Theme,
-    Language,
 }
 
-const CHOICES: [Choice; 2] = [Choice::Theme, Choice::Language];
+const CHOICES: [Choice; 1] = [Choice::Theme];
 
 impl Choice {
     fn names(self) -> Vec<&'static str> {
         match self {
             Choice::Theme => THEMES.iter().map(|(_, name)| *name).collect(),
-            Choice::Language => languages().map(|(_, name)| name).collect(),
         }
     }
 }
 
-/// The languages there are dictionaries for: their codes, and names.
-fn languages() -> impl Iterator<Item = (&'static str, &'static str)> {
-    std::iter::once(("en", "English")).chain(dicts::DOWNLOADS.iter().map(|d| (d.language, d.name)))
+/// The names of `languages`, as the languages row sums them up: "English,
+/// Italiano".
+fn summary(languages: &[String]) -> String {
+    let names: Vec<_> = dicts::languages()
+        .filter(|(code, _)| languages.iter().any(|l| l == code))
+        .map(|(_, name)| name)
+        .collect();
+    names.join(", ")
 }
 
 /// A setting's description that can change to say what's going on.
@@ -227,10 +246,10 @@ enum Note {
 const NOTES: [Note; 2] = [Note::Shortcut, Note::Language];
 
 impl Note {
-    fn usual(self) -> &'static str {
+    fn usual(self, values: &Values) -> String {
         match self {
-            Note::Shortcut => SHORTCUT_DETAIL,
-            Note::Language => LANGUAGE_DETAIL,
+            Note::Shortcut => SHORTCUT_DETAIL.into(),
+            Note::Language => summary(&values.config.languages),
         }
     }
 }
@@ -245,6 +264,10 @@ enum Hit {
     Choice(Choice, usize),
     /// A counter's down (false) or up (true) button.
     Step(Counter, bool),
+    /// The languages row, which opens and shuts the list under it.
+    Languages,
+    /// A language in that list, by its place in [`dicts::languages`].
+    Language(usize),
     Config,
 }
 
@@ -255,6 +278,8 @@ enum Stop {
     Switch(Switch),
     Choice(Choice),
     Counter(Counter),
+    Languages,
+    Language(usize),
     Config,
 }
 
@@ -266,6 +291,8 @@ impl Hit {
             Hit::Switch(sw) => Some(Stop::Switch(sw)),
             Hit::Choice(choice, _) => Some(Stop::Choice(choice)),
             Hit::Step(counter, _) => Some(Stop::Counter(counter)),
+            Hit::Languages => Some(Stop::Languages),
+            Hit::Language(i) => Some(Stop::Language(i)),
             Hit::Config => Some(Stop::Config),
         }
     }
@@ -277,6 +304,9 @@ enum Control {
     Switch(Switch),
     Choice(Choice),
     Counter(Counter),
+    /// Opens the list of languages under it. It's the last row, so that
+    /// only the footer moves as the list opens.
+    Languages,
 }
 
 impl Control {
@@ -286,6 +316,7 @@ impl Control {
             Control::Switch(_) => SWITCH_W,
             Control::Choice(choice) => choice.names().len() as f32 * SEGMENT_W,
             Control::Counter(_) => COUNTER_W,
+            Control::Languages => CHEVRON_W,
         }
     }
 }
@@ -345,11 +376,6 @@ const SECTIONS: &[(&str, &[Row])] = &[
         "Lookup",
         &[
             row(
-                "Language",
-                LANGUAGE_DETAIL,
-                Control::Choice(Choice::Language),
-            ),
-            row(
                 "Online dictionary",
                 "For pronunciations, and words the built-in one lacks",
                 Control::Switch(Switch::Online),
@@ -359,6 +385,8 @@ const SECTIONS: &[(&str, &[Row])] = &[
                 "Leaves the clipboard alone in apps that allow it",
                 Control::Switch(Switch::Automation),
             ),
+            // Its description sums up the languages chosen.
+            row("Languages", "English", Control::Languages),
         ],
     ),
 ];
@@ -470,6 +498,61 @@ struct NoteView {
     w: f32,
 }
 
+/// A language in the list, with a box ticked when it's used.
+struct LanguageView {
+    /// The accent fill and tick of a box that's ticked, over the outline
+    /// of one that isn't.
+    on: ContainerVisual,
+    off: ContainerVisual,
+    hover: SpriteVisual,
+    /// How its download is going, ending at `status_right` and centred on
+    /// `status_middle`, in the list.
+    status: Text,
+    status_right: f32,
+    status_middle: f32,
+}
+
+/// The languages row, and the list that opens under it, in its group.
+struct LanguagesView {
+    hover: SpriteVisual,
+    /// Turns over as the list opens.
+    chevron: SpriteVisual,
+    /// The group's clip and outline, which grow with the list (the
+    /// background is as tall as it is open already).
+    clip: CompositionRoundedRectangleGeometry,
+    outline: CompositionRoundedRectangleGeometry,
+    group_w: f32,
+    /// The group's height with the list shut.
+    group_h: f32,
+    /// The list, at the bottom of the group.
+    list: ContainerVisual,
+    /// Where the list starts in the scroller, and how tall it is.
+    list_y: f32,
+    list_h: f32,
+    /// In the order of [`dicts::languages`].
+    items: Vec<LanguageView>,
+    /// What comes after, which moves down as the list opens, and where it
+    /// rests with the list shut.
+    footer: ContainerVisual,
+    footer_at: Vector3,
+}
+
+impl LanguagesView {
+    /// Where `rect`, in the scroller with the list shut, is with it as
+    /// `open` says, or nothing if it's in the `listed` and that's shut.
+    /// What's in the list is where it is with the list open.
+    fn place(&self, rect: Rect, listed: bool, open: bool) -> Option<Rect> {
+        match (listed, open) {
+            (true, false) => None,
+            (false, true) if rect.y >= self.list_y => Some(Rect {
+                y: rect.y + self.list_h,
+                ..rect
+            }),
+            _ => Some(rect),
+        }
+    }
+}
+
 struct View {
     /// Everything; fades as one when the theme changes.
     content: ContainerVisual,
@@ -499,6 +582,30 @@ struct View {
     stops: Vec<(Stop, Rect, f32)>,
     ring: ShapeVisual,
     ring_geometry: CompositionRoundedRectangleGeometry,
+    languages: LanguagesView,
+}
+
+impl View {
+    /// The height of everything below the header with the list as `open` says.
+    fn height(&self, open: bool) -> f32 {
+        self.content_h + if open { self.languages.list_h } else { 0.0 }
+    }
+
+    /// Where things can be clicked, with the list as `open` says.
+    fn hits(&self, open: bool) -> impl Iterator<Item = (Hit, Rect)> + '_ {
+        self.hits.iter().filter_map(move |&(hit, rect)| {
+            let listed = matches!(hit, Hit::Language(_));
+            Some((hit, self.languages.place(rect, listed, open)?))
+        })
+    }
+
+    /// Where Tab stops, with the list as `open` says.
+    fn stops(&self, open: bool) -> impl Iterator<Item = (Stop, Rect, f32)> + '_ {
+        self.stops.iter().filter_map(move |&(stop, rect, radius)| {
+            let listed = matches!(stop, Stop::Language(_));
+            Some((stop, self.languages.place(rect, listed, open)?, radius))
+        })
+    }
 }
 
 pub struct Settings {
@@ -529,6 +636,11 @@ pub struct Settings {
     /// What the descriptions that change say, and whether it's that
     /// something went wrong, in the order of [`NOTES`].
     notes: [(String, bool); 2],
+    /// Whether the list of languages is open.
+    open: bool,
+    /// How each language's download is going, and whether that's that it
+    /// failed, in the order of [`dicts::languages`].
+    downloads: Vec<Option<(String, bool)>>,
     /// The choice whose pill is gliding over, and the option it's leaving.
     pill_from: Option<(Choice, usize)>,
     scroll: f32,
@@ -550,6 +662,7 @@ impl Settings {
         let root = compositor.CreateContainerVisual()?;
         target.SetRoot(&root)?;
         let frame = Frame::new(&compositor, &root, &theme)?;
+        let notes = NOTES.map(|note| (note.usual(&values), false));
         Ok(Settings {
             hwnd,
             _target: target,
@@ -570,7 +683,9 @@ impl Settings {
             ring_shown: false,
             recording: false,
             preview: HOT_KEY_MODIFIERS(0),
-            notes: NOTES.map(|note| (note.usual().into(), false)),
+            notes,
+            open: false,
+            downloads: dicts::languages().map(|_| None).collect(),
             pill_from: None,
             scroll: 0.0,
             visible: false,
@@ -588,7 +703,12 @@ impl Settings {
         (self.theme, self.scale, self.values) = (theme, s, values);
         (self.hovered, self.pressed, self.focus) = (None, None, None);
         (self.ring, self.recording, self.scroll) = (false, false, 0.0);
-        self.notes = NOTES.map(|note| (note.usual().into(), false));
+        self.notes = NOTES.map(|note| (note.usual(&self.values), false));
+        self.open = false;
+        self.downloads.fill(None);
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_SETTLE);
+        }
         self.frame.apply_theme(&self.renderer, &theme, s)?;
         self.replace_view(false)?;
         self.fit(work)?;
@@ -712,6 +832,17 @@ impl Settings {
             (VK_SPACE | VK_RETURN, Some(Stop::Shortcut)) => self.activate(Hit::Shortcut)?,
             (VK_SPACE | VK_RETURN, Some(Stop::Switch(sw))) => self.activate(Hit::Switch(sw))?,
             (VK_SPACE | VK_RETURN, Some(Stop::Config)) => self.activate(Hit::Config)?,
+            (VK_SPACE | VK_RETURN, Some(Stop::Languages)) => self.activate(Hit::Languages)?,
+            (VK_RIGHT, Some(Stop::Languages)) => {
+                self.set_open(true)?;
+                None
+            }
+            (VK_LEFT, Some(Stop::Languages | Stop::Language(_))) => {
+                self.focus = Some(Stop::Languages);
+                self.set_open(false)?;
+                None
+            }
+            (VK_SPACE | VK_RETURN, Some(Stop::Language(i))) => self.activate(Hit::Language(i))?,
             (VK_LEFT | VK_RIGHT, Some(Stop::Choice(choice))) => {
                 let at = self.chosen(choice);
                 let next = if key == VK_RIGHT {
@@ -765,17 +896,51 @@ impl Settings {
         self.set_note(Note::Shortcut, why, true)
     }
 
-    /// Shows `language` as the one chosen, and the language's description
-    /// as `note` says (how a download is going, or why it failed), or as
-    /// usual.
-    pub fn show_language(&mut self, language: &str, note: Option<(&str, bool)>) -> Result<()> {
-        if self.values.config.language != language {
-            self.pill_from = Some((Choice::Language, self.chosen(Choice::Language)));
-            self.values.config.language = language.to_owned();
-            self.show_choice(Choice::Language, true)?;
+    /// Ticks `languages` (codes, like "en"), and only them.
+    pub fn show_languages(&mut self, languages: &[String]) -> Result<()> {
+        self.values.config.languages = languages.to_vec();
+        self.show_checks(true)?;
+        let text = summary(languages);
+        self.set_note(Note::Language, &text, false)
+    }
+
+    /// Says how `language`'s download is going, or why it failed, beside it
+    /// in the list; or nothing, with no `status`.
+    pub fn show_download(&mut self, language: &str, status: Option<(&str, bool)>) -> Result<()> {
+        let Some(i) = dicts::languages().position(|(code, _)| code == language) else {
+            return Ok(());
+        };
+        let status = status.map(|(text, error)| (text.to_owned(), error));
+        if self.downloads[i] == status {
+            return Ok(());
         }
-        let (text, error) = note.unwrap_or((LANGUAGE_DETAIL, false));
-        self.set_note(Note::Language, text, error)
+        self.downloads[i] = status;
+        self.show_status(i)
+    }
+
+    /// The card has shrunk with the list: the window does too.
+    pub fn settle(&mut self) -> Result<()> {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_SETTLE);
+        }
+        let Some(view) = &self.view else {
+            return Ok(());
+        };
+        view.body
+            .SetSize(v2(self.card.0, self.card.1 - view.header_h))?;
+        let m = (MARGIN * self.scale).round();
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                None,
+                0,
+                0,
+                (self.card.0 + 2.0 * m) as i32,
+                (self.card.1 + 2.0 * m) as i32,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+        Ok(())
     }
 
     /// Switches to `theme`, cross-fading everything.
@@ -797,7 +962,7 @@ impl Settings {
     /// Shows `values` changed from elsewhere, cross-fading to them.
     pub fn refresh(&mut self, theme: Theme, values: Values) -> Result<()> {
         (self.values, self.recording) = (values, false);
-        self.notes[Note::Shortcut as usize] = (SHORTCUT_DETAIL.into(), false);
+        self.notes = NOTES.map(|note| (note.usual(&self.values), false));
         self.theme = theme;
         let (anim, renderer, s) = (&self.anim, &self.renderer, self.scale);
         self.frame.fade_theme(anim, renderer, &theme, s, THEME_MS)?;
@@ -882,7 +1047,144 @@ impl Settings {
             }
             Hit::Choice(choice, i) => self.choose(choice, i)?,
             Hit::Step(counter, up) => self.step(counter, up)?,
+            Hit::Languages => {
+                self.set_open(!self.open)?;
+                None
+            }
+            Hit::Language(i) => self.tick(i)?,
         })
+    }
+
+    /// Whether the language at `i` in [`dicts::languages`] is ticked.
+    fn ticked(&self, i: usize) -> bool {
+        let Some((code, _)) = dicts::languages().nth(i) else {
+            return false;
+        };
+        self.values.config.languages.iter().any(|l| l == code)
+    }
+
+    /// Ticks the language at `i`, or unticks it, unless it's the only one.
+    fn tick(&mut self, i: usize) -> Result<Option<Change>> {
+        let Some((code, _)) = dicts::languages().nth(i) else {
+            return Ok(None);
+        };
+        let on = !self.ticked(i);
+        let languages = &mut self.values.config.languages;
+        if on {
+            // In the order of the list, which is the order of preference.
+            languages.push(code.to_owned());
+            let rank = |l: &String| dicts::languages().position(|(c, _)| c == l);
+            languages.sort_by_key(|l| rank(l).unwrap_or(usize::MAX));
+        } else if languages.len() > 1 {
+            languages.retain(|l| l != code);
+        } else {
+            // Words have to be looked up in something.
+            if let Some(view) = &self.view {
+                let item = &view.languages.items[i].on;
+                self.anim.shake(item, item.Offset()?, self.scale * 0.5)?;
+            }
+            return Ok(None);
+        }
+        self.show_checks(true)?;
+        let text = summary(&self.values.config.languages);
+        self.set_note(Note::Language, &text, false)?;
+        Ok(Some(Change::Language(code.to_owned(), on)))
+    }
+
+    /// Opens or shuts the list of languages, the card growing or shrinking
+    /// with it.
+    fn set_open(&mut self, open: bool) -> Result<()> {
+        if open == self.open {
+            return Ok(());
+        }
+        self.open = open;
+        if !open && matches!(self.focus, Some(Stop::Language(_))) {
+            self.focus = Some(Stop::Languages);
+        }
+        if !open && matches!(self.hovered, Some(Hit::Language(_))) {
+            self.set_hovered(None)?;
+        }
+        self.show_open(true)?;
+        self.refit()?;
+        if open {
+            if let Some(view) = &self.view {
+                let v = &view.languages;
+                let all = Rect {
+                    x: 0.0,
+                    y: v.list_y - (ROW_H * self.scale).round(),
+                    w: self.card.0,
+                    h: v.list_h + (ROW_H * self.scale).round(),
+                };
+                self.scroll_into_view(all)?;
+            }
+        }
+        self.show_focus(true)
+    }
+
+    /// Sizes the card to what's in it now, gliding there. A window that
+    /// grows does at once, moving up if it has to to stay on the screen;
+    /// one that shrinks waits for the card to ([`Settings::settle`]).
+    fn refit(&mut self) -> Result<()> {
+        let Some(view) = &self.view else {
+            return Ok(());
+        };
+        let s = self.scale;
+        let mut window = RECT::default();
+        unsafe { GetWindowRect(self.hwnd, &mut window)? };
+        let (work, _) = ui::monitor_at(POINT {
+            x: (window.left + window.right) / 2,
+            y: (window.top + window.bottom) / 2,
+        });
+        let gap = (SCREEN_GAP * s).round();
+        let room = (work.bottom - work.top) as f32 - 2.0 * gap;
+        let h = (view.header_h + view.height(self.open)).min(room).ceil();
+        let old = self.card.1;
+        if h == old {
+            return Ok(());
+        }
+        self.card.1 = h;
+        let m = (MARGIN * s).round();
+        self.frame
+            .resize(&self.anim, self.card.0, h, v3(m, m), s, true)?;
+        self.root.SetCenterPoint(Vector3 {
+            X: m + self.card.0 / 2.0,
+            Y: m + h / 2.0,
+            Z: 0.0,
+        })?;
+        if h > old {
+            view.body.SetSize(v2(self.card.0, h - view.header_h))?;
+            let window_h = (h + 2.0 * m) as i32;
+            let lowest = work.bottom - gap as i32 - (h + m) as i32;
+            let top = window.top.min(lowest).max(work.top + gap as i32 - m as i32);
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), TIMER_SETTLE);
+                let _ = SetWindowPos(
+                    self.hwnd,
+                    None,
+                    window.left,
+                    top,
+                    window.right - window.left,
+                    window_h,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+            // Moved up: the card stays put on the screen, and glides up.
+            let up = (window.top - top) as f32;
+            if up > 0.0 {
+                let anim = &self.anim;
+                Animator::stop(&self.root, &["Offset"]);
+                self.root.SetOffset(v3(0.0, up))?;
+                let rest = v3(0.0, 0.0);
+                anim.vector3(&self.root, "Offset", rest, EXPAND_MS, 0, &anim.decelerate)?;
+            }
+        } else {
+            unsafe {
+                SetTimer(Some(self.hwnd), TIMER_SETTLE, SETTLE_MS, None);
+            }
+        }
+        let scroll = self.scroll.min(self.max_scroll());
+        self.scroll_to(scroll)?;
+        self.show_scroll(true)
     }
 
     fn switch(&self, sw: Switch) -> bool {
@@ -906,7 +1208,6 @@ impl Settings {
         let config = &self.values.config;
         match choice {
             Choice::Theme => THEMES.iter().position(|(mode, _)| *mode == config.theme),
-            Choice::Language => languages().position(|(code, _)| code == config.language),
         }
         .unwrap_or(0)
     }
@@ -921,13 +1222,6 @@ impl Settings {
                 let mode = THEMES[i].0;
                 self.values.config.theme = mode;
                 Change::Theme(mode)
-            }
-            Choice::Language => {
-                let Some((code, _)) = languages().nth(i) else {
-                    return Ok(None);
-                };
-                self.values.config.language = code.to_owned();
-                Change::Language(code.to_owned())
             }
         };
         self.show_choice(choice, true)?;
@@ -1042,10 +1336,9 @@ impl Settings {
             return None;
         }
         let y = y - view.header_h + self.scroll;
-        view.hits
-            .iter()
+        view.hits(self.open)
             .find(|(_, r)| r.contains(x, y))
-            .map(|&(hit, _)| hit)
+            .map(|(hit, _)| hit)
     }
 
     fn set_hovered(&mut self, hit: Option<Hit>) -> Result<()> {
@@ -1071,7 +1364,7 @@ impl Settings {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let stops: Vec<(Stop, Rect)> = view.stops.iter().map(|&(s, r, _)| (s, r)).collect();
+        let stops: Vec<(Stop, Rect)> = view.stops(self.open).map(|(s, r, _)| (s, r)).collect();
         let n = stops.len();
         let at = self
             .focus
@@ -1097,7 +1390,11 @@ impl Settings {
         let Some(view) = &self.view else {
             return 0.0;
         };
-        ui::max_scroll(view.content_h, self.card.1 - view.header_h, self.scale)
+        ui::max_scroll(
+            view.height(self.open),
+            self.card.1 - view.header_h,
+            self.scale,
+        )
     }
 
     fn scroll_to(&mut self, to: f32) -> Result<()> {
@@ -1151,7 +1448,8 @@ impl Settings {
             return view.thumb.SetOpacity(0.0);
         }
         let viewport = self.card.1 - view.header_h;
-        let (top, thumb) = ui::thumb_span(viewport, view.content_h, self.scroll, max, s);
+        let content_h = view.height(self.open);
+        let (top, thumb) = ui::thumb_span(viewport, content_h, self.scroll, max, s);
         let x = ui::size_thumb(&view.thumb, &view.thumb_clip, self.card.0, thumb, s)?;
         let to = v3(x, view.header_h + top);
         if animate {
@@ -1398,6 +1696,101 @@ impl Settings {
         }
     }
 
+    /// Fills the boxes of the languages used, and empties the others'.
+    fn show_checks(&self, animate: bool) -> Result<()> {
+        let Some(view) = &self.view else {
+            return Ok(());
+        };
+        let anim = &self.anim;
+        for (i, item) in view.languages.items.iter().enumerate() {
+            let fill = if self.ticked(i) { 1.0 } else { 0.0 };
+            if animate {
+                let ms = SWITCH_FILL_MS;
+                anim.scalar(&item.on, "Opacity", fill, ms, 0, &anim.decelerate)?;
+                anim.scalar(&item.off, "Opacity", 1.0 - fill, ms, 0, &anim.decelerate)?;
+                // The tick pops in.
+                if fill == 1.0 && item.on.Opacity()? < 0.5 {
+                    item.on.SetScale(scale(0.7))?;
+                }
+                let k = scale(1.0);
+                anim.vector3(&item.on, "Scale", k, KNOB_MS, 0, &anim.overshoot)?;
+            } else {
+                Animator::stop(&item.on, &["Opacity", "Scale"]);
+                Animator::stop(&item.off, &["Opacity"]);
+                item.on.SetOpacity(fill)?;
+                item.on.SetScale(scale(1.0))?;
+                item.off.SetOpacity(1.0 - fill)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Shows how the download of the language at `i` is going, if it is.
+    fn show_status(&self, i: usize) -> Result<()> {
+        let (r, t, s) = (&self.renderer, &self.theme, self.scale);
+        let Some(view) = &self.view else {
+            return Ok(());
+        };
+        let item = &view.languages.items[i];
+        let Some((text, error)) = &self.downloads[i] else {
+            item.status.clear();
+            return Ok(());
+        };
+        let ink = if *error {
+            Ink::Critical
+        } else {
+            Ink::Secondary
+        };
+        let line = r.layout_aligned(text, Face::Small, ink, STATUS_W, Align::Right)?;
+        let size = item.status.show(r, &line, s, t)?;
+        let at = v3(
+            (item.status_right - size.X).round(),
+            (item.status_middle - size.Y / 2.0).round(),
+        );
+        item.status.visual.SetOffset(at)
+    }
+
+    /// Opens the list under the languages row, or shuts it: the group grows
+    /// or shrinks with it, the footer moving down or up, and the chevron
+    /// turns over.
+    fn show_open(&self, animate: bool) -> Result<()> {
+        let Some(view) = &self.view else {
+            return Ok(());
+        };
+        let (v, anim) = (&view.languages, &self.anim);
+        let grow = if self.open { v.list_h } else { 0.0 };
+        let h = v.group_h + grow;
+        let (clip, outline) = (v2(v.group_w, h), v2(v.group_w - 1.0, h - 1.0));
+        let footer = v3(v.footer_at.X, v.footer_at.Y + grow);
+        let (opacity, angle) = if self.open { (1.0, 180.0) } else { (0.0, 0.0) };
+        if animate {
+            let ease = &anim.decelerate;
+            anim.vector2(&v.clip, "Size", clip, EXPAND_MS)?;
+            anim.vector2(&v.outline, "Size", outline, EXPAND_MS)?;
+            anim.vector3(&v.footer, "Offset", footer, EXPAND_MS, 0, ease)?;
+            anim.scalar(&v.list, "Opacity", opacity, EXPAND_MS, 0, ease)?;
+            anim.scalar(
+                &v.chevron,
+                "RotationAngleInDegrees",
+                angle,
+                EXPAND_MS,
+                0,
+                ease,
+            )
+        } else {
+            Animator::stop(&v.clip, &["Size"]);
+            Animator::stop(&v.outline, &["Size"]);
+            Animator::stop(&v.footer, &["Offset"]);
+            Animator::stop(&v.list, &["Opacity"]);
+            Animator::stop(&v.chevron, &["RotationAngleInDegrees"]);
+            v.clip.SetSize(clip)?;
+            v.outline.SetSize(outline)?;
+            v.footer.SetOffset(footer)?;
+            v.list.SetOpacity(opacity)?;
+            v.chevron.SetRotationAngleInDegrees(angle)
+        }
+    }
+
     /// The ring round the shortcut breathes while recording.
     fn show_recording(&self) -> Result<()> {
         let Some(view) = &self.view else {
@@ -1439,6 +1832,8 @@ impl Settings {
             Some(Hit::Step(counter, up)) => {
                 fade(&view.counters[counter as usize].buttons[up as usize].hover)
             }
+            Some(Hit::Languages) => fade(&view.languages.hover),
+            Some(Hit::Language(i)) => fade(&view.languages.items[i].hover),
             Some(Hit::Config) | None => Ok(()),
         }
     }
@@ -1473,10 +1868,9 @@ impl Settings {
         };
         let anim = &self.anim;
         let stop = self.focus.filter(|_| self.ring).and_then(|focus| {
-            view.stops
-                .iter()
+            view.stops(self.open)
                 .find(|(stop, _, _)| *stop == focus)
-                .map(|&(_, rect, radius)| (rect, radius))
+                .map(|(_, rect, radius)| (rect, radius))
         });
         let Some((rect, radius)) = stop else {
             self.ring_shown = false;
@@ -1502,6 +1896,22 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn languages_row_comes_last() {
+        // Only the footer moves as the list of languages opens.
+        let (_, rows) = SECTIONS.last().unwrap();
+        assert!(matches!(rows.last().unwrap().control, Control::Languages));
+        let count = SECTIONS
+            .iter()
+            .flat_map(|(_, rows)| rows.iter())
+            .filter(|row| matches!(row.control, Control::Languages))
+            .count();
+        assert_eq!(count, 1);
+        let names = |l: &[&str]| summary(&l.iter().map(|l| l.to_string()).collect::<Vec<_>>());
+        assert_eq!(names(&["it", "en"]), "English, Italiano");
+        assert_eq!(names(&["it", "xx"]), "Italiano");
+    }
 
     #[test]
     fn rows_fit_the_card() {

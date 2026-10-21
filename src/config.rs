@@ -30,9 +30,11 @@ pub struct Config {
     pub use_ui_automation: bool,
     /// Use the online dictionary for words (and pronunciations) the bundled one lacks.
     pub online_lookup: bool,
-    /// The language words are looked up in, as a code: "en" is built in,
-    /// another is read from `%LOCALAPPDATA%\WinDict\dicts\<code>.wdict`.
-    pub language: String,
+    /// The languages words are looked up in, as codes in order of preference:
+    /// "en" is built in, another is read from
+    /// `%LOCALAPPDATA%\WinDict\dicts\<code>.wdict`.
+    #[serde(alias = "language", deserialize_with = "one_or_more")]
+    pub languages: Vec<String>,
 }
 
 impl Default for Config {
@@ -45,7 +47,7 @@ impl Default for Config {
             show_examples: true,
             use_ui_automation: true,
             online_lookup: true,
-            language: "en".into(),
+            languages: vec!["en".into()],
         }
     }
 }
@@ -100,7 +102,33 @@ fn parse(bytes: &[u8]) -> Result<Config, String> {
         serde_json::from_slice(bytes).map_err(|e| format!("config.json: {e}"))?;
     // At least one definition per part of speech, or the card would be empty.
     config.max_definitions = config.max_definitions.max(1);
+    // Each language once, and at least one, or nothing could be looked up.
+    let mut languages: Vec<String> = Vec::new();
+    for language in config.languages.drain(..) {
+        let language = language.trim().to_ascii_lowercase();
+        if !language.is_empty() && !languages.contains(&language) {
+            languages.push(language);
+        }
+    }
+    if languages.is_empty() {
+        languages.push("en".into());
+    }
+    config.languages = languages;
     Ok(config)
+}
+
+/// Reads a list of languages, or the single one older versions saved.
+fn one_or_more<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Languages {
+        One(String),
+        More(Vec<String>),
+    }
+    Ok(match Languages::deserialize(deserializer)? {
+        Languages::One(language) => vec![language],
+        Languages::More(languages) => languages,
+    })
 }
 
 #[cfg(test)]
@@ -116,11 +144,23 @@ mod tests {
         assert_eq!(config.max_synonyms, 6);
         assert!(config.online_lookup);
         assert!(config.show_examples);
-        assert_eq!(config.language, "en");
+        assert_eq!(config.languages, ["en"]);
         assert_eq!(
             parse(br#"{"max_definitions": 0}"#).unwrap().max_definitions,
             1
         );
+    }
+
+    #[test]
+    fn reads_languages() {
+        let languages = |json: &str| parse(json.as_bytes()).unwrap().languages;
+        // The single language older versions saved.
+        assert_eq!(languages(r#"{"language": "it"}"#), ["it"]);
+        assert_eq!(
+            languages(r#"{"languages": ["it", "EN", "it", " "]}"#),
+            ["it", "en"]
+        );
+        assert_eq!(languages(r#"{"languages": []}"#), ["en"]);
     }
 
     #[test]

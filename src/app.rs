@@ -153,13 +153,13 @@ struct Corrected {
 
 /// A dictionary being downloaded, for the language it's for.
 struct Installing {
-    id: u64,
     download: &'static dicts::Download,
-    /// The language words are looked up in meanwhile, and after, if it fails.
-    previous: String,
-    /// Fetched again at start, rather than chosen in the settings: only
-    /// failing is told, and only when it leaves words in English.
+    /// Fetched again at start, rather than ticked in the settings: only
+    /// failing is told, and only when it leaves the language out.
     quiet: bool,
+    /// Whether it's still wanted: one unticked as it downloads finishes,
+    /// unused.
+    wanted: bool,
 }
 
 /// What the capture, lookup and download threads hand the UI thread.
@@ -167,9 +167,9 @@ enum Event {
     Captured(Captured),
     Looked(Looked),
     Corrected(Corrected),
-    /// How far a download has got, in percent.
-    Installing(u64, u32),
-    Installed(u64, Result<(), String>),
+    /// How far the download of a language's dictionary has got, in percent.
+    Installing(&'static str, u32),
+    Installed(&'static str, Result<(), String>),
 }
 
 /// Sends [`Event`]s to the UI thread. They go through a channel, and an
@@ -253,10 +253,8 @@ pub struct App {
     search: Option<Search>,
     /// The window the search box took the keyboard from.
     return_focus: Option<HWND>,
-    /// The dictionary being downloaded, if any, and how many have been
-    /// asked for: a download's result is only used if it's the latest.
-    installing: Option<Installing>,
-    installs: u64,
+    /// The dictionaries being downloaded, one at most for each language.
+    installing: Vec<Installing>,
     hotkey_ok: bool,
     mouse_hook: Option<HHOOK>,
     focus_hook: Option<HWINEVENTHOOK>,
@@ -370,25 +368,30 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             open_key: false,
             search: None,
             return_focus: None,
-            installing: None,
-            installs: 0,
+            installing: Vec::new(),
             hotkey_ok: false,
             mouse_hook: None,
             focus_hook: None,
         };
         app.register_hotkey();
-        let mut dictionary_error = offline::set_language(&app.config.language).err();
+        let mut dictionary_error = offline::set_languages(&app.config.languages).err();
         // A downloaded dictionary that's gone, or isn't the one this version
         // lists, is fetched again; failing to is told then.
-        if dicts::find(&app.config.language).is_some() {
+        let languages = app.config.languages.clone();
+        if languages
+            .iter()
+            .all(|l| l == "en" || dicts::find(l).is_some())
+        {
             dictionary_error = None;
-            app.choose_language(app.config.language.clone(), true);
+        }
+        for download in languages.iter().filter_map(|l| dicts::find(l)) {
+            app.install(download, true);
         }
         if let Some(e) = config_error {
             app.tray
                 .notify("Settings not loaded, using the defaults", &e);
         } else if let Some(e) = dictionary_error {
-            app.tray.notify("Dictionary not loaded, using English", &e);
+            app.tray.notify("Dictionary not loaded", &e);
         } else if first_run && app.hotkey_ok {
             app.tray.notify(
                 "WinDict is running",
@@ -546,8 +549,8 @@ impl App {
                 Event::Captured(captured) => self.on_selection(captured),
                 Event::Looked(looked) => self.on_result(looked),
                 Event::Corrected(corrected) => self.on_corrected(corrected),
-                Event::Installing(id, percent) => self.on_installing(id, percent),
-                Event::Installed(id, result) => self.on_installed(id, result),
+                Event::Installing(language, percent) => self.on_installing(language, percent),
+                Event::Installed(language, result) => self.on_installed(language, result),
             }
         }
     }
@@ -771,7 +774,8 @@ impl App {
 
         match (&self.local, online) {
             (Some(local), online) => {
-                let shown = dictionary::merge(local.clone(), online.as_ref());
+                let order = offline::languages();
+                let shown = dictionary::merge(local.clone(), online.as_ref(), &order);
                 let title = shown.word.clone();
                 self.present_body(
                     place,
@@ -791,11 +795,11 @@ impl App {
         }
 
         let (id, events) = (self.request, self.events.clone());
-        // In the language of the dictionary in use, which is English when
-        // the chosen one couldn't be read.
-        let language = offline::active().language().to_string();
+        // In the languages of the dictionaries in use, which is English when
+        // the chosen ones couldn't be read.
+        let languages = offline::languages();
         std::thread::spawn(move || {
-            let result = online::lookup(&online_key, detail, &language);
+            let result = online::lookup(&online_key, detail, &languages);
             events.send(Event::Looked(Looked {
                 id,
                 word: online_key,
@@ -831,9 +835,15 @@ impl App {
             // Already showing the offline entry: refine it in place, if the
             // online one adds anything. Errors are irrelevant here.
             Some(local) => {
-                let before = (local.phonetic.clone(), local.meanings.len());
-                let merged = dictionary::merge(local, Some(&looked.result));
-                if (merged.phonetic.clone(), merged.meanings.len()) != before {
+                // What's new: a pronunciation, parts of speech, languages.
+                let measure = |def: &Definition| {
+                    let meanings: usize = def.sections().map(|s| s.meanings.len()).sum();
+                    (def.phonetic.clone(), meanings, def.others.len())
+                };
+                let before = measure(&local);
+                let order = offline::languages();
+                let merged = dictionary::merge(local, Some(&looked.result), &order);
+                if measure(&merged) != before {
                     let place = Place::Same(Transition::Refine);
                     self.present(place, &looked.word, &Lookup::Found(merged));
                 }
@@ -1368,8 +1378,8 @@ impl App {
                 self.cache.clear();
                 self.register_hotkey();
                 self.refresh_settings();
-                if let Err(e) = offline::set_language(&self.config.language) {
-                    self.tray.notify("Dictionary not loaded, using English", &e);
+                if let Err(e) = offline::set_languages(&self.config.languages) {
+                    self.tray.notify("Dictionary not loaded", &e);
                 } else if self.hotkey_ok {
                     self.tray.notify(
                         "Settings reloaded",
@@ -1387,9 +1397,19 @@ impl App {
     // -----------------------------------------------------------------------
     // Settings window
 
+    /// What the settings window shows: the settings, with the languages
+    /// being downloaded for them ticked already.
     fn settings_values(&self) -> Values {
+        let mut config = self.config.clone();
+        for installing in self.installing.iter().filter(|i| i.wanted && !i.quiet) {
+            let language = installing.download.language;
+            if !config.languages.iter().any(|l| l == language) {
+                config.languages.push(language.to_owned());
+            }
+        }
+        config.languages.sort_by_key(|l| language_rank(l));
         Values {
-            config: self.config.clone(),
+            config,
             autostart: autostart::is_enabled(),
         }
     }
@@ -1494,7 +1514,7 @@ impl App {
                     let _ = settings.retheme(theme);
                 }
             }
-            Change::Language(language) => return self.choose_language(language, false),
+            Change::Language(language, on) => return self.tick_language(language, on),
             Change::MaxDefinitions(n) => self.config.max_definitions = n,
             Change::MaxSynonyms(n) => self.config.max_synonyms = n,
             Change::ShowExamples(on) => self.config.show_examples = on,
@@ -1508,83 +1528,138 @@ impl App {
         }
     }
 
-    /// Looks words up in `language` from now on: English at once, another
-    /// once its dictionary is downloaded, if it isn't already. Choosing
-    /// again leaves a download under way to finish, unused.
-    fn choose_language(&mut self, language: String, quiet: bool) {
-        self.installs += 1;
-        self.installing = None;
-        let Some(download) = dicts::find(&language) else {
-            // Saying no more of a download it replaced.
-            if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
-                let _ = settings.show_language(&language, None);
+    /// Looks words up in `language` too from now on, or no longer: English
+    /// at once, another once its dictionary is downloaded, if it isn't
+    /// already. The last language left stays.
+    fn tick_language(&mut self, language: String, on: bool) {
+        if on {
+            if let Some(download) = dicts::find(&language) {
+                return self.install(download, false);
             }
-            return self.use_language(&language);
-        };
-        let (id, events) = (self.installs, self.events.clone());
-        self.installing = Some(Installing {
-            id,
+            if !self.config.languages.contains(&language) {
+                self.config.languages.push(language);
+            }
+        } else {
+            for installing in self.installing.iter_mut() {
+                if installing.download.language == language {
+                    installing.wanted = false;
+                }
+            }
+            self.show_download(&language, None);
+            if self.config.languages.len() > 1 {
+                self.config.languages.retain(|l| *l != language);
+            }
+        }
+        self.use_languages();
+    }
+
+    /// Makes sure `download` is in place, fetching it if it isn't, then
+    /// looks words up in its language too. Asked for again while it
+    /// downloads, the download under way carries on.
+    fn install(&mut self, download: &'static dicts::Download, quiet: bool) {
+        let language = download.language;
+        if let Some(installing) = self
+            .installing
+            .iter_mut()
+            .find(|i| i.download.language == language)
+        {
+            installing.wanted = true;
+            installing.quiet &= quiet;
+            return;
+        }
+        self.installing.push(Installing {
             download,
-            previous: self.config.language.clone(),
             quiet,
+            wanted: true,
         });
+        let events = self.events.clone();
         std::thread::spawn(move || {
             let result = dicts::install(download, |percent| {
-                events.send(Event::Installing(id, percent));
+                events.send(Event::Installing(language, percent));
             });
-            events.send(Event::Installed(id, result));
+            events.send(Event::Installed(language, result));
         });
     }
 
-    fn on_installing(&mut self, id: u64, percent: u32) {
-        let Some(installing) = self.installing.as_ref().filter(|i| i.id == id && !i.quiet) else {
+    fn on_installing(&mut self, language: &str, percent: u32) {
+        let shown = self
+            .installing
+            .iter()
+            .any(|i| i.download.language == language && i.wanted && !i.quiet);
+        if !shown {
             return;
-        };
-        let download = installing.download;
-        let note = format!("Downloading {}\u{2026} {percent}%", download.name);
-        if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
-            let _ = settings.show_language(download.language, Some((&note, false)));
         }
+        let note = format!("Downloading\u{2026} {percent}%");
+        self.show_download(language, Some((&note, false)));
     }
 
-    fn on_installed(&mut self, id: u64, result: Result<(), String>) {
-        let Some(installing) = self.installing.take_if(|i| i.id == id) else {
+    fn on_installed(&mut self, language: &str, result: Result<(), String>) {
+        let Some(at) = self
+            .installing
+            .iter()
+            .position(|i| i.download.language == language)
+        else {
             return;
         };
+        let installing = self.installing.remove(at);
+        if !installing.wanted {
+            return;
+        }
         let download = installing.download;
-        let settings = self.settings.as_mut().filter(|s| s.visible);
         match result {
             Ok(()) => {
-                if let Some(settings) = settings {
-                    let _ = settings.show_language(download.language, None);
+                self.show_download(language, None);
+                let used = offline::languages().iter().any(|l| l == language);
+                if !self.config.languages.iter().any(|l| l == language) {
+                    self.config.languages.push(language.to_owned());
+                } else if used {
+                    // Already in use, as it was at start.
+                    return;
                 }
-                self.use_language(download.language);
+                self.use_languages();
             }
             // At start, the one there is (if any) is used as it is.
             Err(e) if installing.quiet => {
-                if offline::active().language() != download.language {
-                    let title = format!("{} not downloaded, using English", download.name);
+                if !offline::languages().iter().any(|l| l == language) {
+                    let title = format!("{} not downloaded", download.name);
                     self.tray.notify(&title, &e);
                 }
             }
             Err(e) => {
-                if let Some(settings) = settings {
-                    let _ = settings.show_language(&installing.previous, Some((&e, true)));
-                }
+                self.show_languages();
+                self.show_download(language, Some((&e, true)));
             }
         }
     }
 
-    /// Looks words up in `language`, whose dictionary is in place, and
-    /// saves it as the setting.
-    fn use_language(&mut self, language: &str) {
-        if let Err(e) = offline::set_language(language) {
-            self.tray.notify("Dictionary not loaded, using English", &e);
+    /// Looks words up in the languages of the setting, in order of
+    /// preference, and saves it.
+    fn use_languages(&mut self) {
+        self.config.languages.sort_by_key(|l| language_rank(l));
+        if let Err(e) = offline::set_languages(&self.config.languages) {
+            self.tray.notify("Dictionary not loaded", &e);
         }
-        self.config.language = language.to_owned();
+        // Online answers are for the languages there were.
         self.cache.clear();
         if let Err(e) = config::save(&self.config) {
             self.tray.notify("Settings not saved", &e);
+        }
+        self.show_languages();
+    }
+
+    /// Ticks the languages used, and those being downloaded, in the
+    /// settings window.
+    fn show_languages(&mut self) {
+        let languages = self.settings_values().config.languages;
+        if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
+            let _ = settings.show_languages(&languages);
+        }
+    }
+
+    /// Says how `language`'s download is going in the settings window.
+    fn show_download(&mut self, language: &str, status: Option<(&str, bool)>) {
+        if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
+            let _ = settings.show_download(language, status);
         }
     }
 
@@ -1595,6 +1670,14 @@ impl App {
             let _ = settings.retheme(theme);
         }
     }
+}
+
+/// Where `language` comes in the order of preference: that of the
+/// settings' list, then any it doesn't know.
+fn language_rank(language: &str) -> usize {
+    dicts::languages()
+        .position(|(code, _)| code == language)
+        .unwrap_or(usize::MAX)
 }
 
 /// Registers `keys` on `hwnd`, or unregisters them, as `wanted`; `on` says

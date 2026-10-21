@@ -49,7 +49,7 @@ impl Settings {
         let s = self.scale;
         let room = (work.bottom - work.top) as f32 - 2.0 * (SCREEN_GAP * s).round();
         let w = (CARD_W * s).round();
-        let h = (view.header_h + view.content_h).min(room).ceil();
+        let h = (view.header_h + view.height(self.open)).min(room).ceil();
         self.card = (w, h);
         let m = (MARGIN * s).round();
         self.frame.resize(&self.anim, w, h, v3(m, m), s, false)?;
@@ -88,6 +88,11 @@ impl Settings {
             let (text, error) = self.notes[note as usize].clone();
             self.show_note(note, &text, error, false)?;
         }
+        self.show_checks(false)?;
+        for i in 0..self.downloads.len() {
+            self.show_status(i)?;
+        }
+        self.show_open(false)?;
         self.show_recording()?;
         self.show_hover(self.hovered)?;
         self.ring_shown = false;
@@ -178,6 +183,7 @@ impl Settings {
 
         let (group_x, group_w, row_h) = (px(GROUP_X), card_w - 2.0 * px(GROUP_X), px(ROW_H));
         let mut parts = Parts::default();
+        let mut list = None;
         let mut y = 0.0;
         for (i, (name, rows)) in SECTIONS.iter().enumerate() {
             y += if i == 0 { px(2.0) } else { px(SECTION_GAP) };
@@ -191,18 +197,32 @@ impl Settings {
 
             let group_at = v3(group_x, y);
             let group_h = rows.len() as f32 * row_h;
+            // The group with the languages row has room for the list under
+            // it, which the clip and outline show as it opens.
+            let listed = rows
+                .iter()
+                .any(|row| matches!(row.control, Control::Languages));
+            let list_h = if listed {
+                dicts::languages().count() as f32 * px(LANGUAGE_H)
+            } else {
+                0.0
+            };
             let group = container(c, &scroller, group_at)?;
             let bounds = Rect {
                 w: group_w,
                 h: group_h,
                 ..Rect::default()
             };
-            group.SetSize(bounds.size())?;
+            let open = Rect {
+                h: group_h + list_h,
+                ..bounds
+            };
+            group.SetSize(open.size())?;
             let clip = c.CreateRoundedRectangleGeometry()?;
             clip.SetSize(bounds.size())?;
             clip.SetCornerRadius(v2(px(GROUP_RADIUS), px(GROUP_RADIUS)))?;
             group.SetClip(&c.CreateGeometricClipWithGeometry(&clip)?)?;
-            rounded(c, &group, bounds, 0.0, t.group())?;
+            rounded(c, &group, open, 0.0, t.group())?;
             for (j, spec) in rows.iter().enumerate() {
                 let row = Rect {
                     x: 0.0,
@@ -212,7 +232,24 @@ impl Settings {
                 };
                 self.build_row(&mut parts, &group, group_at, spec, row, j > 0)?;
             }
-            outline(c, &group, bounds, px(GROUP_RADIUS), t.group_stroke())?;
+            let built = match listed {
+                true => Some(self.build_list(&mut parts, &group, group_at, group_h, group_w)?),
+                false => None,
+            };
+            let (_, border) = outline(c, &group, open, px(GROUP_RADIUS), t.group_stroke())?;
+            border.SetSize(v2(bounds.w - 1.0, bounds.h - 1.0))?;
+            if let Some((visual, items)) = built {
+                let list_y = group_at.Y + group_h;
+                list = Some((
+                    visual,
+                    items,
+                    (clip, border),
+                    group_w,
+                    group_h,
+                    list_y,
+                    list_h,
+                ));
+            }
             reveal.push((group.cast()?, group_at));
             y += group_h;
         }
@@ -239,9 +276,28 @@ impl Settings {
         y += link_size.Y + px(PAD_BOTTOM);
         let content_h = y;
 
+        let missing = || windows::core::Error::from(E_UNEXPECTED);
+        let (list, items, (clip, outline), group_w, group_h, list_y, list_h) =
+            list.ok_or_else(missing)?;
+        let (hover, chevron) = parts.languages.take().ok_or_else(missing)?;
+        let languages = LanguagesView {
+            hover,
+            chevron,
+            clip,
+            outline,
+            group_w,
+            group_h,
+            list,
+            list_y,
+            list_h,
+            items,
+            footer,
+            footer_at,
+        };
+
         // The ring around what the keyboard is on, gliding from stop to stop.
         let ring = c.CreateShapeVisual()?;
-        ring.SetSize(v2(card_w, content_h))?;
+        ring.SetSize(v2(card_w, content_h + list_h))?;
         ring.SetOpacity(0.0)?;
         let ring_geometry = c.CreateRoundedRectangleGeometry()?;
         let shape = c.CreateSpriteShapeWithGeometry(&ring_geometry)?;
@@ -266,7 +322,6 @@ impl Settings {
         thumb.SetOpacity(0.0)?;
         content.Children()?.InsertAtTop(&thumb)?;
 
-        let missing = || windows::core::Error::from(E_UNEXPECTED);
         Ok(View {
             content,
             header_h,
@@ -304,7 +359,113 @@ impl Settings {
             stops: parts.stops,
             ring,
             ring_geometry,
+            languages,
         })
+    }
+
+    /// The list of languages, each with a box to tick, `top` down `group`
+    /// (which is `w` wide, at `group_at` in the scroller). Returns it and
+    /// its languages.
+    fn build_list(
+        &self,
+        parts: &mut Parts,
+        group: &ContainerVisual,
+        group_at: Vector3,
+        top: f32,
+        w: f32,
+    ) -> Result<(ContainerVisual, Vec<LanguageView>)> {
+        let (c, r, t, s) = (
+            &self.anim.compositor,
+            &self.renderer,
+            &self.theme,
+            self.scale,
+        );
+        let px = |dip: f32| (dip * s).round();
+        let list = container(c, group, v3(0.0, top))?;
+        let at = v3(group_at.X, group_at.Y + top);
+        list.SetOpacity(0.0)?;
+        // The tick, in the color that stands out on the accent.
+        let inverse = Theme {
+            dark: !t.dark,
+            ..*t
+        };
+        let (h, b) = (px(LANGUAGE_H), px(CHECK_SIZE));
+        let outset = px(FOCUS_OUTSET);
+        let mut items = Vec::new();
+        for (i, (_, name)) in dicts::languages().enumerate() {
+            let row = Rect {
+                x: 0.0,
+                y: i as f32 * h,
+                w,
+                h,
+            };
+            let line = Rect {
+                h: s.round().max(1.0),
+                ..row
+            };
+            rounded(c, &list, line, 0.0, t.separator())?;
+            let (hover, _) = rounded(c, &list, row, 0.0, t.highlight())?;
+            hover.SetOpacity(0.0)?;
+            let middle = row.y + h / 2.0;
+            let check = Rect {
+                x: px(ROW_PAD),
+                y: (middle - b / 2.0).round(),
+                w: b,
+                h: b,
+            };
+            let face = Rect {
+                w: b,
+                h: b,
+                ..Rect::default()
+            };
+            let radius = px(CHECK_RADIUS);
+            let off = container(c, &list, check.at())?;
+            rounded(c, &off, face, radius, t.sunken())?;
+            outline(c, &off, face, radius, t.strong_stroke())?;
+            let on = container(c, &list, check.at())?;
+            on.SetCenterPoint(Vector3 {
+                X: b / 2.0,
+                Y: b / 2.0,
+                Z: 0.0,
+            })?;
+            rounded(c, &on, face, radius, t.accent)?;
+            let tick = Text::new(c, &on)?;
+            let glyph = r.layout_aligned(
+                CHECK_GLYPH,
+                Face::Icon,
+                Ink::Primary,
+                CHECK_SIZE,
+                Align::Center,
+            )?;
+            let size = tick.show(r, &glyph, s, &inverse)?;
+            tick.visual
+                .SetOffset(v3(0.0, ((b - size.Y) / 2.0).round()))?;
+
+            let x = check.x + b + px(CHECK_GAP);
+            let label = Text::new(c, &list)?;
+            let text = r.layout_line(name, Face::Setting, Ink::Primary, 200.0)?;
+            let size = label.show(r, &text, s, t)?;
+            label
+                .visual
+                .SetOffset(v3(x, (middle - size.Y / 2.0).round()))?;
+
+            let place = |rect: Rect| rect.offset(at);
+            parts.hits.push((Hit::Language(i), place(row)));
+            parts.stops.push((
+                Stop::Language(i),
+                place(check).outset(outset),
+                radius + outset,
+            ));
+            items.push(LanguageView {
+                on,
+                off,
+                hover,
+                status: Text::new(c, &list)?,
+                status_right: w - px(ROW_PAD),
+                status_middle: middle,
+            });
+        }
+        Ok((list, items))
     }
 
     /// One setting: its name and description on the left, its control on
@@ -335,7 +496,7 @@ impl Settings {
         }
         // Rows that are clicked as a whole light up under the pointer.
         let hover = match spec.control {
-            Control::Shortcut | Control::Switch(_) => {
+            Control::Shortcut | Control::Switch(_) | Control::Languages => {
                 let (hover, _) = rounded(c, group, row, 0.0, t.highlight())?;
                 hover.SetOpacity(0.0)?;
                 Some(hover)
@@ -358,7 +519,7 @@ impl Settings {
         // A description that changes cross-fades from the one before.
         let note = match spec.control {
             Control::Shortcut => Some(Note::Shortcut),
-            Control::Choice(Choice::Language) => Some(Note::Language),
+            Control::Languages => Some(Note::Language),
             _ => None,
         };
         if let Some(note) = note {
@@ -448,6 +609,25 @@ impl Settings {
                     .stops
                     .push((Stop::Counter(counter), place(at).outset(outset), radius));
                 parts.counters[counter as usize] = Some(view);
+            }
+            Control::Languages => {
+                let chevron = Text::new(c, group)?;
+                let line = r.layout_line(CHEVRON_GLYPH, Face::Icon, Ink::Secondary, CHEVRON_W)?;
+                let size = chevron.show(r, &line, s, t)?;
+                let at = v3(right - size.X, (middle - size.Y / 2.0).round());
+                chevron.visual.SetOffset(at)?;
+                chevron.visual.SetCenterPoint(Vector3 {
+                    X: size.X / 2.0,
+                    Y: size.Y / 2.0,
+                    Z: 0.0,
+                })?;
+                parts.hits.push((Hit::Languages, place(row)));
+                let ring_at = place(row).outset(-px(RECORD_INSET));
+                parts
+                    .stops
+                    .push((Stop::Languages, ring_at, px(RECORD_RADIUS)));
+                let hover = hover.ok_or_else(|| windows::core::Error::from(E_UNEXPECTED))?;
+                parts.languages = Some((hover, chevron.visual));
             }
         }
         Ok(())
@@ -691,7 +871,7 @@ fn outline(
     rect: Rect,
     radius: f32,
     color: Color,
-) -> Result<ShapeVisual> {
+) -> Result<(ShapeVisual, CompositionRoundedRectangleGeometry)> {
     let visual = c.CreateShapeVisual()?;
     visual.SetOffset(rect.at())?;
     visual.SetSize(rect.size())?;
@@ -704,7 +884,7 @@ fn outline(
     shape.SetStrokeThickness(1.0)?;
     visual.Shapes()?.Append(&shape)?;
     parent.Children()?.InsertAtTop(&visual)?;
-    Ok(visual)
+    Ok((visual, geometry))
 }
 
 /// The parts of a view as its rows are built.
@@ -712,9 +892,11 @@ fn outline(
 struct Parts {
     shortcut: Option<ShortcutView>,
     switches: [Option<SwitchView>; 4],
-    choices: [Option<ChoiceView>; 2],
+    choices: [Option<ChoiceView>; 1],
     notes: [Option<NoteView>; 2],
     counters: [Option<CounterView>; 2],
+    /// The languages row's hover and chevron.
+    languages: Option<(SpriteVisual, SpriteVisual)>,
     hits: Vec<(Hit, Rect)>,
     stops: Vec<(Stop, Rect, f32)>,
 }

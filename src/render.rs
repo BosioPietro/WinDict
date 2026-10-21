@@ -16,6 +16,7 @@ use windows::UI::Composition::{CompositionDrawingSurface, CompositionGraphicsDev
 use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::dictionary::{self, Definition};
+use crate::dicts;
 use crate::theme::Theme;
 
 #[derive(Clone, Copy)]
@@ -567,7 +568,14 @@ impl Renderer {
                 suggestion,
             } => self.layout_message(&mut out, title, detail, *suggestion, width)?,
             Body::Definition(def) => {
-                self.layout_definition(&mut out, def, width)?;
+                // In several languages, each under a heading of its own.
+                let grouped = !def.others.is_empty();
+                for (i, section) in def.sections().enumerate() {
+                    if grouped {
+                        self.layout_language(&mut out, section, i, &def.word, width)?;
+                    }
+                    self.layout_definition(&mut out, section, width)?;
+                }
                 self.layout_sources(&mut out, def, width)?;
             }
         }
@@ -623,6 +631,37 @@ impl Renderer {
             let (_, h) = out.text_with_accents(line, 0.0, Ink::Secondary, vec![range]);
             out.y += h;
         }
+        Ok(())
+    }
+
+    /// The heading over a language's part of the card: its name, then the
+    /// word, when it isn't the card's (the base form of what was looked up).
+    fn layout_language(
+        &self,
+        out: &mut Stack,
+        section: &Definition,
+        index: usize,
+        title: &str,
+        width: f32,
+    ) -> Result<()> {
+        if index > 0 {
+            out.y += 18.0;
+        }
+        let name = self.text(&dicts::name(&section.language), &self.formats.title, width)?;
+        let (w, h) = out.text(name, 0.0, Ink::Primary);
+        if section.word.to_lowercase() != title.to_lowercase() {
+            let x = w + 8.0;
+            let word = self.text(&section.word, &self.formats.body, (width - x).max(1.0))?;
+            let (_, word_h, _) = metrics(&word);
+            out.items.push(Item::Text {
+                layout: word,
+                x,
+                y: out.y + (h - word_h) / 2.0,
+                ink: Ink::Secondary,
+                accents: Vec::new(),
+            });
+        }
+        out.y += h + 10.0;
         Ok(())
     }
 
@@ -734,14 +773,14 @@ impl Renderer {
         out.y += 8.0;
         let mut x = 0.0;
         let mut line_h: f32 = 0.0;
-        for (i, source) in def.sources.iter().enumerate() {
+        for (i, (source, word)) in def.all_sources().into_iter().enumerate() {
             if i > 0 {
                 let dot = self.text(" \u{00B7} ", &self.formats.footer, width)?;
                 let (w, h) = out.text(dot, x, Ink::Tertiary);
                 x += w;
                 line_h = line_h.max(h);
             }
-            let (w, h) = match dictionary::source_url(source, &def.word) {
+            let (w, h) = match dictionary::source_url(source, word) {
                 None => {
                     let label = self.text(source, &self.formats.footer, width)?;
                     out.text(label, x, Ink::Accent)

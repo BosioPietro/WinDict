@@ -35,6 +35,20 @@ pub fn find(language: &str) -> Option<&'static Download> {
     DOWNLOADS.iter().find(|d| d.language == language)
 }
 
+/// Every language words can be looked up in, as code and name: English,
+/// which is built in, then those that are downloaded.
+pub fn languages() -> impl Iterator<Item = (&'static str, &'static str)> {
+    std::iter::once(("en", "English")).chain(DOWNLOADS.iter().map(|d| (d.language, d.name)))
+}
+
+/// What `language` is called, in itself ("Italiano"), or its code, in
+/// capitals, if it isn't one WinDict knows.
+pub fn name(language: &str) -> String {
+    languages()
+        .find(|(code, _)| *code == language)
+        .map_or_else(|| language.to_uppercase(), |(_, name)| name.to_string())
+}
+
 /// Makes sure `download` is in its place, as it should be: if it isn't,
 /// it's downloaded, telling `progress` how far it's got, in percent. Errors
 /// are short, to fit under the setting.

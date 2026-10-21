@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::dictionary::{
-    percent_encode, Definition, Detail, Lookup, Meaning, Sense, MAX_ANTONYMS, WIKTIONARY,
+    self, percent_encode, Definition, Detail, Lookup, Meaning, Sense, MAX_ANTONYMS, WIKTIONARY,
 };
 use crate::http;
 
@@ -22,21 +22,53 @@ const FALLBACK_DELAY: Duration = Duration::from_millis(500);
 /// asked as well, and the first definition to arrive wins. The Free
 /// Dictionary API is built from Wiktionary, so once Wiktionary has no entry
 /// the word isn't waited on any longer. The Free Dictionary API only has
-/// English: a word in another `language` is only looked for in Wiktionary.
-pub fn lookup(word: &str, detail: Detail, language: &str) -> Lookup {
-    let result = if language == "en" {
+/// English: the other `languages` are only looked for in Wiktionary, all
+/// at once, while English is.
+pub fn lookup(word: &str, detail: Detail, languages: &[String]) -> Lookup {
+    let others: Vec<String> = languages.iter().filter(|l| *l != "en").cloned().collect();
+    let english = languages.iter().any(|l| l == "en").then(|| {
         let (w1, w2) = (word.to_string(), word.to_string());
-        race(
-            move || lookup_free_dictionary(&w1, detail.senses, detail.synonyms),
-            move || lookup_wiktionary(&w2, detail.senses, "en"),
-            FALLBACK_DELAY,
-        )
-    } else {
-        lookup_wiktionary(word, detail.senses, language)
-    };
-    match result {
-        Lookup::Found(def) => Lookup::Found(detail.apply(def)),
+        thread::spawn(move || {
+            race(
+                move || lookup_free_dictionary(&w1, detail.senses, detail.synonyms),
+                move || lookup_wiktionary(&w2, detail.senses, &["en".to_string()]),
+                FALLBACK_DELAY,
+            )
+        })
+    });
+    let mut results = Vec::new();
+    if !others.is_empty() {
+        results.push(lookup_wiktionary(word, detail.senses, &others));
+    }
+    if let Some(english) = english {
+        results.push(english.join().unwrap_or(Lookup::NotFound));
+    }
+    match together(results, languages) {
+        Lookup::Found(def) => Lookup::Found(detail.apply(Definition {
+            others: def.others.into_iter().map(|d| detail.apply(d)).collect(),
+            ..def
+        })),
         result => result,
+    }
+}
+
+/// One answer from the answers for each language: what was found, if
+/// anything was; else "not found", if it was definite somewhere.
+fn together(results: Vec<Lookup>, languages: &[String]) -> Lookup {
+    let mut found = Vec::new();
+    let mut not_found = false;
+    let mut failure = None;
+    for result in results {
+        match result {
+            Lookup::Found(def) => found.push(def),
+            Lookup::NotFound => not_found = true,
+            Lookup::Failed(e) => failure = Some(e),
+        }
+    }
+    match (dictionary::combine(found, languages), failure) {
+        (Some(def), _) => Lookup::Found(def),
+        (None, Some(e)) if !not_found => Lookup::Failed(e),
+        _ => Lookup::NotFound,
     }
 }
 
@@ -108,15 +140,20 @@ fn lookup_free_dictionary(word: &str, max_senses: usize, max_synonyms: usize) ->
     })
 }
 
-/// English Wiktionary's entry for `word` in `language`: its definitions are
-/// in English, whatever the word's language.
-fn lookup_wiktionary(word: &str, max_senses: usize, language: &str) -> Lookup {
+/// English Wiktionary's entries for `word` in `languages`, which one
+/// response holds: its definitions are in English, whatever the word's
+/// language.
+fn lookup_wiktionary(word: &str, max_senses: usize, languages: &[String]) -> Lookup {
     let path = format!(
         "/api/rest_v1/page/definition/{}",
         percent_encode(&word.replace(' ', "_"))
     );
     fetch("en.wiktionary.org", &path, |body| {
-        parse_wiktionary(body, word, max_senses, language)
+        let found = languages
+            .iter()
+            .filter_map(|l| parse_wiktionary(body, word, max_senses, l))
+            .collect();
+        dictionary::combine(found, languages)
     })
 }
 
@@ -215,10 +252,12 @@ fn parse_wiktionary(
     }
     Some(Definition {
         word: word.to_string(),
+        language: language.to_string(),
         phonetic: None,
         meanings,
         note: None,
         sources: vec![WIKTIONARY],
+        others: Vec::new(),
     })
 }
 
@@ -327,10 +366,12 @@ fn parse(body: &[u8], max_senses: usize, max_synonyms: usize) -> Option<Definiti
     }
     Some(Definition {
         word,
+        language: "en".into(),
         phonetic,
         meanings,
         note: None,
         sources: vec![WIKTIONARY],
+        others: Vec::new(),
     })
 }
 
@@ -421,11 +462,45 @@ mod tests {
     fn found(word: &str) -> Lookup {
         Lookup::Found(Definition {
             word: word.into(),
+            language: "en".into(),
             phonetic: None,
             meanings: Vec::new(),
             note: None,
             sources: Vec::new(),
+            others: Vec::new(),
         })
+    }
+
+    #[test]
+    fn puts_languages_together() {
+        let languages = ["en".to_string(), "it".to_string()];
+        let italian = Lookup::Found(Definition {
+            language: "it".into(),
+            ..match found("casa") {
+                Lookup::Found(d) => d,
+                _ => unreachable!(),
+            }
+        });
+        let both = together(vec![italian.clone(), found("house")], &languages);
+        assert_eq!(word_of(both.clone()), "house");
+        let Lookup::Found(both) = both else {
+            unreachable!()
+        };
+        assert_eq!(both.others[0].word, "casa");
+        // Found in one language is found, though another failed.
+        let failed = Lookup::Failed("offline".into());
+        assert_eq!(
+            word_of(together(vec![failed.clone(), italian], &languages)),
+            "casa"
+        );
+        assert!(matches!(
+            together(vec![failed.clone(), Lookup::NotFound], &languages),
+            Lookup::NotFound
+        ));
+        assert!(matches!(
+            together(vec![failed], &languages),
+            Lookup::Failed(_)
+        ));
     }
 
     fn delayed(ms: u64, result: Lookup) -> impl FnOnce() -> Lookup + Send + 'static {

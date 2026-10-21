@@ -284,6 +284,11 @@ pub(super) unsafe extern "system" fn settings_proc(
             with_app(|app| app.in_settings(|s| s.wheel(delta).map(|_| None)));
             LRESULT(0)
         }
+        // The card has shrunk: the window follows.
+        WM_TIMER => {
+            with_app(|app| app.in_settings(|s| s.settle().map(|_| None)));
+            LRESULT(0)
+        }
         // A hand over the link.
         WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
             let mut pt = POINT::default();

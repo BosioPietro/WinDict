@@ -2,15 +2,22 @@
 //! they come from: the bundled dictionary (`offline.rs`) and the online
 //! ones (`online.rs`).
 
+/// A word in one language, followed by what it is in the others looked up
+/// in, which the card shows under it, each under a heading of its own.
 #[derive(Clone, Debug)]
 pub struct Definition {
     pub word: String,
+    /// The code of the language it's in ("en").
+    pub language: String,
     pub phonetic: Option<String>,
     pub meanings: Vec<Meaning>,
     /// Shown above the senses, e.g. when an inflection was resolved.
     pub note: Option<String>,
     /// Where the content came from, for the footer.
     pub sources: Vec<&'static str>,
+    /// The word in the other languages, in order of preference. Their own
+    /// `others` are empty.
+    pub others: Vec<Definition>,
 }
 
 impl Definition {
@@ -21,6 +28,47 @@ impl Definition {
         }
         self
     }
+
+    /// Each language's part: this one, then the others.
+    pub fn sections(&self) -> impl Iterator<Item = &Definition> {
+        std::iter::once(self).chain(&self.others)
+    }
+
+    fn into_sections(mut self) -> Vec<Definition> {
+        let others = std::mem::take(&mut self.others);
+        std::iter::once(self).chain(others).collect()
+    }
+
+    /// Where every language's part came from, for the footer: each source
+    /// once, with the word it has the page for.
+    pub fn all_sources(&self) -> Vec<(&'static str, &str)> {
+        let mut out: Vec<(&'static str, &str)> = Vec::new();
+        for section in self.sections() {
+            for &source in &section.sources {
+                if !out.iter().any(|(s, _)| *s == source) {
+                    out.push((source, &section.word));
+                }
+            }
+        }
+        out
+    }
+}
+
+/// One definition of the word in each of the languages it was found in,
+/// the first of `order` (the languages, by preference) leading.
+pub fn combine(mut sections: Vec<Definition>, order: &[String]) -> Option<Definition> {
+    let rank = |d: &Definition| {
+        order
+            .iter()
+            .position(|l| *l == d.language)
+            .unwrap_or(order.len())
+    };
+    // Stable: those in no known order stay as they came.
+    sections.sort_by_key(rank);
+    let mut sections = sections.into_iter().flat_map(Definition::into_sections);
+    let mut lead = sections.next()?;
+    lead.others = sections.collect();
+    Some(lead)
 }
 
 /// How much of an entry a lookup returns, as the settings ask.
@@ -97,12 +145,33 @@ pub fn normalize(raw: &str) -> Result<String, NormalizeError> {
     Ok(words.join(" ").to_lowercase())
 }
 
-/// Fills what the offline entry lacks (pronunciation, parts of speech
-/// WordNet doesn't cover) from an online entry.
-pub fn merge(mut local: Definition, online: Option<&Lookup>) -> Definition {
+/// Fills what the offline entry lacks (pronunciation, parts of speech the
+/// dictionary doesn't cover, languages it hasn't the word in) from an
+/// online entry. `order` is the languages, by preference.
+pub fn merge(local: Definition, online: Option<&Lookup>, order: &[String]) -> Definition {
     let Some(Lookup::Found(online)) = online else {
         return local;
     };
+    let mut sections = local.clone().into_sections();
+    for theirs in online.sections() {
+        match sections.iter_mut().find(|s| s.language == theirs.language) {
+            // The same word: what the dictionary has, it says better. A
+            // word whose base form was shown ("case" → "casa") is left as
+            // the dictionary has it.
+            Some(ours) if ours.word.to_lowercase() == theirs.word.to_lowercase() => {
+                fill(ours, theirs)
+            }
+            Some(_) => {}
+            None => sections.push(Definition {
+                others: Vec::new(),
+                ..theirs.clone()
+            }),
+        }
+    }
+    combine(sections, order).unwrap_or(local)
+}
+
+fn fill(local: &mut Definition, online: &Definition) {
     let mut used = false;
     if local.phonetic.is_none() && online.phonetic.is_some() {
         local.phonetic = online.phonetic.clone();
@@ -121,7 +190,6 @@ pub fn merge(mut local: Definition, online: Option<&Lookup>) -> Definition {
     if used && !local.sources.contains(&WIKTIONARY) {
         local.sources.push(WIKTIONARY);
     }
-    local
 }
 
 /// A web page for `word` at `source`, for the card's footer links.
@@ -177,6 +245,7 @@ mod tests {
     fn entry(phonetic: Option<&str>, parts: &[&str], sources: Vec<&'static str>) -> Definition {
         Definition {
             word: "run".into(),
+            language: "en".into(),
             phonetic: phonetic.map(String::from),
             meanings: parts
                 .iter()
@@ -192,11 +261,25 @@ mod tests {
                 .collect(),
             note: None,
             sources,
+            others: Vec::new(),
+        }
+    }
+
+    fn order() -> Vec<String> {
+        vec!["en".into(), "it".into()]
+    }
+
+    fn italian(word: &str, parts: &[&str], sources: Vec<&'static str>) -> Definition {
+        Definition {
+            word: word.into(),
+            language: "it".into(),
+            ..entry(None, parts, sources)
         }
     }
 
     #[test]
     fn merges_what_the_offline_entry_lacks() {
+        let merge = |local, online| super::merge(local, online, &order());
         let local = entry(None, &["verb"], vec![WORDNET]);
         let online = Lookup::Found(entry(Some("/ɹʌn/"), &["verb", "noun"], vec![WIKTIONARY]));
         let merged = merge(local.clone(), Some(&online));
@@ -215,6 +298,42 @@ mod tests {
             let kept = merge(local.clone(), nothing);
             assert!(kept.phonetic.is_none() && kept.meanings.len() == 1);
         }
+    }
+
+    #[test]
+    fn combines_languages() {
+        let it = italian("run", &["noun"], vec!["Wikizionario"]);
+        let en = entry(None, &["verb"], vec![WORDNET]);
+        // In order of preference, whatever order they're found in.
+        let both = combine(vec![it.clone(), en.clone()], &order()).unwrap();
+        let languages: Vec<_> = both.sections().map(|s| s.language.as_str()).collect();
+        assert_eq!(languages, ["en", "it"]);
+        assert_eq!(
+            both.all_sources(),
+            [(WORDNET, "run"), ("Wikizionario", "run")]
+        );
+        assert!(combine(Vec::new(), &order()).is_none());
+        // Online, a language the offline dictionaries lack is added in its
+        // place; one they have the base form of is left as it is.
+        let local = combine(
+            vec![italian("casa", &["noun"], vec!["Wikizionario"])],
+            &order(),
+        );
+        let online = combine(
+            vec![
+                italian("case", &["noun"], vec![WIKTIONARY]),
+                entry(None, &["noun"], vec![WIKTIONARY]),
+            ],
+            &order(),
+        )
+        .unwrap();
+        let merged = merge(local.unwrap(), Some(&Lookup::Found(online)), &order());
+        let words: Vec<_> = merged
+            .sections()
+            .map(|s| (&*s.language, &*s.word))
+            .collect();
+        assert_eq!(words, [("en", "run"), ("it", "casa")]);
+        assert_eq!(merged.others[0].sources, ["Wikizionario"]);
     }
 
     #[test]
