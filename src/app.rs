@@ -814,16 +814,12 @@ impl App {
             return;
         }
         let _ = popup.begin_hide();
-        unsafe {
-            let _ = KillTimer(Some(self.hwnd), TIMER_AUTOHIDE);
-            SetTimer(Some(self.hwnd), TIMER_HIDE, HIDE_DONE_MS, None);
-        }
+        win::kill_timer(self.hwnd, TIMER_AUTOHIDE);
+        win::set_timer(self.hwnd, TIMER_HIDE, HIDE_DONE_MS);
     }
 
     fn on_timer(&mut self, id: usize) {
-        unsafe {
-            let _ = KillTimer(Some(self.hwnd), id);
-        }
+        win::kill_timer(self.hwnd, id);
         match id {
             TIMER_AUTOHIDE => self.dismiss(),
             TIMER_COVERED => self.uncover(),
@@ -838,9 +834,7 @@ impl App {
                     m.finish_hide();
                 }
                 trim_working_set();
-                unsafe {
-                    SetTimer(Some(self.hwnd), TIMER_MENU_TEARDOWN, IDLE_TEARDOWN_MS, None);
-                }
+                win::set_timer(self.hwnd, TIMER_MENU_TEARDOWN, IDLE_TEARDOWN_MS);
             }
             TIMER_MENU_TEARDOWN if self.menu.as_ref().is_some_and(|m| !m.visible) => {
                 self.menu = None;
@@ -851,9 +845,7 @@ impl App {
                     p.finish_hide();
                 }
                 trim_working_set();
-                unsafe {
-                    SetTimer(Some(self.hwnd), TIMER_TEARDOWN, IDLE_TEARDOWN_MS, None);
-                }
+                win::set_timer(self.hwnd, TIMER_TEARDOWN, IDLE_TEARDOWN_MS);
             }
             // Settings are rarely open: the window goes as soon as it's hidden.
             TIMER_SETTINGS_HIDE if self.settings.as_ref().is_some_and(|s| !s.visible) => {

@@ -36,10 +36,8 @@ impl App {
             return;
         }
         CARD_RECT.set(menu.card_rect());
-        unsafe {
-            let _ = KillTimer(Some(self.hwnd), TIMER_MENU_HIDE);
-            let _ = KillTimer(Some(self.hwnd), TIMER_MENU_TEARDOWN);
-        }
+        win::kill_timer(self.hwnd, TIMER_MENU_HIDE);
+        win::kill_timer(self.hwnd, TIMER_MENU_TEARDOWN);
         SHOWN_AT.set(win::now_ms());
         self.install_dismiss_hooks();
     }
@@ -51,9 +49,7 @@ impl App {
         };
         let _ = menu.begin_hide();
         self.menu_closed_at = win::now_ms();
-        unsafe {
-            SetTimer(Some(self.hwnd), TIMER_MENU_HIDE, HIDE_DONE_MS, None);
-        }
+        win::set_timer(self.hwnd, TIMER_MENU_HIDE, HIDE_DONE_MS);
     }
 
     pub(super) fn menu_hover(&mut self, point: Option<(i32, i32)>) {

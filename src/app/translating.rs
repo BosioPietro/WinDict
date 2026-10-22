@@ -83,14 +83,7 @@ impl App {
         if !t.waiting {
             return;
         }
-        unsafe {
-            SetTimer(
-                Some(self.hwnd),
-                TIMER_TRANSLATING,
-                TRANSLATING_WAIT_MS,
-                None,
-            );
-        }
+        win::set_timer(self.hwnd, TIMER_TRANSLATING, TRANSLATING_WAIT_MS);
         self.request += 1;
         let (id, events) = (self.request, self.events.clone());
         let email = self.config.mymemory_email.clone();
@@ -120,9 +113,7 @@ impl App {
         };
         t.result = Some(translated.result);
         t.waiting = false;
-        unsafe {
-            let _ = KillTimer(Some(self.hwnd), TIMER_TRANSLATING);
-        }
+        win::kill_timer(self.hwnd, TIMER_TRANSLATING);
         let focus = t.focus.take();
         let transition = t.transition();
         self.show_translation(transition, focus);

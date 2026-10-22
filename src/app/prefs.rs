@@ -35,9 +35,7 @@ impl App {
             return;
         }
         self.dismiss();
-        unsafe {
-            let _ = KillTimer(Some(self.hwnd), TIMER_SETTINGS_HIDE);
-        }
+        win::kill_timer(self.hwnd, TIMER_SETTINGS_HIDE);
         let (theme, values) = (self.theme(), self.settings_values());
         let Some(settings) = self.ensure_settings(theme, values.clone()) else {
             return;
@@ -61,9 +59,7 @@ impl App {
         if recording {
             self.register_hotkey();
         }
-        unsafe {
-            SetTimer(Some(self.hwnd), TIMER_SETTINGS_HIDE, HIDE_DONE_MS, None);
-        }
+        win::set_timer(self.hwnd, TIMER_SETTINGS_HIDE, HIDE_DONE_MS);
     }
 
     /// The settings changed from elsewhere (the tray menu, or the file): the

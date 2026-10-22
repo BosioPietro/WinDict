@@ -8,8 +8,8 @@ use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GetClassNameW, GetCursorPos, SW_SHOWNORMAL, WINDOW_EX_STYLE,
-    WINDOW_STYLE,
+    CreateWindowExW, DestroyWindow, GetClassNameW, GetCursorPos, KillTimer, SetTimer,
+    SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE,
 };
 
 /// A window of ours, destroyed when dropped.
@@ -44,6 +44,21 @@ impl Drop for Window {
         unsafe {
             let _ = DestroyWindow(self.0);
         }
+    }
+}
+
+/// Sends `hwnd` WM_TIMER with `id` in `ms`, and every `ms` after until
+/// it's killed. Setting it again starts it over.
+pub fn set_timer(hwnd: HWND, id: usize, ms: u32) {
+    unsafe {
+        SetTimer(Some(hwnd), id, ms, None);
+    }
+}
+
+/// Stops `hwnd`'s timer `id`, if it's running.
+pub fn kill_timer(hwnd: HWND, id: usize) {
+    unsafe {
+        let _ = KillTimer(Some(hwnd), id);
     }
 }
 

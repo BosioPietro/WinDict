@@ -43,7 +43,7 @@ use crate::theme::Theme;
 use crate::ui::{
     self, scale, ts, v2, v3, Animator, Bursts, Frame, Glide, Push, ScrollFade, Text, MARGIN,
 };
-use crate::win::Window;
+use crate::win::{self, Window};
 
 use metrics::*;
 
@@ -813,9 +813,7 @@ impl Settings {
         self.downloads.fill(None);
         self.email = LineEdit::new(&self.values.config.mymemory_email, MAX_EMAIL_CHARS);
         (self.email_shift, self.active) = (0.0, true);
-        unsafe {
-            let _ = KillTimer(Some(self.hwnd), TIMER_SETTLE);
-        }
+        win::kill_timer(self.hwnd, TIMER_SETTLE);
         self.frame.apply_theme(&self.renderer, &theme, s)?;
         self.replace_view(false)?;
         self.fit(work)?;
@@ -1163,9 +1161,7 @@ impl Settings {
 
     /// The card has shrunk with the list: the window does too.
     pub fn settle(&mut self) -> Result<()> {
-        unsafe {
-            let _ = KillTimer(Some(self.hwnd), TIMER_SETTLE);
-        }
+        win::kill_timer(self.hwnd, TIMER_SETTLE);
         let Some(view) = &self.view else {
             return Ok(());
         };
@@ -1400,9 +1396,7 @@ impl Settings {
         // The window is already as tall as the card gets: only what is
         // clickable follows, once a smaller card has finished shrinking.
         self.set_region(old.max(h));
-        unsafe {
-            SetTimer(Some(self.hwnd), TIMER_SETTLE, SETTLE_MS, None);
-        }
+        win::set_timer(self.hwnd, TIMER_SETTLE, SETTLE_MS);
         let scroll = self.scroll.min(self.max_scroll());
         self.scroll_to(scroll)?;
         self.show_scroll(true)

@@ -272,20 +272,16 @@ impl App {
     pub(super) fn on_shown(&mut self, auto_hide: bool) {
         let hwnd = self.hwnd;
         self.on_resized();
-        unsafe {
-            let _ = KillTimer(Some(hwnd), TIMER_HIDE);
-            let _ = KillTimer(Some(hwnd), TIMER_TEARDOWN);
-            let _ = KillTimer(Some(hwnd), TIMER_AUTOHIDE);
-            if auto_hide {
-                SetTimer(Some(hwnd), TIMER_AUTOHIDE, AUTOHIDE_MS, None);
-            }
+        for timer in [TIMER_HIDE, TIMER_TEARDOWN, TIMER_AUTOHIDE] {
+            win::kill_timer(hwnd, timer);
+        }
+        if auto_hide {
+            win::set_timer(hwnd, TIMER_AUTOHIDE, AUTOHIDE_MS);
         }
         SHOWN_AT.set(win::now_ms());
         self.install_dismiss_hooks();
         self.sync_link_keys();
-        unsafe {
-            SetTimer(Some(hwnd), TIMER_COVERED, COVERED_CHECK_MS, None);
-        }
+        win::set_timer(hwnd, TIMER_COVERED, COVERED_CHECK_MS);
     }
 
     /// The card changed size: clicks outside it now are those outside the
@@ -295,9 +291,7 @@ impl App {
             return;
         };
         CARD_RECT.set(popup.card_rect());
-        unsafe {
-            SetTimer(Some(self.hwnd), TIMER_SETTLE, SETTLE_MS, None);
-        }
+        win::set_timer(self.hwnd, TIMER_SETTLE, SETTLE_MS);
     }
 
     /// Safety net: if Start/Search still covers the card, close it.
