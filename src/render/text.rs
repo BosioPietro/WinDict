@@ -1,0 +1,444 @@
+//! Laying out a line, a label or a field of text.
+
+use super::*;
+
+impl Renderer {
+    /// The word and its pronunciation, `indent` DIPs from the left.
+    pub fn layout_header(
+        &self,
+        word: &str,
+        phonetic: Option<&str>,
+        width: f32,
+        indent: f32,
+    ) -> Result<Layout> {
+        let mut items = Vec::new();
+        let room = width - indent;
+        let title = self.text(&capitalize(word), &self.formats.word, room)?;
+        let (title_w, title_h, baseline) = metrics(&title);
+        let mut height = title_h;
+        if let Some(p) = phonetic {
+            let gap = 10.0;
+            let phon = self.text(p, &self.formats.phonetic, room)?;
+            let (phon_w, phon_h, phon_baseline) = metrics(&phon);
+            if title_w + gap + phon_w <= room {
+                // Same line, sharing the baseline.
+                items.push(Item::Text {
+                    layout: phon,
+                    x: indent + title_w + gap,
+                    y: baseline - phon_baseline,
+                    ink: Ink::Secondary,
+                    accents: Vec::new(),
+                });
+            } else {
+                items.push(Item::Text {
+                    layout: phon,
+                    x: indent,
+                    y: title_h + 2.0,
+                    ink: Ink::Secondary,
+                    accents: Vec::new(),
+                });
+                height += 2.0 + phon_h;
+            }
+        }
+        items.insert(
+            0,
+            Item::Text {
+                layout: title,
+                x: indent,
+                y: 0.0,
+                ink: Ink::Primary,
+                accents: Vec::new(),
+            },
+        );
+        Ok(Layout {
+            items,
+            width,
+            height,
+            links: Vec::new(),
+            caret: None,
+        })
+    }
+
+    /// What's typed in the search box, on one line at least `width` wide,
+    /// its width, and where the caret goes when it's `at` UTF-16 units in.
+    pub fn layout_query(&self, text: &str, at: u32, width: f32) -> Result<(Layout, f32, Caret)> {
+        let line = self.text(text, &self.formats.query, width)?;
+        let (w, height, baseline) = metrics(&line);
+        let (mut x, mut y) = (0.0, 0.0);
+        let mut hit = DWRITE_HIT_TEST_METRICS::default();
+        unsafe { line.HitTestTextPosition(at, false, &mut x, &mut y, &mut hit)? };
+        let caret = Caret {
+            x,
+            top: baseline - QUERY_SIZE * 0.86,
+            height: QUERY_SIZE * 1.1,
+        };
+        let mut out = Stack::default();
+        out.text(line, 0.0, Ink::Primary);
+        let layout = Layout {
+            items: out.items,
+            width: width.max(w + 4.0),
+            height,
+            links: Vec::new(),
+            caret: None,
+        };
+        Ok((layout, w, caret))
+    }
+
+    /// What's typed in a settings field, on one line in `ink`, its width,
+    /// and where the caret goes when it's `at` UTF-16 units in.
+    pub fn layout_field(&self, text: &str, ink: Ink, at: u32) -> Result<(Layout, f32, Caret)> {
+        let line = self.text(text, &self.formats.setting, 0.0)?;
+        let (w, height, _) = metrics(&line);
+        let (mut x, mut y) = (0.0, 0.0);
+        let mut hit = DWRITE_HIT_TEST_METRICS::default();
+        unsafe { line.HitTestTextPosition(at, false, &mut x, &mut y, &mut hit)? };
+        let caret = Caret {
+            x,
+            top: hit.top,
+            height: hit.height,
+        };
+        let mut out = Stack::default();
+        out.text(line, 0.0, ink);
+        let layout = Layout {
+            items: out.items,
+            width: w + 4.0,
+            height,
+            links: Vec::new(),
+            caret: None,
+        };
+        Ok((layout, w, caret))
+    }
+
+    /// Where the caret goes in a settings field holding `text` when it's
+    /// clicked `x` DIPs in, in UTF-16 units.
+    pub fn field_position(&self, text: &str, x: f32) -> Result<u32> {
+        let line = self.text(text, &self.formats.setting, 0.0)?;
+        let (mut trailing, mut inside) = (false.into(), false.into());
+        let mut hit = DWRITE_HIT_TEST_METRICS::default();
+        unsafe { line.HitTestPoint(x, 0.0, &mut trailing, &mut inside, &mut hit)? };
+        Ok(hit.textPosition + if trailing.as_bool() { hit.length } else { 0 })
+    }
+
+    /// A suggested word, its first `typed` characters (what was typed) in
+    /// bold, and the word it's a form of after an arrow. `badge`, the code of
+    /// its language, goes before it as its flag, when there are several, or
+    /// on a cap, if it has none.
+    pub fn layout_suggestion(
+        &self,
+        word: &str,
+        typed: usize,
+        base: Option<&str>,
+        badge: Option<&str>,
+        width: f32,
+    ) -> Result<Layout> {
+        let mut out = Stack::default();
+        let mut x = 0.0;
+        if let Some(code) = badge {
+            let line_h = metrics(&self.text("Ag", &self.formats.suggestion, width)?).1;
+            x = self.badge(&mut out, code, 0.0, 0.0, line_h)? + 8.0;
+        }
+        let width = (width - x).max(1.0);
+        let line = self.text(word, &self.formats.suggestion, width)?;
+        // DirectWrite counts UTF-16 code units.
+        let bold = word.chars().take(typed).map(char::len_utf16).sum::<usize>();
+        let range = DWRITE_TEXT_RANGE {
+            startPosition: 0,
+            length: bold as u32,
+        };
+        unsafe {
+            let _ = line.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, range);
+        }
+        let (w, height) = out.text(line, x, Ink::Primary);
+        if let Some(base) = base {
+            let form_of =
+                self.text(&format!("\u{2192} {base}"), &self.formats.suggestion, width)?;
+            out.text(form_of, x + w + 8.0, Ink::Tertiary);
+        }
+        Ok(Layout {
+            items: out.items,
+            width: x + width,
+            height,
+            links: Vec::new(),
+            caret: None,
+        })
+    }
+
+    /// Keys and what they do, on one line: "[Enter] Look up  [Esc] Close".
+    pub fn layout_keys(&self, keys: &[(&str, &str)]) -> Result<Layout> {
+        let (pad_x, pad_y, gap, spacing) = (6.0, 2.0, 6.0, 14.0);
+        let mut out = Stack {
+            y: pad_y,
+            ..Default::default()
+        };
+        let (mut x, mut height) = (0.0, 0.0f32);
+        for (i, (key, action)) in keys.iter().enumerate() {
+            if i > 0 {
+                x += spacing;
+            }
+            let name = self.text(key, &self.formats.footer, 200.0)?;
+            let (w, h, _) = metrics(&name);
+            let (cap_w, cap_h) = (w + 2.0 * pad_x, h + 2.0 * pad_y);
+            out.items.push(Item::Key {
+                x,
+                y: 0.0,
+                width: cap_w,
+                height: cap_h,
+            });
+            out.text(name, x + pad_x, Ink::Secondary);
+            x += cap_w + gap;
+            let action = self.text(action, &self.formats.footer, 200.0)?;
+            let (w, _) = out.text(action, x, Ink::Tertiary);
+            x += w;
+            height = height.max(cap_h);
+        }
+        Ok(Layout {
+            items: out.items,
+            width: x.max(1.0),
+            height,
+            links: Vec::new(),
+            caret: None,
+        })
+    }
+
+    /// One unwrapped line of menu text.
+    pub fn layout_line(&self, text: &str, face: Face, ink: Ink, width: f32) -> Result<Layout> {
+        let format = match face {
+            Face::Menu => &self.formats.menu,
+            Face::Small => &self.formats.footer,
+            Face::Icon => &self.formats.icon,
+            Face::Button => &self.formats.button,
+            Face::LargeButton => &self.formats.large_button,
+            Face::Title => &self.formats.title,
+            Face::Query => &self.formats.query,
+            Face::Heading => &self.formats.heading,
+            Face::Setting => &self.formats.setting,
+            Face::Value => &self.formats.value,
+            Face::Chrome => &self.formats.chrome,
+        };
+        let mut out = Stack::default();
+        let (_, height) = out.text(self.text(text, format, width)?, 0.0, ink);
+        Ok(Layout {
+            items: out.items,
+            width,
+            height,
+            links: Vec::new(),
+            caret: None,
+        })
+    }
+
+    /// Like [`Renderer::layout_line`], `align`ed in `width`.
+    pub fn layout_aligned(
+        &self,
+        text: &str,
+        face: Face,
+        ink: Ink,
+        width: f32,
+        align: Align,
+    ) -> Result<Layout> {
+        let layout = self.layout_line(text, face, ink, width)?;
+        if let Some(Item::Text { layout: line, .. }) = layout.items.first() {
+            let align = match align {
+                Align::Center => DWRITE_TEXT_ALIGNMENT_CENTER,
+                Align::Right => DWRITE_TEXT_ALIGNMENT_TRAILING,
+            };
+            unsafe { line.SetTextAlignment(align)? };
+        }
+        Ok(layout)
+    }
+
+    /// A tooltip's small text, wrapped at `width` but only as wide as its
+    /// longest line.
+    pub fn layout_tip(&self, text: &str, width: f32) -> Result<Layout> {
+        let mut out = Stack::default();
+        let line = self.text(text, &self.formats.footer, width)?;
+        let (w, height) = out.text(line, 0.0, Ink::Primary);
+        Ok(Layout {
+            items: out.items,
+            width: w.ceil().min(width),
+            height,
+            links: Vec::new(),
+            caret: None,
+        })
+    }
+
+    /// A small heading in spaced capitals, like a part of speech.
+    pub fn layout_label(&self, text: &str, ink: Ink, width: f32) -> Result<Layout> {
+        let mut out = Stack::default();
+        let (_, height) = out.text(self.spaced_caps(text, width)?, 0.0, ink);
+        Ok(Layout {
+            items: out.items,
+            width,
+            height,
+            links: Vec::new(),
+            caret: None,
+        })
+    }
+
+    /// The keys of a shortcut, each on its own cap: "[Ctrl] [Alt] [D]".
+    /// The Windows key shows its logo.
+    pub fn layout_caps(&self, keys: &[&str]) -> Result<Layout> {
+        let (pad_x, pad_y, gap) = (8.0, 3.0, 4.0);
+        let mut out = Stack {
+            y: pad_y,
+            ..Default::default()
+        };
+        let (mut x, mut height) = (0.0, 0.0f32);
+        for (i, key) in keys.iter().enumerate() {
+            if i > 0 {
+                x += gap;
+            }
+            let name = self.text(key, &self.formats.menu, 200.0)?;
+            let (w, h, _) = metrics(&name);
+            // At least square, so one-letter keys don't look pinched.
+            let cap_h = h + 2.0 * pad_y;
+            let logo = *key == "Win";
+            let cap_w = if logo {
+                cap_h
+            } else {
+                (w + 2.0 * pad_x).max(cap_h)
+            };
+            out.items.push(Item::Key {
+                x,
+                y: 0.0,
+                width: cap_w,
+                height: cap_h,
+            });
+            if logo {
+                out.items.push(Item::Logo {
+                    x: x + (cap_w - LOGO_SIZE) / 2.0,
+                    y: (cap_h - LOGO_SIZE) / 2.0,
+                    size: LOGO_SIZE,
+                });
+            } else {
+                out.text(name, x + (cap_w - w) / 2.0, Ink::Primary);
+            }
+            x += cap_w;
+            height = height.max(cap_h);
+        }
+        Ok(Layout {
+            items: out.items,
+            width: x.max(1.0),
+            height,
+            links: Vec::new(),
+            caret: None,
+        })
+    }
+
+    /// A link that opens outside WinDict, as in the card's footer.
+    pub fn layout_link(&self, text: &str) -> Result<Layout> {
+        let mut out = Stack::default();
+        let (width, height) = self.external_link(&mut out, text, 0.0, 400.0)?;
+        Ok(Layout {
+            items: out.items,
+            width: width.ceil() + 1.0,
+            height,
+            links: Vec::new(),
+            caret: None,
+        })
+    }
+
+    /// `text` in the accent color, underlined, then the icon for links that
+    /// open the browser. Returns its width and height.
+    pub(super) fn external_link(
+        &self,
+        out: &mut Stack,
+        text: &str,
+        x: f32,
+        width: f32,
+    ) -> Result<(f32, f32)> {
+        let label = self.text(text, &self.formats.footer, width)?;
+        let all = DWRITE_TEXT_RANGE {
+            startPosition: 0,
+            length: u32::MAX,
+        };
+        unsafe {
+            let _ = label.SetUnderline(true, all);
+        }
+        let (w, h) = out.text(label, x, Ink::Accent);
+        let gap = 3.0;
+        let icon = self.text(EXTERNAL_ICON, &self.formats.external, width)?;
+        let (icon_w, icon_h, _) = metrics(&icon);
+        out.items.push(Item::Text {
+            layout: icon,
+            x: x + w + gap,
+            y: out.y + (h - icon_h) / 2.0,
+            ink: Ink::Accent,
+            accents: Vec::new(),
+        });
+        Ok((w + gap + icon_w, h))
+    }
+
+    /// `text` in the small spaced capitals of a part of speech.
+    pub(super) fn spaced_caps(&self, text: &str, width: f32) -> Result<IDWriteTextLayout> {
+        let caps = self.text(&text.to_uppercase(), &self.formats.part_of_speech, width)?;
+        if let Ok(caps1) = caps.cast::<IDWriteTextLayout1>() {
+            let range = DWRITE_TEXT_RANGE {
+                startPosition: 0,
+                length: u32::MAX,
+            };
+            unsafe {
+                let _ = caps1.SetCharacterSpacing(0.0, 0.9, 0.0, range);
+            }
+        }
+        Ok(caps)
+    }
+
+    /// `language`'s flag, if it has one, at `x`, centred on a line `line_h`
+    /// tall at `y`. Returns its width.
+    pub(super) fn flag(
+        &self,
+        out: &mut Stack,
+        language: &str,
+        x: f32,
+        y: f32,
+        line_h: f32,
+    ) -> Option<f32> {
+        let flag = Flag::of(language)?;
+        // 3:2, the height of a capital.
+        let (flag_w, flag_h) = (18.0, 12.0);
+        out.items.push(Item::Flag {
+            flag,
+            x,
+            y: y + ((line_h - flag_h) / 2.0).round(),
+            width: flag_w,
+            height: flag_h,
+        });
+        Some(flag_w)
+    }
+
+    /// `language`'s flag, or its code on a cap when it has none, like
+    /// [`Renderer::flag`]. Returns its width.
+    pub(super) fn badge(
+        &self,
+        out: &mut Stack,
+        language: &str,
+        x: f32,
+        y: f32,
+        line_h: f32,
+    ) -> Result<f32> {
+        if let Some(w) = self.flag(out, language, x, y, line_h) {
+            return Ok(w);
+        }
+        // Wide enough for any two letters, so the words line up.
+        let (pad_y, min_w) = (1.0, BADGE_W);
+        let code = language.split('-').next().unwrap_or(language);
+        let name = self.text(&code.to_uppercase(), &self.formats.footer, 100.0)?;
+        let (w, h, _) = metrics(&name);
+        let (cap_w, cap_h) = (min_w.max(w + 8.0), h + 2.0 * pad_y);
+        let cap_y = y + ((line_h - cap_h) / 2.0).round();
+        out.items.push(Item::Key {
+            x,
+            y: cap_y,
+            width: cap_w,
+            height: cap_h,
+        });
+        out.items.push(Item::Text {
+            layout: name,
+            x: x + ((cap_w - w) / 2.0).round(),
+            y: cap_y + pad_y,
+            ink: Ink::Secondary,
+            accents: Vec::new(),
+        });
+        Ok(cap_w)
+    }
+}
