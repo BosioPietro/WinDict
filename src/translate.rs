@@ -276,48 +276,14 @@ fn google_web(word: &str, from: &str, to: &str) -> Result<Translation, String> {
 /// dictionary, as [`parse_google`] does gtx's.
 fn parse_google_web(body: &[u8]) -> Option<Translation> {
     let json: Value = serde_json::from_slice(body).ok()?;
-    let text = json.get("translation")?.as_str()?.trim().to_string();
-    if text.is_empty() {
-        return None;
-    }
-    let groups = json
-        .get("bilingualDictionary")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| {
-            let part_of_speech = entry.get("pos")?.as_str()?.to_lowercase();
-            let terms: Vec<Term> = entry
-                .get("entry")?
-                .as_array()?
-                .iter()
-                .filter_map(|term| {
-                    let text = term.get("word")?.as_str()?.to_string();
-                    let back = term
-                        .get("reverseTranslation")
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_str)
-                        .take(MAX_BACK)
-                        .map(str::to_string)
-                        .collect();
-                    Some(Term { text, back })
-                })
-                .take(MAX_TERMS)
-                .collect();
-            (!terms.is_empty()).then_some(Group {
-                part_of_speech,
-                terms,
-            })
-        })
-        .collect();
-    Some(Translation {
-        text,
-        context: None,
-        groups,
-        source: GOOGLE,
-    })
+    let text = json.get("translation")?.as_str()?;
+    let fields = DictionaryFields {
+        part_of_speech: "pos",
+        terms: "entry",
+        text: "word",
+        back: "reverseTranslation",
+    };
+    google_translation(text, json.get("bilingualDictionary"), fields)
 }
 
 /// Reads gtx's nested arrays: the translated sentences first, then the
@@ -331,25 +297,51 @@ fn parse_google(body: &[u8]) -> Option<Translation> {
         .iter()
         .filter_map(|sentence| sentence.get(0)?.as_str())
         .collect();
+    let fields = DictionaryFields {
+        part_of_speech: 0,
+        terms: 2,
+        text: 0,
+        back: 1,
+    };
+    google_translation(&text, json.get(1), fields)
+}
+
+/// Where Google's two endpoints keep the same things in a dictionary entry:
+/// by name in one, by position in the other.
+struct DictionaryFields<I> {
+    /// In an entry: its part of speech, and its translations.
+    part_of_speech: I,
+    terms: I,
+    /// In a translation: it, and what it means back in the word's language.
+    text: I,
+    back: I,
+}
+
+/// `text`, with the dictionary's entries that have translations, unless
+/// there's nothing translated.
+fn google_translation<I: serde_json::value::Index + Copy>(
+    text: &str,
+    dictionary: Option<&Value>,
+    fields: DictionaryFields<I>,
+) -> Option<Translation> {
     let text = text.trim().to_string();
     if text.is_empty() {
         return None;
     }
-    let groups = json
-        .get(1)
+    let groups = dictionary
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|entry| {
-            let part_of_speech = entry.get(0)?.as_str()?.to_lowercase();
+            let part_of_speech = entry.get(fields.part_of_speech)?.as_str()?.to_lowercase();
             let terms: Vec<Term> = entry
-                .get(2)?
+                .get(fields.terms)?
                 .as_array()?
                 .iter()
                 .filter_map(|term| {
-                    let text = term.get(0)?.as_str()?.to_string();
+                    let text = term.get(fields.text)?.as_str()?.to_string();
                     let back = term
-                        .get(1)
+                        .get(fields.back)
                         .and_then(Value::as_array)
                         .into_iter()
                         .flatten()
