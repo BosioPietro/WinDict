@@ -17,6 +17,7 @@
 //!   the colors of `theme`.
 //! - `config`, `hotkey`, `autostart`, `tray`: settings and their storage, the
 //!   shortcut, "Start with Windows", and the notification-area icon.
+//! - `update`: looking for a new version, and installing it.
 //! - `i18n`: every string the user reads, so a language is a table, not a
 //!   change across the code.
 //! - `win`: safe wrappers for the Win32 calls shared across modules.
@@ -42,6 +43,7 @@ mod theme;
 mod translate;
 mod tray;
 mod ui;
+mod update;
 mod wikizionario;
 mod win;
 
@@ -56,6 +58,11 @@ use windows::UI::Composition::Compositor;
 
 /// Runs WinDict until it's quit from the tray, unless it's running already.
 pub fn run() -> windows::core::Result<()> {
+    // Started by the version this one replaces: it has to be gone first.
+    let replacing = update::Replacing::from_args();
+    if let Some(replacing) = &replacing {
+        replacing.wait();
+    }
     unsafe {
         // One instance per user session.
         let _instance = CreateMutexW(None, true, w!("Local\\WinDict.Instance"))?;
@@ -71,6 +78,6 @@ pub fn run() -> windows::core::Result<()> {
             apartmentType: DQTAT_COM_NONE,
         })?;
         let compositor = Compositor::new()?;
-        app::run(compositor)
+        app::run(compositor, replacing)
     }
 }

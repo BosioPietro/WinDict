@@ -78,6 +78,7 @@ pub enum Change {
     Selection(SelectionMode),
     Animations(bool),
     Autostart(bool),
+    CheckUpdates(bool),
     /// The languages translated from and into when the card can't tell,
     /// as codes.
     TranslateLanguages(LangCode, LangCode),
@@ -92,13 +93,15 @@ enum Switch {
     Online,
     Examples,
     Animations,
+    Updates,
 }
 
-const SWITCHES: [Switch; 4] = [
+const SWITCHES: [Switch; 5] = [
     Switch::Autostart,
     Switch::Online,
     Switch::Examples,
     Switch::Animations,
+    Switch::Updates,
 ];
 
 /// A number stepped through with − and + buttons.
@@ -367,6 +370,12 @@ const SECTIONS: &[(Label, &[Row])] = &[
                 |s| s.start_with_windows,
                 |s| s.start_with_windows_detail,
                 Control::Switch(Switch::Autostart),
+            ),
+            row(
+                "\u{E895}",
+                |s| s.check_updates,
+                |s| s.check_updates_detail,
+                Control::Switch(Switch::Updates),
             ),
             row(
                 "\u{F2B7}",
@@ -1336,6 +1345,10 @@ impl Settings {
                     Switch::Animations => {
                         v.config.animations = Some(on);
                         Change::Animations(on)
+                    }
+                    Switch::Updates => {
+                        v.config.check_updates = on;
+                        Change::CheckUpdates(on)
                     }
                 };
                 self.show_switch(sw, true)?;

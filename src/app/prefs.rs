@@ -154,6 +154,11 @@ impl App {
                 self.sync_link_keys();
             }
             Change::Selection(mode) => self.config.selection = mode,
+            Change::CheckUpdates(on) => {
+                self.config.check_updates = on;
+                self.schedule_update_check(updating::SOON_MS);
+                return self.save_setting(|_| {});
+            }
             Change::Animations(on) => {
                 self.config.animations = Some(on);
                 ui::set_motion(on);

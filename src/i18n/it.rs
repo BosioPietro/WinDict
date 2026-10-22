@@ -13,6 +13,9 @@ pub const IT: Strings = Strings {
     shortcut_unavailable: "Scorciatoia non disponibile",
     shortcut_unavailable_detail: "{hotkey} è già usata da un\u{2019}altra app.",
     shortcut_invalid: "Scorciatoia non valida",
+    updated: "WinDict aggiornato",
+    updated_detail: "Questa è la versione {version}.",
+    update_failed: "Impossibile aggiornare WinDict",
     draw_window_failed: "WinDict non è riuscito a disegnare la finestra",
     draw_menu_failed: "WinDict non è riuscito a disegnare il menu",
     draw_settings_failed: "WinDict non è riuscito a disegnare le sue impostazioni",
@@ -72,6 +75,9 @@ pub const IT: Strings = Strings {
     no_languages_match: "Nessuna lingua corrisponde",
 
     // The tray menu.
+    menu_update: "Aggiorna l\u{2019}app",
+    menu_updating: "Aggiornamento\u{2026}",
+    update_available: "Aggiornamento disponibile: {version}",
     menu_reload: "Ricarica le impostazioni",
     menu_quit: "Esci",
 
@@ -101,6 +107,8 @@ pub const IT: Strings = Strings {
     shortcut: "Scorciatoia",
     start_with_windows: "Avvia con Windows",
     start_with_windows_detail: "Avvia WinDict insieme al PC",
+    check_updates: "Cerca aggiornamenti",
+    check_updates_detail: "Una volta al giorno; l\u{2019}icona mostra un pallino se ce n\u{2019}è uno",
     card: "Scheda",
     theme: "Tema",
     theme_detail: "Colori dell\u{2019}applicazione",
@@ -156,6 +164,8 @@ pub const IT: Strings = Strings {
     download_damaged: "Il download era corrotto. Riprova.",
     download_status: "Download non riuscito ({status}).",
     save_failed: "Impossibile salvarlo: {reason}",
+    update_task_missing: "Esegui di nuovo install-uiaccess.ps1 da una PowerShell \
+        come amministratore per aggiornare dal menu.",
 
     // `off` stays as it is: "Off" reads the same, and fits its place.
     ..EN

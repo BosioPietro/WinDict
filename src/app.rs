@@ -2,7 +2,8 @@
 //!
 //! This file holds the state, the hotkey, the timers and the dismissal of the
 //! card; the rest of `impl App` is split by flow into the submodules:
-//! `search`, `lookup`, `translating`, `links`, `tray_menu` and `prefs`.
+//! `search`, `lookup`, `translating`, `links`, `tray_menu`, `prefs` and
+//! `updating`.
 //! `procs` has the window procedures, `edit` and `picking` the pure text and
 //! list logic.
 
@@ -16,6 +17,7 @@ mod recent;
 mod search;
 mod translating;
 mod tray_menu;
+mod updating;
 
 use std::cell::{Cell, RefCell};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -49,6 +51,7 @@ use crate::theme::Theme;
 use crate::translate::{self, Translation};
 use crate::tray::{self, Tray};
 use crate::ui;
+use crate::update::{self, Release, Replacing};
 use crate::win::{self, Window};
 use edit::{Input, LineEdit, Motion};
 use picking::Picking;
@@ -160,6 +163,7 @@ const TIMER_MENU_HIDE: usize = 6;
 const TIMER_MENU_TEARDOWN: usize = 7;
 const TIMER_SETTINGS_HIDE: usize = 8;
 const TIMER_TRANSLATING: usize = 9;
+const TIMER_UPDATE_CHECK: usize = 10;
 
 /// Free the GPU resources after this long without a lookup.
 const IDLE_TEARDOWN_MS: u32 = 3 * 60 * 1000;
@@ -331,6 +335,10 @@ enum Event {
     Installing(&'static str, u32),
     Installed(&'static str, Result<(), String>),
     Translated(Translated),
+    /// The latest release, if it's newer, or why it couldn't be looked up.
+    UpdateChecked(Result<Option<Release>, String>),
+    /// The update was started, or why it couldn't be.
+    Updated(Result<(), String>),
 }
 
 /// Sends [`Event`]s to the UI thread. They go through a channel, and an
@@ -427,6 +435,10 @@ pub struct App {
     return_focus: Option<HWND>,
     /// The dictionaries being downloaded, one at most for each language.
     installing: Vec<Installing>,
+    /// A newer version, once one has been found.
+    update: Option<Release>,
+    /// Whether it's being installed.
+    updating: bool,
     hotkey_ok: bool,
     mouse_hook: Option<win::Hook>,
     focus_hook: Option<win::EventHook>,
@@ -434,7 +446,7 @@ pub struct App {
     keyboard_hook: Option<win::Hook>,
 }
 
-pub fn run(compositor: Compositor) -> windows::core::Result<()> {
+pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::core::Result<()> {
     let (config, first_run, config_error) = match config::load() {
         Ok((config, first_run)) => (config, first_run, None),
         Err(e) => (Config::default(), false, Some(e)),
@@ -505,6 +517,8 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             search: None,
             return_focus: None,
             installing: Vec::new(),
+            update: None,
+            updating: false,
             hotkey_ok: false,
             mouse_hook: None,
             focus_hook: None,
@@ -524,10 +538,23 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
         for download in languages.iter().filter_map(|l| dicts::find(l)) {
             app.install(download, true);
         }
+        app.schedule_update_check(updating::FIRST_CHECK_MS);
+        let updated = replacing.is_some();
+        if let Some(replacing) = replacing {
+            std::thread::spawn(move || replacing.remove_old());
+        }
         if let Some(e) = config_error {
             app.tray.notify(tr().settings_not_loaded, &e);
         } else if let Some(e) = dictionary_error {
             app.tray.notify(tr().dictionary_not_loaded, &e);
+        } else if updated {
+            app.tray.notify(
+                tr().updated,
+                &fill(
+                    tr().updated_detail,
+                    &[("version", &env!("CARGO_PKG_VERSION"))],
+                ),
+            );
         } else if first_run && app.hotkey_ok {
             app.tray.notify(
                 tr().running,
@@ -543,7 +570,7 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
         }
 
         APP.with(|a| {
-            if let Some(app) = a.borrow_mut().take() {
+            if let Some(mut app) = a.borrow_mut().take() {
                 app.tray.remove();
             }
         });
@@ -644,8 +671,7 @@ impl App {
         win::register_hotkey(self.hwnd, HOTKEY_LOOKUP, modifiers, hk.vk)
             .map_err(|_| Unbound::Taken)?;
         self.hotkey_ok = true;
-        self.tray
-            .set_tip(&format!("WinDict - {}", self.config.hotkey));
+        self.sync_tip();
         Ok(())
     }
 
@@ -747,6 +773,8 @@ impl App {
                 Event::Installing(language, percent) => self.on_installing(language, percent),
                 Event::Installed(language, result) => self.on_installed(language, result),
                 Event::Translated(translated) => self.on_translated(translated),
+                Event::UpdateChecked(result) => self.on_update_checked(result),
+                Event::Updated(result) => self.on_updated(result),
             }
         }
     }
@@ -933,6 +961,7 @@ impl App {
             TIMER_AUTOHIDE => self.dismiss(),
             TIMER_COVERED => self.uncover(),
             TIMER_TRANSLATING => self.stop_waiting(),
+            TIMER_UPDATE_CHECK => self.check_for_update(),
             TIMER_SETTLE => {
                 if let Some(p) = self.popup.as_mut() {
                     p.settle();
@@ -1014,6 +1043,7 @@ impl App {
 
     fn on_command(&mut self, command: Command) {
         match command {
+            Command::Update => self.start_update(),
             Command::Autostart => {
                 autostart::set(!autostart::is_enabled());
                 self.refresh_settings();
@@ -1028,6 +1058,7 @@ impl App {
                 i18n::set(self.config.ui_language);
                 ui::set_motion(self.config.animated());
                 self.register_hotkey();
+                self.schedule_update_check(updating::FIRST_CHECK_MS);
                 self.refresh_settings();
                 if let Err(e) = offline::set_languages(&self.config.languages) {
                     self.tray.notify(tr().dictionary_not_loaded, &e);

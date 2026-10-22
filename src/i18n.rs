@@ -56,6 +56,10 @@ strings! {
     /// `{hotkey}`.
     shortcut_unavailable_detail: "{hotkey} is already used by another app. Choose another one in Settings.",
     shortcut_invalid: "Invalid shortcut",
+    updated: "WinDict updated",
+    /// `{version}`.
+    updated_detail: "This is version {version}.",
+    update_failed: "WinDict couldn\u{2019}t update",
     draw_window_failed: "WinDict couldn\u{2019}t draw its window",
     draw_menu_failed: "WinDict couldn\u{2019}t draw its menu",
     draw_settings_failed: "WinDict couldn\u{2019}t draw its settings",
@@ -128,6 +132,10 @@ strings! {
     no_languages_match: "No languages match",
 
     // The tray menu.
+    menu_update: "Update app",
+    menu_updating: "Updating\u{2026}",
+    /// Under the shortcut, over the tray icon. `{version}`.
+    update_available: "Update available: {version}",
     menu_reload: "Reload settings",
     menu_quit: "Quit",
 
@@ -159,6 +167,8 @@ strings! {
     shortcut: "Shortcut",
     start_with_windows: "Start with Windows",
     start_with_windows_detail: "Runs WinDict when you sign in",
+    check_updates: "Check for updates",
+    check_updates_detail: "Once a day; the tray icon shows a dot when there\u{2019}s one",
     card: "Card",
     theme: "Theme",
     theme_detail: "Card and menu colors",
@@ -223,6 +233,8 @@ strings! {
     download_damaged: "The download was damaged. Try again.",
     /// `{status}`: an HTTP status.
     download_status: "The download failed ({status}).",
+    update_task_missing: "Run install-uiaccess.ps1 once more, from an administrator \
+        PowerShell, to update from the menu.",
     /// `{reason}`: why the file couldn't be written.
     save_failed: "Couldn\u{2019}t save it: {reason}",
 }

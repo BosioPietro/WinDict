@@ -26,6 +26,10 @@ const INSET: f32 = 3.0;
 const TEXT_X: f32 = 14.0;
 /// Distance from the card's right edge to the left of the check mark.
 const CHECK_FROM_RIGHT: f32 = 26.0;
+/// The dot by "Update app", like the one on the tray icon, centred where
+/// the check mark would be.
+const DOT: f32 = 7.0;
+const DOT_FROM_RIGHT: f32 = 18.0;
 const HIGHLIGHT_RADIUS: f32 = 5.0;
 const ANCHOR_GAP: f32 = 8.0;
 const SCREEN_GAP: f32 = 8.0;
@@ -43,6 +47,7 @@ const HIGHLIGHT_MOVE_MS: u64 = 150;
 /// What a row of the menu does.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Command {
+    Update,
     Autostart,
     Settings,
     Reload,
@@ -53,7 +58,12 @@ pub enum Command {
 enum Kind {
     Title,
     Separator,
-    Command { id: Command, checked: bool },
+    Command {
+        id: Command,
+        checked: bool,
+        /// A dot of the accent color, as on the tray icon.
+        dot: bool,
+    },
 }
 
 struct Entry {
@@ -72,7 +82,11 @@ impl Entry {
 
     fn command(id: Command, label: &str, checked: bool) -> Entry {
         Entry {
-            kind: Kind::Command { id, checked },
+            kind: Kind::Command {
+                id,
+                checked,
+                dot: false,
+            },
             label: label.to_owned(),
         }
     }
@@ -85,19 +99,35 @@ impl Entry {
     }
 }
 
-fn entries(hotkey: &str, autostart: bool) -> Vec<Entry> {
-    vec![
+/// The rows, with "Update app" (as `update` labels it) at the top while
+/// there's one.
+fn entries(hotkey: &str, autostart: bool, update: Option<&str>) -> Vec<Entry> {
+    let mut entries = vec![
         Entry {
             kind: Kind::Title,
             label: format!("WinDict  -  {hotkey}"),
         },
         Entry::separator(),
+    ];
+    if let Some(label) = update {
+        entries.push(Entry {
+            kind: Kind::Command {
+                id: Command::Update,
+                checked: false,
+                dot: true,
+            },
+            label: label.to_owned(),
+        });
+        entries.push(Entry::separator());
+    }
+    entries.extend([
         Entry::command(Command::Autostart, tr().start_with_windows, autostart),
         Entry::command(Command::Settings, tr().settings, false),
         Entry::command(Command::Reload, tr().menu_reload, false),
         Entry::separator(),
         Entry::command(Command::Quit, tr().menu_quit, false),
-    ]
+    ]);
+    entries
 }
 
 /// Where a row sits inside the card, in physical pixels.
@@ -203,20 +233,22 @@ impl Menu {
     // -----------------------------------------------------------------------
     // Public API
 
-    /// Opens the menu next to the pointer at `cursor` (screen pixels).
+    /// Opens the menu next to the pointer at `cursor` (screen pixels), with
+    /// an "Update app" row labelled `update` if there's one.
     pub fn show(
         &mut self,
         cursor: POINT,
         theme: Theme,
         hotkey: &str,
         autostart: bool,
+        update: Option<&str>,
     ) -> Result<()> {
         let (work, s) = ui::monitor_at(cursor);
         self.theme = theme;
         self.scale = s;
         let px = |dip: f32| (dip * s).round();
 
-        let entries = entries(hotkey, autostart);
+        let entries = entries(hotkey, autostart, update);
         self.rows.clear();
         let mut y = px(PAD_Y);
         for entry in &entries {
@@ -468,7 +500,7 @@ impl Menu {
                     row,
                 )?);
             }
-            Kind::Command { checked, .. } => {
+            Kind::Command { checked, dot, .. } => {
                 let width = WIDTH - TEXT_X - CHECK_FROM_RIGHT;
                 visuals.push(self.text(
                     &entry.label,
@@ -488,9 +520,32 @@ impl Menu {
                         row,
                     )?);
                 }
+                if dot {
+                    visuals.push(self.dot(row)?);
+                }
             }
         }
         Ok(visuals)
+    }
+
+    /// A dot of the accent color, vertically centred in `row`.
+    fn dot(&self, row: &Row) -> Result<SpriteVisual> {
+        let c = &self.anim.compositor;
+        let s = self.scale;
+        let size = (DOT * s).round();
+        let dot = c.CreateSpriteVisual()?;
+        dot.SetBrush(&c.CreateColorBrushWithColor(self.theme.accent)?)?;
+        let circle = c.CreateEllipseGeometry()?;
+        circle.SetCenter(v2(size / 2.0, size / 2.0))?;
+        circle.SetRadius(v2(size / 2.0, size / 2.0))?;
+        dot.SetClip(&c.CreateGeometricClipWithGeometry(&circle)?)?;
+        dot.SetSize(v2(size, size))?;
+        dot.SetOffset(v3(
+            ((WIDTH - DOT_FROM_RIGHT) * s - size / 2.0).round(),
+            row.top + ((row.height - size) / 2.0).round(),
+        ))?;
+        self.content.Children()?.InsertAtTop(&dot)?;
+        Ok(dot)
     }
 
     /// A line of text, vertically centred in `row`, `x` DIPs from the card's left.

@@ -1,6 +1,6 @@
 # WinDict
 
-A Windows tray app for looking up words. Select a word in any app and press
+A Windows tray app for looking up and translating words. Select a word in any app and press
 **Ctrl+Alt+D**: its definition opens in a card next to the selection. Esc or a
 click elsewhere closes it.
 

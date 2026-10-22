@@ -28,10 +28,16 @@ impl App {
         }
         self.dismiss();
         let (theme, hotkey) = (self.theme(), self.config.hotkey.clone());
+        let update = self.update.is_some().then_some(if self.updating {
+            tr().menu_updating
+        } else {
+            tr().menu_update
+        });
         let Some(menu) = self.ensure_menu() else {
             return;
         };
-        if let Err(e) = menu.show(win::cursor_pos(), theme, &hotkey, autostart::is_enabled()) {
+        let autostart = autostart::is_enabled();
+        if let Err(e) = menu.show(win::cursor_pos(), theme, &hotkey, autostart, update) {
             self.tray.notify(tr().draw_menu_failed, &e.message());
             return;
         }

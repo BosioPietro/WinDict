@@ -44,6 +44,7 @@ impl Settings {
             Switch::Online => self.values.config.online_lookup,
             Switch::Examples => self.values.config.show_examples,
             Switch::Animations => self.values.config.animated(),
+            Switch::Updates => self.values.config.check_updates,
         }
     }
 

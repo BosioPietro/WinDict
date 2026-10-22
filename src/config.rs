@@ -68,6 +68,8 @@ pub struct Config {
     /// Move things into place instead of jumping them there; unset, as
     /// Windows has it (Accessibility > Visual effects > Animation effects).
     pub animations: Option<bool>,
+    /// Look for a new version of WinDict once a day.
+    pub check_updates: bool,
 }
 
 impl Config {
@@ -94,6 +96,7 @@ impl Default for Config {
             translate_to: "it".into(),
             mymemory_email: String::new(),
             animations: None,
+            check_updates: true,
         }
     }
 }
@@ -206,6 +209,7 @@ mod tests {
         // Missing fields keep their defaults.
         assert_eq!(config.max_synonyms, 6);
         assert!(config.online_lookup);
+        assert!(config.check_updates);
         assert!(config.show_examples);
         assert_eq!(config.selection, SelectionMode::Automatic);
         assert_eq!(config.languages, ["en"]);

@@ -2,8 +2,11 @@
 //! chosen. They're kept in the `dictionaries` release on GitHub, named after
 //! what's in them, and only the very files listed here are taken: a new
 //! version of one comes with a new version of the app.
+//!
+//! [`save`], which fetches them, also fetches updates (`update`).
 
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use windows::Win32::Security::Cryptography::{BCryptHash, BCRYPT_SHA256_ALG_HANDLE};
 
@@ -30,7 +33,8 @@ pub const DOWNLOADS: &[Download] = &[Download {
 }];
 
 const HOST: &str = "github.com";
-const RELEASE: &str = "/BosioPietro/WinDict/releases/download/dictionaries/";
+const RELEASES: &str = "/BosioPietro/WinDict/releases/download/";
+const DICTIONARIES: &str = "dictionaries";
 
 pub fn find(language: &str) -> Option<&'static Download> {
     DOWNLOADS.iter().find(|d| d.language == language)
@@ -68,36 +72,57 @@ pub fn install(download: &Download, mut progress: impl FnMut(u32)) -> Result<(),
         return Ok(());
     }
     std::fs::create_dir_all(&dir).map_err(unsaved)?;
+    let file = File {
+        release: DICTIONARIES,
+        name: download.file,
+        size: download.size,
+        sha256: download.sha256,
+    };
+    save(&file, &path, &mut progress)
+}
+
+/// A file attached to a release on GitHub, and what it must be.
+pub struct File<'a> {
+    /// The release's tag.
+    pub release: &'a str,
+    pub name: &'a str,
+    pub size: u64,
+    /// In lowercase hex.
+    pub sha256: &'a str,
+}
+
+/// Downloads `file` to `path`, telling `progress` how far it's got, in
+/// percent, if it's what it should be. Errors are short, to fit under a
+/// setting.
+pub fn save(file: &File, path: &Path, progress: &mut impl FnMut(u32)) -> Result<(), String> {
     // Fetched beside it, and moved in place once it's all there and right:
     // the one in use, if any, keeps working until then.
-    let part = path.with_extension("wdict.part");
-    let result = fetch(download, &part, &mut progress)
-        .and_then(|()| std::fs::rename(&part, &path).map_err(unsaved));
+    let mut part = path.as_os_str().to_owned();
+    part.push(".part");
+    let part = PathBuf::from(part);
+    let result =
+        fetch(file, &part, progress).and_then(|()| std::fs::rename(&part, path).map_err(unsaved));
     if result.is_err() {
         let _ = std::fs::remove_file(&part);
     }
     result
 }
 
-fn fetch(
-    download: &Download,
-    part: &std::path::Path,
-    progress: &mut impl FnMut(u32),
-) -> Result<(), String> {
-    let mut file = std::fs::File::create(part).map_err(unsaved)?;
-    let mut bytes = Vec::with_capacity(download.size as usize);
+fn fetch(file: &File, part: &Path, progress: &mut impl FnMut(u32)) -> Result<(), String> {
+    let mut out = std::fs::File::create(part).map_err(unsaved)?;
+    let mut bytes = Vec::with_capacity(file.size as usize);
     let mut shown = 0;
-    let path = format!("{RELEASE}{}", download.file);
+    let path = format!("{RELEASES}{}/{}", file.release, file.name);
     // More than it said it was: what to say is picked below, once the fetch
     // has returned, so the sink needs no words.
     let mut oversized = false;
     let status = http::fetch(HOST, &path, |chunk| {
         bytes.extend_from_slice(chunk);
-        if bytes.len() as u64 > download.size {
+        if bytes.len() as u64 > file.size {
             oversized = true;
             return Err(String::new());
         }
-        let percent = (bytes.len() as u64 * 100 / download.size.max(1)) as u32;
+        let percent = (bytes.len() as u64 * 100 / file.size.max(1)) as u32;
         if percent != shown {
             shown = percent;
             progress(percent);
@@ -108,11 +133,11 @@ fn fetch(
     if status != 200 {
         return Err(fill(tr().download_status, &[("status", &status)]));
     }
-    if !download.matches(&bytes) {
+    if !file.matches(&bytes) {
         return Err(damaged());
     }
-    file.write_all(&bytes)
-        .and_then(|()| file.sync_all())
+    out.write_all(&bytes)
+        .and_then(|()| out.sync_all())
         .map_err(unsaved)
 }
 
@@ -130,8 +155,18 @@ fn unsaved(e: std::io::Error) -> String {
 
 impl Download {
     fn matches(&self, bytes: &[u8]) -> bool {
-        bytes.len() as u64 == self.size && sha256(bytes).is_some_and(|h| hex(&h) == self.sha256)
+        matches(bytes, self.size, self.sha256)
     }
+}
+
+impl File<'_> {
+    fn matches(&self, bytes: &[u8]) -> bool {
+        matches(bytes, self.size, self.sha256)
+    }
+}
+
+fn matches(bytes: &[u8], size: u64, sha256_hex: &str) -> bool {
+    bytes.len() as u64 == size && sha256(bytes).is_some_and(|h| hex(&h) == sha256_hex)
 }
 
 fn sha256(bytes: &[u8]) -> Option<[u8; 32]> {

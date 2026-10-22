@@ -16,6 +16,11 @@
     deletes the certificate's private key, so nothing else can ever be signed
     with it. Re-run it to update; run it with -Uninstall to remove everything.
 
+    It also keeps a copy of install-uiaccess.ps1 beside WinDict, and
+    registers a scheduled task, "WinDict Update", that runs it elevated.
+    "Update app" in WinDict's tray menu starts the task, so updating doesn't
+    ask for permission.
+
     Run from an elevated PowerShell:
         powershell -ExecutionPolicy Bypass -File scripts\install-uiaccess-local.ps1
 
@@ -24,12 +29,18 @@
     WinDict-<version>-uiaccess.exe from a release). By default the script uses
     such a file next to itself, or builds one from this repository.
 
+.PARAMETER Updater
+    The install-uiaccess.ps1 for the update task to run. By default, the one
+    next to this script.
+
 .PARAMETER Uninstall
-    Removes the installed copy, its autostart entry and its certificates.
+    Removes the installed copy, its autostart entry, its certificates and its
+    update task.
 #>
 #Requires -RunAsAdministrator
 param(
     [string]$Exe,
+    [string]$Updater,
     [switch]$Uninstall
 )
 
@@ -38,6 +49,7 @@ $InstallDir = Join-Path $env:ProgramFiles 'WinDict'
 $Target = Join-Path $InstallDir 'WinDict.exe'
 $Subject = 'CN=WinDict Local Code Signing'
 $RunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+$Task = 'WinDict Update'
 
 function Remove-WinDictCertificates {
     Get-ChildItem Cert:\LocalMachine\Root, Cert:\LocalMachine\TrustedPublisher |
@@ -54,6 +66,7 @@ if ($Uninstall) {
     if ($run -and $run.WinDict -like "*$Target*") {
         Remove-ItemProperty $RunKey -Name WinDict
     }
+    Unregister-ScheduledTask -TaskName $Task -Confirm:$false -ErrorAction SilentlyContinue
     Remove-Item $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
     Remove-WinDictCertificates
     Write-Host 'WinDict (UI access) removed.'
@@ -88,7 +101,9 @@ Remove-WinDictCertificates
 $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $Subject `
     -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy NonExportable `
     -NotAfter (Get-Date).AddYears(20)
-$cer = Join-Path $env:TEMP "windict-$($cert.Thumbprint).cer"
+# Exported where only administrators can write, so it can't be swapped
+# before it's trusted.
+$cer = Join-Path $InstallDir "windict-$($cert.Thumbprint).cer"
 try {
     Export-Certificate -Cert $cert -FilePath $cer | Out-Null
     Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
@@ -101,6 +116,27 @@ try {
 }
 if ($signature.Status -ne 'Valid') {
     throw "Signing failed: $($signature.StatusMessage)"
+}
+
+# The update task runs the installed install-uiaccess.ps1 elevated, as this
+# user, with no window: a task with the highest privileges starts without
+# asking, and only administrators can change what it runs.
+if (-not $Updater) { $Updater = Join-Path $PSScriptRoot 'install-uiaccess.ps1' }
+if (Test-Path $Updater) {
+    $script = Join-Path $InstallDir 'install-uiaccess.ps1'
+    if ((Resolve-Path $Updater).Path -ne $script) { Copy-Item $Updater $script -Force }
+    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\conhost.exe') `
+        -Argument "--headless `"$powershell`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script`" -Update"
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
+    Register-ScheduledTask -TaskName $Task -Action $action -Principal $principal -Settings $settings `
+        -Description 'Installs the latest WinDict when "Update app" is chosen in its tray menu.' `
+        -Force | Out-Null
+} else {
+    Write-Warning "install-uiaccess.ps1 isn't next to this script: WinDict won't be able to update itself."
 }
 
 # Point an existing "Start with Windows" entry at the installed copy.
