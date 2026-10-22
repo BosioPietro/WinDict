@@ -7,10 +7,8 @@ mod focus;
 mod scrolling;
 mod search;
 
-use windows::core::{Interface, Result, HSTRING, PWSTR};
+use windows::core::{Interface, Result, HSTRING};
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
@@ -24,7 +22,7 @@ use crate::ui::{
     self, attach, blink, monitor_at, scale, text_sprite, ts, v2, v3, Animator, Bursts, Frame,
     Glide, Push, ScrollFade, MARGIN, RESIZE_MS,
 };
-use crate::win::Window;
+use crate::win::{self, create_tooltip, set_tooltip_rect, Window};
 
 // Geometry, in DIPs.
 pub(crate) const CARD_W: f32 = 384.0;
@@ -573,77 +571,8 @@ impl IconButton {
     }
 }
 
-/// Moves the area of `owner` that `tooltip`'s `tool` shows over to `rect`,
-/// in client pixels. An empty one hides it.
-pub fn set_tooltip_rect(tooltip: HWND, owner: HWND, tool: usize, rect: RECT) {
-    let info = TTTOOLINFOW {
-        cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
-        hwnd: owner,
-        uId: tool,
-        rect,
-        ..Default::default()
-    };
-    unsafe {
-        SendMessageW(
-            tooltip,
-            TTM_NEWTOOLRECTW,
-            None,
-            Some(LPARAM(&info as *const _ as isize)),
-        );
-        if rect.right <= rect.left {
-            SendMessageW(tooltip, TTM_POP, None, None);
-        }
-    }
-}
-
 fn contains(r: RECT, x: i32, y: i32) -> bool {
     x >= r.left && x < r.right && y >= r.top && y < r.bottom
-}
-
-/// A system tooltip showing `text` over an area of `owner`, initially empty.
-/// `tool` tells it apart from the owner's other tooltips.
-pub fn create_tooltip(owner: HWND, text: &str, tool: usize) -> Option<HWND> {
-    unsafe {
-        let controls = INITCOMMONCONTROLSEX {
-            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_WIN95_CLASSES,
-        };
-        let _ = InitCommonControlsEx(&controls);
-        // Always: the card never becomes the active window.
-        let tooltip = CreateWindowExW(
-            WS_EX_TOPMOST,
-            TOOLTIPS_CLASSW,
-            None,
-            WINDOW_STYLE(TTS_ALWAYSTIP | TTS_NOPREFIX),
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            Some(owner),
-            None,
-            None,
-            None,
-        )
-        .ok()?;
-        // The tooltip keeps its own copy.
-        let mut wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
-        let info = TTTOOLINFOW {
-            cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
-            // Watches the owner's mouse messages itself.
-            uFlags: TTF_SUBCLASS,
-            hwnd: owner,
-            uId: tool,
-            lpszText: PWSTR(wide.as_mut_ptr()),
-            ..Default::default()
-        };
-        SendMessageW(
-            tooltip,
-            TTM_ADDTOOLW,
-            None,
-            Some(LPARAM(&info as *const _ as isize)),
-        );
-        Some(tooltip)
-    }
 }
 
 /// Three pulsing dots, shown while an online lookup runs.
@@ -1448,12 +1377,13 @@ impl Popup {
         if self.region.replace(rect) == rect {
             return;
         }
-        unsafe {
-            let region = CreateRectRgn(0, top as i32, w as i32, bottom.ceil() as i32);
-            if SetWindowRgn(self.hwnd, Some(region), self.visible) == 0 {
-                let _ = DeleteObject(region.into());
-            }
-        }
+        let region = RECT {
+            left: 0,
+            top: top as i32,
+            right: w as i32,
+            bottom: bottom.ceil() as i32,
+        };
+        win::set_region(self.hwnd, region, self.visible);
     }
 }
 

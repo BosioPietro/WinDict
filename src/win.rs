@@ -1,19 +1,24 @@
 //! Safe wrappers for the Win32 calls several parts of the app make, so
 //! they're written, and their errors handled, in one place.
 
-use windows::core::{w, Result, HSTRING, PCWSTR};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT};
+use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT, RECT};
+use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::UI::Accessibility::{
     SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK, WINEVENTPROC,
 };
+use windows::Win32::UI::Controls::{
+    InitCommonControlsEx, ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX, TOOLTIPS_CLASSW, TTF_SUBCLASS,
+    TTM_ADDTOOLW, TTM_NEWTOOLRECTW, TTM_POP, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GetClassNameW, GetCursorPos, KillTimer, SetTimer,
-    SetWindowsHookExW, UnhookWindowsHookEx, HHOOK, HOOKPROC, SW_SHOWNORMAL, WINDOWS_HOOK_ID,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
+    CreateWindowExW, DestroyWindow, GetClassNameW, GetCursorPos, KillTimer, SendMessageW, SetTimer,
+    SetWindowsHookExW, UnhookWindowsHookEx, CW_USEDEFAULT, HHOOK, HOOKPROC, SW_SHOWNORMAL,
+    WINDOWS_HOOK_ID, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WS_EX_TOPMOST,
 };
 
 /// A window of ours, destroyed when dropped.
@@ -104,6 +109,88 @@ pub fn set_timer(hwnd: HWND, id: usize, ms: u32) {
 pub fn kill_timer(hwnd: HWND, id: usize) {
     unsafe {
         let _ = KillTimer(Some(hwnd), id);
+    }
+}
+
+/// Limits where `hwnd` can be clicked, and drawn, to `rect`, in window
+/// pixels; `redraw` repaints it straight away.
+pub fn set_region(hwnd: HWND, rect: RECT, redraw: bool) {
+    unsafe {
+        let region = CreateRectRgn(rect.left, rect.top, rect.right, rect.bottom);
+        // The window owns the region once it's set; until then, we do.
+        if SetWindowRgn(hwnd, Some(region), redraw) == 0 {
+            let _ = DeleteObject(region.into());
+        }
+    }
+}
+
+/// A system tooltip showing `text` over an area of `owner`, initially empty.
+/// `tool` tells it apart from the owner's other tooltips. The owner destroys
+/// it along with itself.
+pub fn create_tooltip(owner: HWND, text: &str, tool: usize) -> Option<HWND> {
+    unsafe {
+        let controls = INITCOMMONCONTROLSEX {
+            dwSize: std::mem::size_of::<INITCOMMONCONTROLSEX>() as u32,
+            dwICC: ICC_WIN95_CLASSES,
+        };
+        let _ = InitCommonControlsEx(&controls);
+        // Always: the card never becomes the active window.
+        let tooltip = CreateWindowExW(
+            WS_EX_TOPMOST,
+            TOOLTIPS_CLASSW,
+            None,
+            WINDOW_STYLE(TTS_ALWAYSTIP | TTS_NOPREFIX),
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            Some(owner),
+            None,
+            None,
+            None,
+        )
+        .ok()?;
+        // The tooltip keeps its own copy.
+        let mut wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+        let info = TTTOOLINFOW {
+            cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
+            // Watches the owner's mouse messages itself.
+            uFlags: TTF_SUBCLASS,
+            hwnd: owner,
+            uId: tool,
+            lpszText: PWSTR(wide.as_mut_ptr()),
+            ..Default::default()
+        };
+        SendMessageW(
+            tooltip,
+            TTM_ADDTOOLW,
+            None,
+            Some(LPARAM(&info as *const _ as isize)),
+        );
+        Some(tooltip)
+    }
+}
+
+/// Moves the area of `owner` that `tooltip`'s `tool` shows over to `rect`,
+/// in client pixels. An empty one hides it.
+pub fn set_tooltip_rect(tooltip: HWND, owner: HWND, tool: usize, rect: RECT) {
+    let info = TTTOOLINFOW {
+        cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
+        hwnd: owner,
+        uId: tool,
+        rect,
+        ..Default::default()
+    };
+    unsafe {
+        SendMessageW(
+            tooltip,
+            TTM_NEWTOOLRECTW,
+            None,
+            Some(LPARAM(&info as *const _ as isize)),
+        );
+        if rect.right <= rect.left {
+            SendMessageW(tooltip, TTM_POP, None, None);
+        }
     }
 }
 

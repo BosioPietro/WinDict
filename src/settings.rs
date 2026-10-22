@@ -24,7 +24,6 @@ use std::cell::Cell;
 
 use windows::core::{Result, HSTRING};
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
@@ -1358,12 +1357,13 @@ impl Settings {
     fn set_region(&self, card_h: f32) {
         let m = (MARGIN * self.scale).round();
         let (w, h) = (self.card.0 + 2.0 * m, card_h + 2.0 * m);
-        unsafe {
-            let region = CreateRectRgn(0, 0, w as i32, h.ceil() as i32);
-            if SetWindowRgn(self.hwnd, Some(region), self.visible) == 0 {
-                let _ = DeleteObject(region.into());
-            }
-        }
+        let region = RECT {
+            left: 0,
+            top: 0,
+            right: w as i32,
+            bottom: h.ceil() as i32,
+        };
+        win::set_region(self.hwnd, region, self.visible);
     }
 
     /// Sizes the card to what's in it now, gliding there. A window that
