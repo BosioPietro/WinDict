@@ -138,6 +138,10 @@ pub const IT: Strings = Strings {
     translation_service_error: "Il servizio di traduzione ha restituito un errore ({code}).",
     translation_unreachable: "Impossibile raggiungere il servizio di traduzione. Controlla la connessione.",
     no_translation: "Google Traduttore non ha trovato nessuna traduzione.",
+    mymemory_no_translation: "MyMemory non ha trovato nessuna traduzione.",
+    mymemory_unreadable: "Impossibile leggere la risposta di MyMemory.",
+    mymemory_quota: "Le traduzioni gratuite di oggi sono finite. Un\u{2019}email in \
+        Impostazioni \u{2192} Traduzione alza il limite.",
     not_language_code: "\u{201C}{language}\u{201D} non è un codice lingua, come \u{201C}en\u{201D}.",
     not_dictionary: "{path} non è un dizionario WinDict per \u{201C}{language}\u{201D}, oppure è per un\u{2019}altra versione di WinDict.",
     download_unreachable: "Impossibile connettersi. Riprova più tardi.",

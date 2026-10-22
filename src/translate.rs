@@ -401,9 +401,6 @@ struct MyMemoryMatch {
     translation: String,
 }
 
-const QUOTA_FINISHED: &str = "Today\u{2019}s free translations have run out. An email in \
-     Settings \u{2192} Translation raises the limit.";
-
 /// MyMemory, asked for `word` with its definition after it, when there's
 /// one, so that it translates the sense meant; else for the word alone,
 /// with the other translations it knows.
@@ -469,8 +466,8 @@ fn mymemory_path(query: &str, from: &str, to: &str, email: &str) -> String {
 /// The translation of `query`, and the other translations of it MyMemory
 /// remembers, best first.
 fn parse_mymemory(body: &[u8], query: &str) -> Result<(String, Vec<String>), String> {
-    let response: MyMemoryResponse = serde_json::from_slice(body)
-        .map_err(|_| "MyMemory\u{2019}s answer couldn\u{2019}t be read.".to_string())?;
+    let response: MyMemoryResponse =
+        serde_json::from_slice(body).map_err(|_| tr().mymemory_unreadable.to_string())?;
     let text = response
         .data
         .and_then(|d| d.text)
@@ -484,10 +481,10 @@ fn parse_mymemory(body: &[u8], query: &str) -> Result<(String, Vec<String>), Str
         _ => 200,
     };
     if response.quota_finished == Some(true) || warned || status == 429 {
-        return Err(QUOTA_FINISHED.into());
+        return Err(tr().mymemory_quota.into());
     }
     if status != 200 || text.is_empty() {
-        return Err("MyMemory had no translation.".into());
+        return Err(tr().mymemory_no_translation.into());
     }
     let mut alternatives: Vec<String> = Vec::new();
     for m in &response.matches {
@@ -586,7 +583,10 @@ mod tests {
     #[test]
     fn tells_mymemory_ran_out() {
         let warned = br#"{"responseData":{"translatedText":"MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE TRANSLATIONS FOR TODAY"},"quotaFinished":true,"responseStatus":"429","matches":[]}"#;
-        assert_eq!(parse_mymemory(warned, "dog").unwrap_err(), QUOTA_FINISHED);
+        assert_eq!(
+            parse_mymemory(warned, "dog").unwrap_err(),
+            tr().mymemory_quota
+        );
         let failed = br#"{"responseData":{"translatedText":""},"responseStatus":"403"}"#;
         assert!(parse_mymemory(failed, "dog").is_err());
     }

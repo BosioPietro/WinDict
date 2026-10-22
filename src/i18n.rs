@@ -202,6 +202,10 @@ strings! {
     translation_service_error: "The translation service returned an error ({code}).",
     translation_unreachable: "Couldn\u{2019}t reach the translation service. Check your connection.",
     no_translation: "Google Translate had no translation.",
+    mymemory_no_translation: "MyMemory had no translation.",
+    mymemory_unreadable: "MyMemory\u{2019}s answer couldn\u{2019}t be read.",
+    mymemory_quota: "Today\u{2019}s free translations have run out. An email in \
+        Settings \u{2192} Translation raises the limit.",
     /// `{language}`.
     not_language_code: "\u{201C}{language}\u{201D} isn't a language code, like \u{201C}en\u{201D}.",
     /// `{path}`, `{language}`.
