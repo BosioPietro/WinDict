@@ -432,6 +432,7 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
     };
     i18n::set(config.ui_language);
     ui::set_motion(config.animated());
+    autostart::sync();
     unsafe {
         let instance = HINSTANCE(GetModuleHandleW(None)?.0);
         register_classes(instance)?;

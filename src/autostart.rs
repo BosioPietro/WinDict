@@ -29,8 +29,7 @@ pub fn set(enabled: bool) {
         }
         let key = Owned::new(key);
         if enabled {
-            if let Ok(exe) = std::env::current_exe() {
-                let command = HSTRING::from(format!("\"{}\"", exe.display()));
+            if let Some(command) = command() {
                 let bytes = std::slice::from_raw_parts(
                     command.as_ptr() as *const u8,
                     (command.len() + 1) * 2,
@@ -40,5 +39,56 @@ pub fn set(enabled: bool) {
         } else {
             let _ = RegDeleteValueW(*key, VALUE);
         }
+    }
+}
+
+/// Points an enabled Run entry at the running executable. Release files carry
+/// the version in their name, so after an update the entry still names the
+/// old (possibly deleted) file.
+pub fn sync() {
+    let Some(command) = command() else { return };
+    match registered() {
+        Some(current) if current[..] != command[..] => set(true),
+        _ => {}
+    }
+}
+
+fn command() -> Option<HSTRING> {
+    let exe = std::env::current_exe().ok()?;
+    Some(HSTRING::from(format!("\"{}\"", exe.display())))
+}
+
+/// The Run entry's command line, if the entry exists.
+fn registered() -> Option<Vec<u16>> {
+    unsafe {
+        let mut size = 0u32;
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            RUN_KEY,
+            VALUE,
+            RRF_RT_REG_SZ,
+            None,
+            None,
+            Some(&mut size),
+        )
+        .ok()
+        .ok()?;
+        let mut buf = vec![0u16; (size as usize).div_ceil(2)];
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            RUN_KEY,
+            VALUE,
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+        .ok()
+        .ok()?;
+        buf.truncate(size as usize / 2);
+        while buf.last() == Some(&0) {
+            buf.pop();
+        }
+        Some(buf)
     }
 }
