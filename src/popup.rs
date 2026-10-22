@@ -17,8 +17,8 @@ use crate::render::{Body, Face, Ink, Link, Mark, Renderer, Target, WORD_SIZE};
 use crate::searchbox::SearchBox;
 use crate::theme::Theme;
 use crate::ui::{
-    self, attach, blink, monitor_at, scale, text_sprite, ts, v2, v3, Animator, Bursts, Frame, Glide, Push,
-    ScrollFade, MARGIN, RESIZE_MS,
+    self, attach, blink, monitor_at, scale, text_sprite, ts, v2, v3, Animator, Bursts, Frame,
+    Glide, Push, ScrollFade, MARGIN, RESIZE_MS,
 };
 use crate::win::Window;
 
@@ -1429,7 +1429,10 @@ impl Popup {
         let next = match (at, forward) {
             (None, true) => 0,
             // Backwards from nowhere is the last of the card, not its back button.
-            (None, false) => stops.iter().rposition(|&s| s != Stop::Back).unwrap_or(n - 1),
+            (None, false) => stops
+                .iter()
+                .rposition(|&s| s != Stop::Back)
+                .unwrap_or(n - 1),
             (Some(i), true) => (i + 1) % n,
             (Some(i), false) => (i + n - 1) % n,
         };
@@ -1608,7 +1611,14 @@ impl Popup {
                 Animator::stop(ring, &["Opacity"]);
                 ring.SetOpacity(0.0)?;
             }
-            anim.scalar(ring, "Opacity", 1.0, FOCUS_FADE_MS, reveal, &anim.decelerate)?;
+            anim.scalar(
+                ring,
+                "Opacity",
+                1.0,
+                FOCUS_FADE_MS,
+                reveal,
+                &anim.decelerate,
+            )?;
         }
         for ring in content.rings.iter().skip(rects.len()) {
             if reveal > 0 {
