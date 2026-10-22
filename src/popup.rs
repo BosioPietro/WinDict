@@ -393,20 +393,36 @@ struct IconButton {
     top: f32,
 }
 
+/// What distinguishes one [`IconButton`] from another.
+struct IconSpec<'a> {
+    icon: &'static str,
+    face: Face,
+    ink: Ink,
+    tip: &'a str,
+    /// The tooltip's tool, unique among the card's buttons.
+    tool: usize,
+    /// Left edge in the card, in DIPs.
+    x: f32,
+    /// Where it slides in from, in DIPs right of its place.
+    slide_from: f32,
+}
+
 impl IconButton {
-    #[allow(clippy::too_many_arguments)]
     fn new(
         c: &Compositor,
         card: &ContainerVisual,
         hwnd: HWND,
-        icon: &'static str,
-        face: Face,
-        ink: Ink,
-        tip: &str,
-        tool: usize,
-        x: f32,
-        slide_from: f32,
+        spec: IconSpec,
     ) -> Result<IconButton> {
+        let IconSpec {
+            icon,
+            face,
+            ink,
+            tip,
+            tool,
+            x,
+            slide_from,
+        } = spec;
         let visual = c.CreateContainerVisual()?;
         visual.SetOpacity(0.0)?;
         card.Children()?.InsertAtTop(&visual)?;
@@ -761,13 +777,15 @@ impl Popup {
             c,
             &frame.card,
             hwnd,
-            BACK_GLYPH,
-            Face::Button,
-            Ink::Primary,
-            tr().back_tip,
-            1,
-            BACK_X,
-            -BACK_SLIDE,
+            IconSpec {
+                icon: BACK_GLYPH,
+                face: Face::Button,
+                ink: Ink::Primary,
+                tip: tr().back_tip,
+                tool: 1,
+                x: BACK_X,
+                slide_from: -BACK_SLIDE,
+            },
         )?;
         // Its glyph's detail wants it larger than the arrow, and it's
         // colored like the links, as it leads somewhere too.
@@ -775,13 +793,15 @@ impl Popup {
             c,
             &frame.card,
             hwnd,
-            TRANSLATE_GLYPH,
-            Face::LargeButton,
-            Ink::Accent,
-            tr().translate_tip,
-            2,
-            TRANSLATE_X,
-            0.0,
+            IconSpec {
+                icon: TRANSLATE_GLYPH,
+                face: Face::LargeButton,
+                ink: Ink::Accent,
+                tip: tr().translate_tip,
+                tool: 2,
+                x: TRANSLATE_X,
+                slide_from: 0.0,
+            },
         )?;
         let content = Content::new(c, &frame.card, hwnd)?;
         let loader = Loader::new(c, &content.host, &theme)?;
