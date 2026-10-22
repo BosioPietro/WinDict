@@ -1469,8 +1469,8 @@ struct Parts {
     translate: Option<Rect>,
     switches: [Option<SwitchView>; SWITCHES.len()],
     choices: [Option<ChoiceView>; CHOICES.len()],
-    notes: [Option<NoteView>; 2],
-    counters: [Option<CounterView>; 2],
+    notes: [Option<NoteView>; NOTES.len()],
+    counters: [Option<CounterView>; COUNTERS.len()],
     field: Option<FieldView>,
     /// The languages row's hover and chevron.
     languages: Option<(SpriteVisual, SpriteVisual)>,

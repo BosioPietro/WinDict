@@ -716,7 +716,7 @@ pub struct Settings {
     preview: HOT_KEY_MODIFIERS,
     /// What the descriptions that change say, and whether it's that
     /// something went wrong, in the order of [`NOTES`].
-    notes: [(String, bool); 2],
+    notes: [(String, bool); NOTES.len()],
     /// Whether the list of languages is open.
     open: bool,
     /// How each language's download is going, and whether that's that it
@@ -737,10 +737,10 @@ pub struct Settings {
     scroll_anim: Option<Glide>,
     wheel_bursts: Bursts,
     pub visible: bool,
-    /// Last, so it goes after everything shown on it.
     /// The tallest the card gets, in pixels. The window is made for that,
     /// so that it never resizes under the blurred background.
     room: f32,
+    /// Last, so it goes after everything shown on it.
     _window: Window,
 }
 
