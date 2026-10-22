@@ -21,7 +21,7 @@ impl App {
             },
             language: query.language,
         };
-        let online = self.cached(&online_key);
+        let online = self.cache.get(&online_key);
 
         match (&self.local, online) {
             (Some(local), online) => {
@@ -62,24 +62,10 @@ impl App {
         });
     }
 
-    /// A cached online answer (a definition, or a definite "not found").
-    pub(super) fn cached(&mut self, key: &Query) -> Option<Lookup> {
-        let hit = self.cache.iter().position(|(q, _)| q == key)?;
-        let entry = self.cache.remove(hit);
-        let result = entry.1.clone();
-        self.cache.push(entry);
-        Some(result)
-    }
-
     pub(super) fn on_result(&mut self, looked: Looked) {
         // Remember definite answers; retry failures (e.g. offline) next time.
         if !matches!(looked.result, Lookup::Failed(_)) {
-            self.cache.retain(|(q, _)| *q != looked.query);
-            self.cache
-                .push((looked.query.clone(), looked.result.clone()));
-            if self.cache.len() > CACHE_SIZE {
-                self.cache.remove(0);
-            }
+            self.cache.put(looked.query.clone(), looked.result.clone());
         }
         let visible = self.popup.as_ref().is_some_and(|p| p.visible);
         if looked.id != self.request || !visible {

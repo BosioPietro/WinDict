@@ -68,13 +68,7 @@ impl App {
             .iter()
             .find(|(language, _)| *language == t.from)
             .and_then(|(_, sense)| sense.clone());
-        let hit = self.translations.iter().position(|(k, _)| *k == key);
-        let cached = hit.map(|i| {
-            let entry = self.translations.remove(i);
-            let translation = entry.1.clone();
-            self.translations.push(entry);
-            translation
-        });
+        let cached = self.translations.get(&key);
         let Some(t) = self.translating.as_mut() else {
             return;
         };
@@ -97,12 +91,8 @@ impl App {
     pub(super) fn on_translated(&mut self, translated: Translated) {
         // Remember translations; retry failures (e.g. offline) next time.
         if let Ok(translation) = &translated.result {
-            self.translations.retain(|(k, _)| *k != translated.key);
             self.translations
-                .push((translated.key.clone(), translation.clone()));
-            if self.translations.len() > TRANSLATION_CACHE_SIZE {
-                self.translations.remove(0);
-            }
+                .put(translated.key.clone(), translation.clone());
         }
         let visible = self.popup.as_ref().is_some_and(|p| p.visible);
         if translated.id != self.request || !visible {

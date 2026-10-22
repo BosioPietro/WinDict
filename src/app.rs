@@ -12,6 +12,7 @@ mod lookup;
 pub(crate) mod picking;
 mod prefs;
 mod procs;
+mod recent;
 mod search;
 mod translating;
 mod tray_menu;
@@ -53,6 +54,7 @@ use picking::Picking;
 use procs::{
     focus_hook, keyboard_hook, main_proc, menu_proc, mouse_hook, popup_proc, settings_proc,
 };
+use recent::Recent;
 
 const MAIN_CLASS: PCWSTR = w!("WinDict.Main");
 const POPUP_CLASS: PCWSTR = w!("WinDict.Popup");
@@ -380,8 +382,8 @@ pub struct App {
     inbox: Receiver<Event>,
     events: Events,
     request: u64,
-    /// Online answers, most recently used last.
-    cache: Vec<(Query, Lookup)>,
+    /// Online answers: definitions, and definite "not found"s.
+    cache: Recent<Query, Lookup>,
     /// The offline entry for the current request, if any.
     local: Option<Definition>,
     /// The word the card shows, as it was looked up.
@@ -392,8 +394,7 @@ pub struct App {
     translatable: Option<Translatable>,
     /// The translation the card turned into, if it did.
     translating: Option<Translating>,
-    /// Translations, most recently used last.
-    translations: Vec<(TranslationKey, Translation)>,
+    translations: Recent<TranslationKey, Translation>,
     /// Ctrl+T.
     translate_key: KeySet,
     /// Backspace and Alt+Left.
@@ -469,13 +470,13 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             inbox,
             events,
             request: 0,
-            cache: Vec::new(),
+            cache: Recent::new(CACHE_SIZE),
             local: None,
             current: None,
             history: Vec::new(),
             translatable: None,
             translating: None,
-            translations: Vec::new(),
+            translations: Recent::new(TRANSLATION_CACHE_SIZE),
             translate_key: KeySet::new(TRANSLATE_KEY),
             back_keys: KeySet::new(BACK_KEYS),
             link_keys: KeySet::new(LINK_KEYS),
