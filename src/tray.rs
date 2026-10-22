@@ -12,6 +12,8 @@ pub struct Tray {
     hwnd: HWND,
     callback: u32,
     icon: HICON,
+    /// Shown over the icon, kept to show again once Explorer restarts.
+    tip: String,
 }
 
 fn copy_into(dst: &mut [u16], text: &str) {
@@ -44,6 +46,7 @@ impl Tray {
             hwnd,
             callback,
             icon,
+            tip: "WinDict".into(),
         };
         tray.add();
         tray
@@ -66,13 +69,14 @@ impl Tray {
         data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         data.uCallbackMessage = self.callback;
         data.hIcon = self.icon;
-        copy_into(&mut data.szTip, "WinDict");
+        copy_into(&mut data.szTip, &self.tip);
         unsafe {
             let _ = Shell_NotifyIconW(NIM_ADD, &data);
         }
     }
 
-    pub fn set_tip(&self, tip: &str) {
+    pub fn set_tip(&mut self, tip: &str) {
+        tip.clone_into(&mut self.tip);
         let mut data = self.data();
         data.uFlags = NIF_TIP;
         copy_into(&mut data.szTip, tip);
