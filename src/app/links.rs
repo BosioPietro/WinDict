@@ -18,10 +18,13 @@ impl App {
             .filter(|p| p.visible && self.search.is_none() && !picking);
         let tab = popup.is_some_and(|p| p.has_links());
         let enter = popup.is_some_and(|p| p.focused_link().is_some());
+        // Up and Down, likewise, only while there's further to scroll.
+        let scroll = popup.is_some_and(|p| p.scrolls());
         // Ctrl+T, likewise, only while there's a translation to go to or from.
         let visible = self.popup.as_ref().is_some_and(|p| p.visible);
         let translate = visible && (self.can_translate() || self.translating.is_some());
         self.set_link_keys(tab, enter);
+        self.scroll_keys.set(self.hwnd, scroll);
         self.translate_key.set(self.hwnd, translate);
     }
 

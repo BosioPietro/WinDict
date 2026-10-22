@@ -66,6 +66,8 @@ pub(super) unsafe extern "system" fn main_proc(
                 HOTKEY_PREV_LINK => with_app(|app| app.step_link(false)),
                 HOTKEY_OPEN_LINK => with_app(|app| app.open_focused_link()),
                 HOTKEY_TRANSLATE => with_app(|app| app.toggle_translation()),
+                HOTKEY_SCROLL_UP => with_app(|app| app.scroll_line(false)),
+                HOTKEY_SCROLL_DOWN => with_app(|app| app.scroll_line(true)),
                 _ => None,
             };
             LRESULT(0)

@@ -3,10 +3,14 @@
 use super::*;
 
 impl Popup {
+    /// Whether the body is taller than the card, and so scrolls.
+    pub fn scrolls(&self) -> bool {
+        self.max_scroll() > 0.0
+    }
+
     /// Scrolls the body by a mouse wheel delta.
     pub fn scroll_by(&mut self, wheel_delta: i32) -> Result<()> {
-        let max = self.max_scroll();
-        if max <= 0.0 {
+        if !self.scrolls() {
             return Ok(());
         }
         let mut step = -(wheel_delta as f32 / 120.0) * 56.0 * self.scale;
@@ -15,6 +19,21 @@ impl Popup {
         if precise {
             step = self.wheel_bursts.precise_step(step, self.scale);
         }
+        self.scroll_step(step, precise)
+    }
+
+    /// Up or Down: scrolls the body as far as a notch of the wheel does.
+    pub fn scroll_line(&mut self, down: bool) -> Result<()> {
+        if !self.scrolls() {
+            return Ok(());
+        }
+        let step = 56.0 * self.scale;
+        self.scroll_step(if down { step } else { -step }, false)
+    }
+
+    /// Scrolls the body by `step` pixels, at once if it's `precise`.
+    fn scroll_step(&mut self, step: f32, precise: bool) -> Result<()> {
+        let max = self.max_scroll();
         if !self.wheel_bursts.take(self.scroll + step, max) {
             return Ok(());
         }

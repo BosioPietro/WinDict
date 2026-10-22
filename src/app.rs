@@ -93,6 +93,8 @@ const HOTKEY_NEXT_LINK: i32 = 5;
 const HOTKEY_PREV_LINK: i32 = 6;
 const HOTKEY_OPEN_LINK: i32 = 7;
 const HOTKEY_TRANSLATE: i32 = 8;
+const HOTKEY_SCROLL_UP: i32 = 9;
+const HOTKEY_SCROLL_DOWN: i32 = 10;
 
 /// Hotkeys registered only while the card has a use for them, as (id,
 /// modifiers, key).
@@ -136,6 +138,11 @@ const BACK_KEYS: Keys = &[
 const LINK_KEYS: Keys = &[
     (HOTKEY_NEXT_LINK, HOT_KEY_MODIFIERS(0), VK_TAB),
     (HOTKEY_PREV_LINK, MOD_SHIFT, VK_TAB),
+];
+/// Held down, Up and Down keep scrolling.
+const SCROLL_KEYS: Keys = &[
+    (HOTKEY_SCROLL_UP, HOT_KEY_MODIFIERS(0), VK_UP),
+    (HOTKEY_SCROLL_DOWN, HOT_KEY_MODIFIERS(0), VK_DOWN),
 ];
 const OPEN_KEY: Keys = &[(HOTKEY_OPEN_LINK, MOD_NOREPEAT, VK_RETURN)];
 const TRANSLATE_KEY: Keys = &[(
@@ -412,6 +419,8 @@ pub struct App {
     link_keys: KeySet,
     /// Enter.
     open_key: KeySet,
+    /// Up and Down.
+    scroll_keys: KeySet,
     /// The search box, while the card shows one.
     search: Option<Search>,
     /// The window the search box took the keyboard from.
@@ -492,6 +501,7 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             back_keys: KeySet::new(BACK_KEYS),
             link_keys: KeySet::new(LINK_KEYS),
             open_key: KeySet::new(OPEN_KEY),
+            scroll_keys: KeySet::new(SCROLL_KEYS),
             search: None,
             return_focus: None,
             installing: Vec::new(),
@@ -852,6 +862,13 @@ impl App {
         }
     }
 
+    /// Up or Down: scrolls the card.
+    fn scroll_line(&mut self, down: bool) {
+        if let Some(popup) = self.popup.as_mut().filter(|p| p.visible) {
+            let _ = popup.scroll_line(down);
+        }
+    }
+
     /// Esc: closes the list of languages, if it's open, or else the card.
     fn escape(&mut self) {
         let closed = self.translating.as_mut().and_then(|t| t.picking.take());
@@ -881,6 +898,7 @@ impl App {
         self.translating = None;
         self.sync_back_keys();
         self.set_link_keys(false, false);
+        self.scroll_keys.set(self.hwnd, false);
         self.translate_key.set(self.hwnd, false);
         self.remove_dismiss_hooks();
         self.dismiss_menu();
