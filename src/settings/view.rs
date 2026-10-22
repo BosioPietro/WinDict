@@ -258,44 +258,7 @@ impl Settings {
         self.frame.card.Children()?.InsertAtTop(&content)?;
         let mut reveal: Vec<(Visual, Vector3)> = Vec::new();
 
-        // The header: the heading, the version under it, and the close button.
-        let title = Text::new(c, &content)?;
-        let heading = r.layout_line(i18n::tr().settings, Face::Heading, Ink::Primary, 300.0)?;
-        let title_size = title.show(r, &heading, s, t)?;
-        let title_at = v3(px(LABEL_X), px(PAD_TOP));
-        title.visual.SetOffset(title_at)?;
-        reveal.push((title.visual.cast()?, title_at));
-        let version = Text::new(c, &content)?;
-        let name = format!("WinDict {}", env!("CARGO_PKG_VERSION"));
-        let line = r.layout_line(&name, Face::Small, Ink::Tertiary, 300.0)?;
-        let version_size = version.show(r, &line, s, t)?;
-        let version_at = v3(title_at.X, title_at.Y + title_size.Y);
-        version.visual.SetOffset(version_at)?;
-        reveal.push((version.visual.cast()?, version_at));
-        let header_h = version_at.Y + version_size.Y + px(HEADER_GAP);
-
-        let size = px(CLOSE_SIZE);
-        let close_at = Rect {
-            x: card_w - px(CLOSE_INSET) - size,
-            y: px(CLOSE_INSET),
-            w: size,
-            h: size,
-        };
-        let close = container(c, &content, close_at.at())?;
-        let face = Rect {
-            w: size,
-            h: size,
-            ..Rect::default()
-        };
-        let (close_hover, _) = rounded(c, r, &close, face, px(CLOSE_RADIUS), t.highlight())?;
-        close_hover.SetOpacity(0.0)?;
-        let glyph = Text::new(c, &close)?;
-        let cross = r.layout_line(CLOSE_GLYPH, Face::Chrome, Ink::Primary, CLOSE_SIZE)?;
-        let glyph_size = glyph.show(r, &cross, s, t)?;
-        glyph
-            .visual
-            .SetOffset(v3(0.0, ((size - glyph_size.Y) / 2.0).round()))?;
-        reveal.push((close.cast()?, close_at.at()));
+        let (header_h, close_at, close_hover) = self.build_header(&content, &mut reveal)?;
 
         // The groups of settings scroll under the header, should they not fit.
         let body = c.CreateContainerVisual()?;
@@ -459,29 +422,9 @@ impl Settings {
             slack_y,
         };
 
-        // The ring around what the keyboard is on, gliding from stop to stop.
-        // Drawn through a mask, like the controls: a shape would be jagged
-        // in the scroller. The mask is a nine-grid, to stretch as it glides.
-        let ring = c.CreateSpriteVisual()?;
-        ring.SetOpacity(0.0)?;
-        let ring_source = c.CreateSurfaceBrush()?;
-        ring_source.SetStretch(CompositionStretch::Fill)?;
-        let ring_grid = c.CreateNineGridBrush()?;
-        ring_grid.SetSource(&ring_source)?;
-        let ring_brush = c.CreateColorBrushWithColor(t.focus())?;
-        let ring_mask = c.CreateMaskBrush()?;
-        ring_mask.SetSource(&ring_brush)?;
-        ring_mask.SetMask(&ring_grid)?;
-        ring.SetBrush(&ring_mask)?;
-        scroller.Children()?.InsertAtTop(&ring)?;
+        let (ring, ring_source, ring_grid) = self.build_ring(&scroller)?;
 
-        // The thumb, shown when it scrolls.
-        let thumb = c.CreateSpriteVisual()?;
-        thumb.SetBrush(&c.CreateColorBrushWithColor(t.thumb())?)?;
-        let thumb_clip = c.CreateRoundedRectangleGeometry()?;
-        thumb.SetClip(&c.CreateGeometricClipWithGeometry(&thumb_clip)?)?;
-        thumb.SetOpacity(0.0)?;
-        content.Children()?.InsertAtTop(&thumb)?;
+        let (thumb, thumb_clip) = self.build_thumb(&content)?;
         let tips = vec![
             (Hit::Info, self.build_tip(&content, i18n::tr().email_tip)?),
             (Hit::Swap, self.build_tip(&content, i18n::tr().swap_tip)?),
@@ -533,6 +476,106 @@ impl Settings {
             ring_radius: Cell::new(-1.0),
             languages,
         })
+    }
+
+    /// The heading, the version under it, and the close button, added to
+    /// `content`. Returns the header's height, and the close button's place
+    /// and hover.
+    fn build_header(
+        &self,
+        content: &ContainerVisual,
+        reveal: &mut Vec<(Visual, Vector3)>,
+    ) -> Result<(f32, Rect, SpriteVisual)> {
+        let (c, r, t, s) = (
+            &self.anim.compositor,
+            &self.renderer,
+            &self.theme,
+            self.scale,
+        );
+        let px = |dip: f32| (dip * s).round();
+        let card_w = px(CARD_W);
+        let title = Text::new(c, content)?;
+        let heading = r.layout_line(i18n::tr().settings, Face::Heading, Ink::Primary, 300.0)?;
+        let title_size = title.show(r, &heading, s, t)?;
+        let title_at = v3(px(LABEL_X), px(PAD_TOP));
+        title.visual.SetOffset(title_at)?;
+        reveal.push((title.visual.cast()?, title_at));
+        let version = Text::new(c, content)?;
+        let name = format!("WinDict {}", env!("CARGO_PKG_VERSION"));
+        let line = r.layout_line(&name, Face::Small, Ink::Tertiary, 300.0)?;
+        let version_size = version.show(r, &line, s, t)?;
+        let version_at = v3(title_at.X, title_at.Y + title_size.Y);
+        version.visual.SetOffset(version_at)?;
+        reveal.push((version.visual.cast()?, version_at));
+        let header_h = version_at.Y + version_size.Y + px(HEADER_GAP);
+
+        let size = px(CLOSE_SIZE);
+        let close_at = Rect {
+            x: card_w - px(CLOSE_INSET) - size,
+            y: px(CLOSE_INSET),
+            w: size,
+            h: size,
+        };
+        let close = container(c, content, close_at.at())?;
+        let face = Rect {
+            w: size,
+            h: size,
+            ..Rect::default()
+        };
+        let (close_hover, _) = rounded(c, r, &close, face, px(CLOSE_RADIUS), t.highlight())?;
+        close_hover.SetOpacity(0.0)?;
+        let glyph = Text::new(c, &close)?;
+        let cross = r.layout_line(CLOSE_GLYPH, Face::Chrome, Ink::Primary, CLOSE_SIZE)?;
+        let glyph_size = glyph.show(r, &cross, s, t)?;
+        glyph
+            .visual
+            .SetOffset(v3(0.0, ((size - glyph_size.Y) / 2.0).round()))?;
+        reveal.push((close.cast()?, close_at.at()));
+        Ok((header_h, close_at, close_hover))
+    }
+
+    /// The ring around what the keyboard is on, in the `scroller`, and the
+    /// brushes that shape it as it glides.
+    fn build_ring(
+        &self,
+        scroller: &ContainerVisual,
+    ) -> Result<(
+        SpriteVisual,
+        CompositionSurfaceBrush,
+        CompositionNineGridBrush,
+    )> {
+        let c = &self.anim.compositor;
+        // It glides from stop to stop.
+        // Drawn through a mask, like the controls: a shape would be jagged
+        // in the scroller. The mask is a nine-grid, to stretch as it glides.
+        let ring = c.CreateSpriteVisual()?;
+        ring.SetOpacity(0.0)?;
+        let ring_source = c.CreateSurfaceBrush()?;
+        ring_source.SetStretch(CompositionStretch::Fill)?;
+        let ring_grid = c.CreateNineGridBrush()?;
+        ring_grid.SetSource(&ring_source)?;
+        let ring_brush = c.CreateColorBrushWithColor(self.theme.focus())?;
+        let ring_mask = c.CreateMaskBrush()?;
+        ring_mask.SetSource(&ring_brush)?;
+        ring_mask.SetMask(&ring_grid)?;
+        ring.SetBrush(&ring_mask)?;
+        scroller.Children()?.InsertAtTop(&ring)?;
+        Ok((ring, ring_source, ring_grid))
+    }
+
+    /// The scrollbar's thumb, in `content`, and its rounded clip.
+    fn build_thumb(
+        &self,
+        content: &ContainerVisual,
+    ) -> Result<(SpriteVisual, CompositionRoundedRectangleGeometry)> {
+        let (c, t) = (&self.anim.compositor, &self.theme);
+        let thumb = c.CreateSpriteVisual()?;
+        thumb.SetBrush(&c.CreateColorBrushWithColor(t.thumb())?)?;
+        let thumb_clip = c.CreateRoundedRectangleGeometry()?;
+        thumb.SetClip(&c.CreateGeometricClipWithGeometry(&thumb_clip)?)?;
+        thumb.SetOpacity(0.0)?;
+        content.Children()?.InsertAtTop(&thumb)?;
+        Ok((thumb, thumb_clip))
     }
 
     /// The list of languages, each with a box to tick, `top` down `group`
