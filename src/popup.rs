@@ -1053,8 +1053,18 @@ impl Popup {
         Animator::stop(&content.visual, &["Offset", "Opacity"]);
         Animator::stop(&content.host, &["Offset"]);
 
-        let was_loading = self.loader.running;
-        self.loader.running = matches!(body, Body::Loading);
+        self.set_loading(matches!(body, Body::Loading))?;
+
+        self.enter_body(transition, card_h, previous_header_h)?;
+        self.update_scroll_chrome(false)?;
+        self.sync_tooltip();
+        self.sync_swap()
+    }
+
+    /// Starts the loading animation, or fades it out if it was running.
+    fn set_loading(&mut self, loading: bool) -> Result<()> {
+        let s = self.scale;
+        let was_loading = std::mem::replace(&mut self.loader.running, loading);
         if self.loader.running {
             self.loader.start(&self.anim, s)?;
         } else if was_loading {
@@ -1068,7 +1078,18 @@ impl Popup {
                 &anim.accelerate,
             )?;
         }
+        Ok(())
+    }
 
+    /// Brings the new body in as `transition` says, and sizes the card to
+    /// `card_h`. `previous_header_h` is what the header measured before.
+    fn enter_body(
+        &mut self,
+        transition: Transition,
+        card_h: f32,
+        previous_header_h: f32,
+    ) -> Result<()> {
+        let (s, header_h) = (self.scale, self.header_h);
         let anim = &self.anim;
         let content = &self.content;
         match transition {
@@ -1111,9 +1132,7 @@ impl Popup {
                 self.move_content_host(previous_header_h)?;
             }
         }
-        self.update_scroll_chrome(false)?;
-        self.sync_tooltip();
-        self.sync_swap()
+        Ok(())
     }
 
     /// Shows or hides the back button. The word moves to make room for it
