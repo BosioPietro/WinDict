@@ -23,7 +23,6 @@ impl Renderer {
             let divider = brush(theme.divider())?;
             let key = brush(theme.key())?;
             let flag_edge = brush(theme.flag_edge())?;
-            let mut fading = None;
             for item in &layout.items {
                 match item {
                     Item::Text {
@@ -126,9 +125,7 @@ impl Renderer {
                                 Paint::Control => to_d2d(theme.control()),
                                 Paint::ControlStroke => to_d2d(theme.control_stroke()),
                                 Paint::Field => to_d2d(theme.field()),
-                                Paint::Highlight => to_d2d(theme.highlight()),
                                 Paint::Focus => theme.accent_d2d(),
-                                Paint::Thumb => to_d2d(theme.thumb()),
                             })
                         };
                         // Inset by half the stroke, so it lands on whole pixels.
@@ -153,19 +150,6 @@ impl Renderer {
                         if let Some(p) = stroke {
                             dc.DrawRoundedRectangle(&shape, &paint(*p)?, stroke_w, None);
                         }
-                    }
-                    Item::Fade {
-                        y,
-                        height,
-                        top,
-                        bottom,
-                    } => {
-                        // Kept until the layer's popped.
-                        fading = Some(fade_layer(dc, *y, *height, *top, *bottom)?);
-                    }
-                    Item::Unfade => {
-                        dc.PopLayer();
-                        drop(fading.take());
                     }
                 }
             }
@@ -413,65 +397,6 @@ impl Renderer {
             result
         }
     }
-}
-
-/// Pushes a layer that fades what's drawn into it towards the top and
-/// bottom of `y` to `y + height`, where `top` and `bottom` say it's cut off.
-/// The returned brush must be kept until the layer is popped.
-unsafe fn fade_layer(
-    dc: &ID2D1DeviceContext,
-    y: f32,
-    height: f32,
-    top: bool,
-    bottom: bool,
-) -> Result<ID2D1LinearGradientBrush> {
-    let at = |position: f32, faded: bool| D2D1_GRADIENT_STOP {
-        position,
-        color: D2D1_COLOR_F {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            a: if faded { LIST_FADE_EDGE } else { 1.0 },
-        },
-    };
-    let length = (LIST_FADE / height).min(0.5);
-    let stops = [
-        at(0.0, top),
-        at(length, false),
-        at(1.0 - length, false),
-        at(1.0, bottom),
-    ];
-    let target: &ID2D1RenderTarget = dc;
-    let stops =
-        target.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
-    let mask = dc.CreateLinearGradientBrush(
-        &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
-            startPoint: Vector2 { X: 0.0, Y: y },
-            endPoint: Vector2 {
-                X: 0.0,
-                Y: y + height,
-            },
-        },
-        None,
-        &stops,
-    )?;
-    let mut layer = D2D1_LAYER_PARAMETERS1 {
-        contentBounds: D2D_RECT_F {
-            left: -f32::MAX,
-            top: -f32::MAX,
-            right: f32::MAX,
-            bottom: f32::MAX,
-        },
-        geometricMask: std::mem::ManuallyDrop::new(None),
-        maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-        maskTransform: Matrix3x2::identity(),
-        opacity: 1.0,
-        opacityBrush: std::mem::ManuallyDrop::new(Some(mask.cast()?)),
-        layerOptions: D2D1_LAYER_OPTIONS1_NONE,
-    };
-    dc.PushLayer(&layer, None);
-    std::mem::ManuallyDrop::drop(&mut layer.opacityBrush);
-    Ok(mask)
 }
 
 /// Draws `flag` filling 0,0 to 60,40.

@@ -20,6 +20,8 @@ const THUMB_PAD: f32 = 4.0;
 const THUMB_MIN_H: f32 = 28.0;
 /// Room below the thumb: it ends where the card's corner starts to curve.
 const THUMB_END: f32 = RADIUS;
+/// The room above and below a card's thumb, in DIPs.
+pub const CARD_ENDS: (f32, f32) = (THUMB_PAD, THUMB_END);
 
 /// How far content fades out towards an edge more of it is past.
 const FADE: f32 = 20.0;
@@ -53,9 +55,22 @@ pub fn max_scroll(content_h: f32, viewport: f32, s: f32) -> f32 {
 /// tall, scrolled `scroll` of `max`: its top, below the viewport's, and its
 /// height, in pixels at `s` per DIP.
 pub fn thumb_span(viewport: f32, content_h: f32, scroll: f32, max: f32, s: f32) -> (f32, f32) {
-    let track = viewport - (THUMB_PAD + THUMB_END) * s;
+    thumb_between(viewport, content_h, scroll, max, s, CARD_ENDS)
+}
+
+/// Like [`thumb_span`], for a thumb with `ends` of room above and below it,
+/// in DIPs.
+fn thumb_between(
+    viewport: f32,
+    content_h: f32,
+    scroll: f32,
+    max: f32,
+    s: f32,
+    (pad, end): (f32, f32),
+) -> (f32, f32) {
+    let track = viewport - (pad + end) * s;
     let h = (track * viewport / content_h).max(THUMB_MIN_H * s);
-    let top = THUMB_PAD * s + (track - h) * (scroll / max).clamp(0.0, 1.0);
+    let top = pad * s + (track - h) * (scroll / max).clamp(0.0, 1.0);
     (top, h)
 }
 
@@ -513,28 +528,40 @@ impl ScrollFade {
 /// Where content scrolls to for the thumb's top to be at `top`, below the
 /// viewport's: the other way round from [`thumb_span`].
 pub fn scroll_for_thumb(track: Track, top: f32) -> f32 {
-    let Track {
-        viewport,
-        content_h,
-        max,
-        s,
-    } = track;
-    let (_, h) = thumb_span(viewport, content_h, 0.0, max, s);
-    let room = viewport - (THUMB_PAD + THUMB_END) * s - h;
+    let Track { max, s, ends, .. } = track;
+    let (_, h) = track.thumb(0.0);
+    let room = track.viewport - (ends.0 + ends.1) * s - h;
     if room <= 0.0 {
         return 0.0;
     }
-    ((top - THUMB_PAD * s) / room).clamp(0.0, 1.0) * max
+    ((top - ends.0 * s) / room).clamp(0.0, 1.0) * max
 }
 
 /// What a scrollbar runs down, in pixels at `s` per DIP: a viewport that
-/// tall, over content `content_h` tall that scrolls `0..=max`.
+/// tall, over content `content_h` tall that scrolls `0..=max`, with `ends`
+/// of room above and below the thumb, in DIPs.
 #[derive(Clone, Copy)]
 pub struct Track {
     pub viewport: f32,
     pub content_h: f32,
     pub max: f32,
     pub s: f32,
+    pub ends: (f32, f32),
+}
+
+impl Track {
+    /// The thumb with the content scrolled `scroll`: its top, below the
+    /// viewport's, and its height.
+    pub fn thumb(&self, scroll: f32) -> (f32, f32) {
+        let Track {
+            viewport,
+            content_h,
+            max,
+            s,
+            ends,
+        } = *self;
+        thumb_between(viewport, content_h, scroll, max, s, ends)
+    }
 }
 
 /// How far in from the card's right edge, in DIPs, the pointer is over the
@@ -647,7 +674,7 @@ impl Scrollbar {
     /// below, it returns where to scroll to, a page that way.
     pub fn press(&mut self, y: f32, scroll: f32, track: Track) -> Option<f32> {
         self.held = true;
-        let (top, h) = thumb_span(track.viewport, track.content_h, scroll, track.max, track.s);
+        let (top, h) = track.thumb(scroll);
         if (top..top + h).contains(&y) {
             self.grab = Some(y - top);
             return None;
@@ -715,6 +742,7 @@ mod tests {
             content_h,
             max,
             s,
+            ends: CARD_ENDS,
         };
         for scroll in [0.0, 120.0, max / 2.0, max] {
             let (top, _) = thumb_span(viewport, content_h, scroll, max, s);
@@ -723,6 +751,17 @@ mod tests {
         // Dragged past either end, it stops there.
         assert_eq!(scroll_for_thumb(track, -50.0), 0.0);
         assert_eq!(scroll_for_thumb(track, 10_000.0), max);
+        // A thumb with room of its own at the ends runs between them.
+        let list = Track {
+            ends: (4.0, 4.0),
+            ..track
+        };
+        let (top, h) = list.thumb(max);
+        assert!((top + h - (viewport - 4.0 * s)).abs() < 1e-3);
+        for scroll in [0.0, max / 3.0, max] {
+            let (top, _) = list.thumb(scroll);
+            assert!((scroll_for_thumb(list, top) - scroll).abs() < 1e-2);
+        }
     }
 
     #[test]

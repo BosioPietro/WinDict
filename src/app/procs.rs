@@ -418,7 +418,13 @@ pub(super) unsafe extern "system" fn settings_proc(
                 // MK_CONTROL
                 with_app(|app| app.zoom_settings_by_wheel(delta));
             } else {
-                with_app(|app| app.in_settings(|s| s.wheel(delta).map(|_| None)));
+                // The pointer's in screen coordinates here.
+                let mut pt = POINT { x, y };
+                unsafe {
+                    let _ = ScreenToClient(hwnd, &mut pt);
+                }
+                let at = (pt.x, pt.y);
+                with_app(|app| app.in_settings(|s| s.wheel(delta, at).map(|_| None)));
             }
             LRESULT(0)
         }

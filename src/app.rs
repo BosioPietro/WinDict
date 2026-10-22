@@ -996,15 +996,18 @@ impl App {
             return;
         };
         let _ = popup.hover(point);
-        let target = point.and_then(|(x, y)| popup.link_at(x, y)).cloned();
-        let Some(Target::Pick(code)) = target else {
+        let Some(row) = point.and_then(|(x, y)| popup.list_row_at(x, y)) else {
             return;
         };
-        if self
-            .picking()
-            .is_some_and(|(picking, _)| picking.highlight(&code))
-        {
-            self.show_picking(None);
+        let Some((picking, _)) = self.picking() else {
+            return;
+        };
+        let code = picking.matches.get(row).copied();
+        if code.is_some_and(|code| picking.highlight(code)) {
+            let highlight = picking.highlight;
+            if let Some(popup) = self.card.popup.as_mut() {
+                let _ = popup.highlight_list(highlight);
+            }
         }
     }
 
@@ -1026,19 +1029,19 @@ impl App {
             .is_some_and(|p| p.release().unwrap_or(false))
     }
 
-    /// The mouse wheel: scrolls the list of languages while it's open, or
-    /// else the card.
+    /// The mouse wheel: scrolls the list of languages, when it's over it,
+    /// or else the card.
     fn on_wheel(&mut self, delta: i32) {
-        if let Some((picking, _)) = self.picking() {
-            let rows = -(delta as f32 / 120.0 * ui::WHEEL_ROWS).round() as isize;
-            if picking.scroll(rows) {
-                self.show_picking(None);
-            }
+        let Some(popup) = self.card.popup.as_mut() else {
+            return;
+        };
+        if !popup.scroll_list(delta).unwrap_or(false) {
+            let _ = popup.scroll_by(delta);
             return;
         }
-        if let Some(popup) = self.card.popup.as_mut() {
-            let _ = popup.scroll_by(delta);
-        }
+        // The highlight moves to the row the pointer's on now.
+        let pointer = popup.pointer();
+        self.hover_card(pointer);
     }
 
     /// Up or Down: scrolls the card.

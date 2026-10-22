@@ -32,6 +32,7 @@ impl Renderer {
             height: out.y + bottom_padding,
             links: out.links,
             caret: out.caret,
+            list: out.list,
         })
     }
 
@@ -327,6 +328,7 @@ impl Renderer {
             height: out.y,
             links: out.links,
             caret: out.caret,
+            list: out.list,
         })
     }
 
@@ -469,9 +471,9 @@ impl Renderer {
         Ok(())
     }
 
-    /// The languages `picker` lists, under the box it's open on, `current`
-    /// ticked, the one Enter picks highlighted, and a scrollbar when they
-    /// don't all fit.
+    /// The list of the languages `picker` lists, under the box it's open
+    /// on: its outline, with room for as many rows as show at once, and
+    /// all of them laid out apart (see [`Renderer::layout_rows`]).
     pub(super) fn layout_picker(
         &self,
         out: &mut Stack,
@@ -480,11 +482,8 @@ impl Renderer {
         width: f32,
     ) -> Result<()> {
         out.y += LIST_GAP;
-        let total = picker.matches.len();
-        let first = picker.first.min(total);
-        let rows = &picker.matches[first..(first + PICKER_ROWS).min(total)];
         let top = out.y;
-        let height = 2.0 * LIST_PAD + rows.len().max(1) as f32 * ROW_H;
+        let height = 2.0 * LIST_PAD + picker.shown() as f32 * ROW_H;
         out.items.push(Item::Shape {
             x: 0.0,
             y: top,
@@ -494,46 +493,53 @@ impl Renderer {
             fill: Some(Paint::Field),
             stroke: Some(Paint::ControlStroke),
         });
+        let row_w = width - 2.0 * LIST_PAD;
+        out.list = Some(Box::new(ListLayout {
+            rows: self.layout_rows(picker, current, row_w)?,
+            frame: Mark {
+                x: 0.0,
+                y: top,
+                width,
+                height,
+            },
+            viewport: Mark {
+                x: LIST_PAD,
+                y: top + LIST_PAD,
+                width: row_w,
+                height: height - 2.0 * LIST_PAD,
+            },
+            row_h: ROW_H,
+            radius: CONTROL_RADIUS,
+            highlight: picker.highlight,
+        }));
+        out.y += height;
+        Ok(())
+    }
+
+    /// Every language `picker` lists, a row each, `width` wide, `current`
+    /// ticked, and clear of the scrollbar when they don't all fit; or a
+    /// row saying none match.
+    fn layout_rows(&self, picker: &Picker, current: &str, width: f32) -> Result<Layout> {
+        let mut out = Stack::default();
         let format = &self.formats.suggestion;
         let line_h = metrics(&self.text("Ag", format, width)?).1;
-        let (row_x, row_w) = (LIST_PAD, width - 2.0 * LIST_PAD);
-        if rows.is_empty() {
-            let line = self.text(tr().no_languages_match, format, row_w)?;
+        let line_y = |y: f32| y + ((ROW_H - line_h) / 2.0).round();
+        if picker.matches.is_empty() {
+            let line = self.text(tr().no_languages_match, format, width)?;
             out.items.push(Item::Text {
                 layout: line,
-                x: row_x + SELECT_PAD,
-                y: top + LIST_PAD + ((ROW_H - line_h) / 2.0).round(),
+                x: SELECT_PAD,
+                y: line_y(0.0),
                 ink: Ink::Tertiary,
                 accents: Vec::new(),
             });
         }
-        let scrolls = total > PICKER_ROWS;
-        // Clear of the scrollbar.
-        let right = row_x + row_w - SELECT_PAD - if scrolls { 6.0 } else { 0.0 };
-        if scrolls {
-            out.items.push(Item::Fade {
-                y: top + LIST_PAD,
-                height: rows.len() as f32 * ROW_H,
-                top: first > 0,
-                bottom: first + PICKER_ROWS < total,
-            });
-        }
-        for (i, code) in rows.iter().enumerate() {
-            let y = top + LIST_PAD + i as f32 * ROW_H;
-            if picker.highlight == Some(first + i) {
-                out.items.push(Item::Shape {
-                    x: row_x,
-                    y,
-                    width: row_w,
-                    height: ROW_H,
-                    radius: CONTROL_RADIUS,
-                    fill: Some(Paint::Highlight),
-                    stroke: None,
-                });
-            }
-            let line_y = y + ((ROW_H - line_h) / 2.0).round();
-            let mut x = row_x + SELECT_PAD;
-            self.badge(out, code, x, line_y, line_h)?;
+        let scrolls = picker.matches.len() > PICKER_ROWS;
+        let right = width - SELECT_PAD - if scrolls { 6.0 } else { 0.0 };
+        for (i, code) in picker.matches.iter().enumerate() {
+            let y = i as f32 * ROW_H;
+            let mut x = SELECT_PAD;
+            self.badge(&mut out, code, x, line_y(y), line_h)?;
             x += BADGE_W + 10.0;
             let name = translate::name(code);
             let line = self.text(&name, format, width)?;
@@ -550,7 +556,7 @@ impl Renderer {
             out.items.push(Item::Text {
                 layout: line,
                 x,
-                y: line_y,
+                y: line_y(y),
                 ink: Ink::Primary,
                 accents: Vec::new(),
             });
@@ -576,38 +582,28 @@ impl Renderer {
                     out.items.push(Item::Text {
                         layout: line,
                         x,
-                        y: line_y,
+                        y: line_y(y),
                         ink: Ink::Tertiary,
                         accents: Vec::new(),
                     });
                 }
             }
             out.links.push(Link {
-                x: row_x,
+                x: 0.0,
                 y,
-                width: row_w,
+                width,
                 height: ROW_H,
                 target: Target::Pick(LangCode::new(*code)),
             });
         }
-        if scrolls {
-            out.items.push(Item::Unfade);
-            // Clear of the list's corners, where its edge curves.
-            let track = height - 2.0 * LIST_RADIUS;
-            let thumb_h = (track * PICKER_ROWS as f32 / total as f32).max(16.0);
-            let thumb_y = (track - thumb_h) * first as f32 / (total - PICKER_ROWS) as f32;
-            out.items.push(Item::Shape {
-                x: width - LIST_PAD - 5.0,
-                y: top + LIST_RADIUS + thumb_y.round(),
-                width: 3.0,
-                height: thumb_h.round(),
-                radius: 1.5,
-                fill: Some(Paint::Thumb),
-                stroke: None,
-            });
-        }
-        out.y += height;
-        Ok(())
+        Ok(Layout {
+            items: out.items,
+            width,
+            height: picker.matches.len().max(1) as f32 * ROW_H,
+            links: out.links,
+            caret: None,
+            list: None,
+        })
     }
 
     /// The translation, the definition it was asked with in its language,

@@ -63,6 +63,7 @@ impl Renderer {
                     height: phon_h,
                     links: Vec::new(),
                     caret: None,
+                    list: None,
                 },
                 x,
                 y,
@@ -80,6 +81,7 @@ impl Renderer {
             height: title_h,
             links: Vec::new(),
             caret: None,
+            list: None,
         };
         Ok(Heading {
             word,
@@ -111,6 +113,7 @@ impl Renderer {
             height,
             links: Vec::new(),
             caret: None,
+            list: None,
         };
         Ok((layout, w, caret))
     }
@@ -136,6 +139,7 @@ impl Renderer {
             height,
             links: Vec::new(),
             caret: None,
+            list: None,
         };
         Ok((layout, w, caret))
     }
@@ -191,6 +195,7 @@ impl Renderer {
             height,
             links: Vec::new(),
             caret: None,
+            list: None,
         })
     }
 
@@ -228,6 +233,7 @@ impl Renderer {
             height,
             links: Vec::new(),
             caret: None,
+            list: None,
         })
     }
 
@@ -253,6 +259,7 @@ impl Renderer {
             height,
             links: Vec::new(),
             caret: None,
+            list: None,
         })
     }
 
@@ -279,6 +286,7 @@ impl Renderer {
             height,
             links: Vec::new(),
             caret: None,
+            list: None,
         })
     }
 
@@ -314,6 +322,7 @@ impl Renderer {
             height,
             links: Vec::new(),
             caret: None,
+            list: None,
         })
     }
 
@@ -327,6 +336,7 @@ impl Renderer {
             height,
             links: Vec::new(),
             caret: None,
+            list: None,
         })
     }
 
@@ -377,6 +387,7 @@ impl Renderer {
             height,
             links: Vec::new(),
             caret: None,
+            list: None,
         })
     }
 
@@ -390,6 +401,7 @@ impl Renderer {
             height,
             links: Vec::new(),
             caret: None,
+            list: None,
         })
     }
 

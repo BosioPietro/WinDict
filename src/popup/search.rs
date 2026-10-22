@@ -94,6 +94,9 @@ impl Popup {
         let size = v2(content_w * s, layout.height * s);
         let c = &self.anim.compositor;
         self.content.show(c, &surface, size, layout.caret, s)?;
+        let list = layout.list.as_deref();
+        self.content
+            .show_list(&self.anim, &self.renderer, &self.theme, list, s)?;
         self.content.set_links(layout.links);
         self.focus_link(None, 0)?;
         // They're the body, under the box's field, and never scroll.

@@ -100,31 +100,23 @@ impl Settings {
             caret.SetSize(v2((m.width * s).round().max(1.0), (m.height * s).round()))?;
             ui::blink(c, caret)?;
         }
-        let (at, group_at) = (boxes.at, boxes.group_at);
-        view.hits.retain(|(hit, _)| !matches!(hit, Hit::Pick(_)));
-        let matches = self.picking.as_ref().map(|p| &p.matches);
-        for link in &layout.links {
-            let Target::Pick(code) = &link.target else {
-                continue;
-            };
-            let found = matches.and_then(|m| m.iter().position(|c| code == c));
-            if let Some(i) = found {
-                let rect = Rect {
-                    x: at.X + link.x * s,
-                    y: at.Y + link.y * s,
-                    w: link.width * s,
-                    h: link.height * s,
-                }
-                .offset(group_at);
-                view.hits.push((Hit::Pick(i), rect));
-            }
-        }
         let moved = view.slack != slack;
         view.slack = slack;
         if moved {
             self.show_slack(true)?;
         }
+        self.show_list(layout.list.as_deref())?;
         Ok(true)
+    }
+
+    /// Shows the list of languages `list` lays out in the boxes, or takes
+    /// it away, fading as the view it was in does.
+    pub(super) fn show_list(&mut self, list: Option<&ListLayout>) -> Result<()> {
+        let (anim, r, t, s) = (&self.anim, &self.renderer, &self.theme, self.scale);
+        match list {
+            Some(list) => self.list.show(anim, r, t, list, s),
+            None => self.list.hide(anim, SLIDE_FADE_MS),
+        }
     }
 
     /// Shows the rows after the languages as far up as the list of matches
@@ -220,6 +212,8 @@ impl Settings {
         self.show_open(false)?;
         self.show_recording()?;
         self.show_slack(false)?;
+        let (languages, _) = self.layout_languages()?;
+        self.show_list(languages.list.as_deref())?;
         self.show_hover(self.hovered)?;
         self.ring_shown = false;
         self.show_focus(false)?;
@@ -1085,6 +1079,9 @@ impl Settings {
         let boxes = Text::new(c, group)?;
         boxes.show(r, languages, s, t)?;
         boxes.visual.SetOffset(at)?;
+        // The list of languages scrolls in the boxes, over its outline.
+        self.list.attach(&boxes.visual.cast()?)?;
+        self.list.apply_theme(t)?;
         let mut blinker = None;
         if let Some(m) = languages.caret {
             let caret = rounded(
@@ -1128,13 +1125,6 @@ impl Settings {
                     parts.hits.push((Hit::Swap, rect));
                     let stop = (Stop::Swap, rect, px(SWAP_RING_RADIUS));
                     parts.stops.push(stop);
-                }
-                Target::Pick(code) => {
-                    let matches = self.picking.as_ref().map(|p| &p.matches);
-                    let found = matches.and_then(|m| m.iter().position(|c| code == c));
-                    if let Some(i) = found {
-                        parts.hits.push((Hit::Pick(i), rect));
-                    }
                 }
                 _ => {}
             }

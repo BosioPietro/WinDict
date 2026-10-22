@@ -22,11 +22,14 @@ use windows_numerics::{Vector2, Vector3};
 use crate::render::{Layout, Renderer};
 use crate::theme::Theme;
 
+mod list;
 mod scroll;
+
+pub use list::List;
 
 pub use scroll::{
     max_scroll, stretch, stretch_limit, thumb_span, Bursts, Glide, Push, ScrollFade, Scrollbar,
-    Track,
+    Track, CARD_ENDS,
 };
 
 // Geometry, in DIPs.

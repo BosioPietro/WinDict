@@ -32,7 +32,6 @@ impl Settings {
             query: p.query.text(),
             caret: p.query.caret_utf16(),
             matches: &p.matches,
-            first: p.first,
             highlight: p.highlight,
         });
         let width = GROUP_W - 2.0 * ROW_PAD;

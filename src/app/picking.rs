@@ -1,7 +1,7 @@
 //! The list a translation's language is picked from: the languages what's
-//! typed in its box matches, the one Enter picks, and how far it's scrolled.
+//! typed in its box matches, and the one Enter picks.
 
-use crate::render::{Side, PICKER_ROWS};
+use crate::render::Side;
 use crate::translate;
 
 use super::edit::LineEdit;
@@ -17,8 +17,6 @@ pub(crate) struct Picking {
     pub matches: Vec<&'static str>,
     /// Which of them Enter picks.
     pub highlight: Option<usize>,
-    /// The first one the list shows.
-    pub first: usize,
 }
 
 impl Picking {
@@ -29,7 +27,6 @@ impl Picking {
             query: LineEdit::new("", MAX_QUERY_CHARS),
             matches: Vec::new(),
             highlight: None,
-            first: 0,
         };
         picking.refilter(current);
         picking
@@ -44,8 +41,6 @@ impl Picking {
         } else {
             (!self.matches.is_empty()).then_some(0)
         };
-        self.first = 0;
-        self.reveal();
     }
 
     /// The highlighted language's code.
@@ -74,32 +69,13 @@ impl Picking {
             None => last,
         };
         self.highlight = Some(to);
-        self.reveal();
-    }
-
-    /// Scrolls the list `by` rows. Returns whether it moved.
-    pub fn scroll(&mut self, by: isize) -> bool {
-        let max = self.matches.len().saturating_sub(PICKER_ROWS);
-        let first = self.first.saturating_add_signed(by).min(max);
-        std::mem::replace(&mut self.first, first) != first
-    }
-
-    /// Scrolls the list just enough to show the highlighted language.
-    fn reveal(&mut self) {
-        let Some(i) = self.highlight else {
-            return;
-        };
-        if i < self.first {
-            self.first = i;
-        } else if i >= self.first + PICKER_ROWS {
-            self.first = i + 1 - PICKER_ROWS;
-        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::PICKER_ROWS;
 
     fn typed(text: &str) -> Picking {
         let mut picking = Picking::new(Side::To, "it");
@@ -115,9 +91,6 @@ mod tests {
         let picking = Picking::new(Side::To, "ko");
         assert_eq!(picking.matches.len(), translate::LANGUAGES.len());
         assert_eq!(picking.highlighted(), Some("ko"));
-        // Scrolled down to it.
-        let at = picking.highlight.unwrap();
-        assert!(picking.first <= at && at < picking.first + PICKER_ROWS);
     }
 
     #[test]
@@ -131,20 +104,15 @@ mod tests {
     }
 
     #[test]
-    fn steps_and_scrolls_within_the_list() {
+    fn steps_within_the_list() {
         let mut picking = Picking::new(Side::From, "en");
         assert_eq!(picking.highlight, Some(0));
         picking.step(-1);
         assert_eq!(picking.highlight, Some(0));
         picking.step(PICKER_ROWS as isize);
         assert_eq!(picking.highlight, Some(PICKER_ROWS));
-        assert_eq!(picking.first, 1);
         picking.step(100);
         assert_eq!(picking.highlight, Some(picking.matches.len() - 1));
-        assert_eq!(picking.first, picking.matches.len() - PICKER_ROWS);
-        assert!(!picking.scroll(5));
-        assert!(picking.scroll(-100));
-        assert_eq!(picking.first, 0);
         assert!(picking.highlight("fr"));
         assert!(!picking.highlight("fr"));
         assert!(!picking.highlight("xx"));

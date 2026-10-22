@@ -110,6 +110,7 @@ impl Settings {
             content_h: view.height(&self.open),
             max: self.max_scroll(),
             s: self.scale,
+            ends: ui::CARD_ENDS,
         })
     }
 
@@ -163,6 +164,7 @@ impl Settings {
     /// The window lost the mouse, or stopped being the active one: the
     /// thumb lets go.
     pub fn lose_capture(&mut self) -> Result<()> {
+        self.list.release(&self.anim)?;
         let Some(view) = self.view.as_mut() else {
             return Ok(());
         };

@@ -234,7 +234,6 @@ impl App {
             query: p.query.text(),
             caret: p.query.caret_utf16(),
             matches: &p.matches,
-            first: p.first,
             highlight: p.highlight,
         });
         let card = TranslationCard {
@@ -321,7 +320,6 @@ impl App {
             query: p.query.text(),
             caret: p.query.caret_utf16(),
             matches: &p.matches,
-            first: p.first,
             highlight: p.highlight,
         });
         popup.hold_region(picker.is_some());

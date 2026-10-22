@@ -92,22 +92,7 @@ enum Item {
         fill: Option<Paint>,
         stroke: Option<Paint>,
     },
-    /// What's drawn from here to the [`Item::Unfade`] fades out towards
-    /// the top and bottom of the band `y` to `y + height`, where `top` and
-    /// `bottom` say there's more past it.
-    Fade {
-        y: f32,
-        height: f32,
-        top: bool,
-        bottom: bool,
-    },
-    Unfade,
 }
-
-/// How far a list's rows fade out towards an end more of them are past,
-/// and how much of them shows at that end.
-const LIST_FADE: f32 = 16.0;
-const LIST_FADE_EDGE: f32 = 0.25;
 
 /// The colors of an [`Item::Shape`].
 #[derive(Clone, Copy)]
@@ -117,12 +102,8 @@ enum Paint {
     ControlStroke,
     /// The list a language is picked from.
     Field,
-    /// Behind the language Enter picks.
-    Highlight,
     /// The accent, as thick as the rings round focused controls.
     Focus,
-    /// The scrollbar's thumb.
-    Thumb,
 }
 
 /// The flags drawn for the languages WinDict knows.
@@ -192,6 +173,25 @@ pub struct Layout {
     /// The caret of the language box being typed in, which the consumer
     /// draws itself so that it can blink.
     pub caret: Option<Mark>,
+    /// The list a language is being picked from, which the consumer shows
+    /// itself so that it can scroll: only its outline is drawn.
+    pub list: Option<Box<ListLayout>>,
+}
+
+/// A list that scrolls in a layout: all its rows, laid out apart, and the
+/// band of the layout they show through.
+pub struct ListLayout {
+    /// From the top left of the first row.
+    pub rows: Layout,
+    /// The list's outline, and the band in it the rows show through, in
+    /// DIPs in the layout.
+    pub frame: Mark,
+    pub viewport: Mark,
+    pub row_h: f32,
+    /// The corners of the fill behind the row Enter picks.
+    pub radius: f32,
+    /// Which row Enter picks.
+    pub highlight: Option<usize>,
 }
 
 /// The card's heading, laid out: the word, and its pronunciation apart from
@@ -240,9 +240,7 @@ impl Layout {
                 | Item::Key { .. }
                 | Item::Logo { .. }
                 | Item::Flag { .. }
-                | Item::Shape { .. }
-                | Item::Fade { .. }
-                | Item::Unfade => None,
+                | Item::Shape { .. } => None,
             })
             .unwrap_or(0.0)
     }
@@ -307,20 +305,22 @@ pub struct Picker<'a> {
     pub query: &'a str,
     /// Where the caret is in `query`, in UTF-16 units.
     pub caret: u32,
-    /// The codes of the languages that match, and the first one shown.
+    /// The codes of the languages that match.
     pub matches: &'a [&'static str],
-    pub first: usize,
     /// Which of `matches` Enter picks.
     pub highlight: Option<usize>,
 }
 
 impl Picker<'_> {
+    /// How many rows the list shows at once: one, saying none match, if
+    /// none do.
+    fn shown(&self) -> usize {
+        self.matches.len().clamp(1, PICKER_ROWS)
+    }
+
     /// How much shorter the list is than with all its rows shown, in DIPs.
     pub fn spare(&self) -> f32 {
-        let total = self.matches.len();
-        let first = self.first.min(total);
-        let shown = (first + PICKER_ROWS).min(total) - first;
-        (PICKER_ROWS - shown.max(1)) as f32 * ROW_H
+        (PICKER_ROWS - self.shown()) as f32 * ROW_H
     }
 }
 
@@ -383,6 +383,7 @@ struct Stack {
     items: Vec<Item>,
     links: Vec<Link>,
     caret: Option<Mark>,
+    list: Option<Box<ListLayout>>,
     /// Top of the current line.
     y: f32,
 }

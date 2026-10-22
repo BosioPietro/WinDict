@@ -18,13 +18,13 @@ use windows_numerics::{Vector2, Vector3};
 
 use crate::i18n::tr;
 use crate::render::{
-    self, Body, Face, Ink, Link, Mark, Renderer, Target, LANGUAGES_TOP, WORD_SIZE,
+    self, Body, Face, Ink, Link, ListLayout, Mark, Renderer, Target, LANGUAGES_TOP, WORD_SIZE,
 };
 use crate::searchbox::SearchBox;
 use crate::theme::Theme;
 use crate::ui::{
     self, attach, blink, monitor_at, scale, text_sprite, ts, v2, v3, Animator, Bursts, Frame,
-    Glide, Push, ScrollFade, Scrollbar, Track, MARGIN, RESIZE_MS,
+    Glide, List, Push, ScrollFade, Scrollbar, Track, MARGIN, RESIZE_MS,
 };
 use crate::win::{self, create_tooltip, set_tooltip_rect, Window};
 
@@ -494,7 +494,7 @@ impl Popup {
         }
         // Release the text surfaces while idle.
         self.header.release();
-        self.content.release();
+        self.content.release(&self.anim);
         self.back.release();
         self.translate.release();
         self.speak.release();
@@ -660,6 +660,9 @@ impl Popup {
         let c = &self.anim.compositor;
         self.content
             .show(c, &body_surface, size, body_layout.caret, s)?;
+        let list = body_layout.list.as_deref();
+        self.content
+            .show_list(&self.anim, &self.renderer, &self.theme, list, s)?;
 
         self.loader.set_running(&self.anim, shown.loading, s)?;
         self.sync_title();
@@ -848,7 +851,10 @@ impl Popup {
     /// Highlights the button the pointer, in window pixels, is on.
     pub fn hover(&mut self, point: Option<(i32, i32)>) -> Result<()> {
         self.pointer = point;
-        // On the scrollbar, or dragging its thumb, nothing else is hovered.
+        // On a scrollbar, or dragging its thumb, nothing else is hovered.
+        let in_body = point.and_then(|(x, y)| self.body_point(x, y));
+        let on_list = self.content.list().hover_bar(&self.anim, in_body)?;
+        let point = if on_list { None } else { point };
         let point = if self.hover_bar(point)? { None } else { point };
         if self.search.active {
             let card_point = point.map(|(x, y)| self.card_point(x, y));
@@ -865,6 +871,11 @@ impl Popup {
         self.translate.set_hovered(&self.anim, over_translate)?;
         self.speak.set_hovered(&self.anim, over_speak)?;
         self.sync_swap()
+    }
+
+    /// Where the pointer last was on the window, in window pixels.
+    pub fn pointer(&self) -> Option<(i32, i32)> {
+        self.pointer
     }
 
     /// Lightens the button swapping a translation's languages while the

@@ -38,12 +38,14 @@ use crate::dicts;
 use crate::hotkey::{self, held_modifiers, is_modifier, Hotkey};
 use crate::i18n::{self, tr, Language, Strings};
 use crate::lang::LangCode;
-use crate::render::{Align, Face, Ink, Layout, Picker, Renderer, Side, Target, PICKER_ROWS};
+use crate::render::{
+    Align, Face, Ink, Layout, ListLayout, Picker, Renderer, Side, Target, PICKER_ROWS,
+};
 use crate::selection;
 use crate::theme::Theme;
 use crate::ui::{
-    self, scale, ts, v2, v3, Animator, Bursts, Frame, Glide, Push, ScrollFade, Scrollbar, Text,
-    Track, MARGIN,
+    self, scale, ts, v2, v3, Animator, Bursts, Frame, Glide, List, Push, ScrollFade, Scrollbar,
+    Text, Track, MARGIN,
 };
 use crate::win::{self, Window};
 
@@ -879,8 +881,10 @@ pub struct Settings {
     downloads: Vec<Option<(String, bool)>>,
     /// The choice whose pill is gliding over, and the option it's leaving.
     pill_from: Option<(Choice, usize)>,
-    /// The list a default language is being picked from, while it's open.
+    /// The list a default language is being picked from, while it's open,
+    /// and what shows it, in the boxes.
     picking: Option<Picking>,
+    list: List,
     /// What's typed in the email field.
     email: LineEdit,
     /// How far the field's text is scrolled left, in pixels.
@@ -914,6 +918,7 @@ impl Settings {
         let frame = Frame::new(&compositor, &root, &theme)?;
         let notes = NOTES.map(|note| (note.usual(&values), false));
         let email = LineEdit::new(&values.config.mymemory_email, MAX_EMAIL_CHARS);
+        let list = List::new(&compositor)?;
         Ok(Settings {
             hwnd,
             _target: target,
@@ -939,6 +944,7 @@ impl Settings {
             downloads: dicts::languages().map(|_| None).collect(),
             pill_from: None,
             picking: None,
+            list,
             email,
             email_shift: 0.0,
             active: true,
@@ -1054,7 +1060,10 @@ impl Settings {
 
     /// The pointer moved to a point in window pixels, or left.
     pub fn hover(&mut self, point: Option<(i32, i32)>) -> Result<()> {
-        // On the scrollbar, or dragging its thumb, nothing else is hovered.
+        // On a scrollbar, or dragging its thumb, nothing else is hovered.
+        let in_boxes = point.and_then(|(x, y)| self.boxes_point(x, y));
+        let on_list = self.list.hover_bar(&self.anim, in_boxes)?;
+        let point = if on_list { None } else { point };
         let point = if self.hover_bar(point)? { None } else { point };
         let hit = point.and_then(|(x, y)| self.hit_at(x, y));
         self.set_hovered(hit)
@@ -1065,6 +1074,11 @@ impl Settings {
         let hit = self.hit_at(x, y);
         // A click sends a tooltip away, as the system's do.
         self.show_tip(None)?;
+        if let Some((bx, by)) = self.boxes_point(x, y) {
+            if self.list.press(&self.anim, bx, by)? {
+                return Ok(None);
+            }
+        }
         if self.press_bar(x, y)? {
             return Ok(None);
         }
@@ -1101,7 +1115,8 @@ impl Settings {
     /// The left button came up at a point in window pixels: a click, if it's
     /// on what it went down on.
     pub fn release(&mut self, x: i32, y: i32) -> Result<Option<Change>> {
-        if self.view.as_mut().is_some_and(|view| view.bar.release()) {
+        let on_list = self.list.release(&self.anim)?;
+        if on_list | self.view.as_mut().is_some_and(|view| view.bar.release()) {
             self.hover(Some((x, y)))?;
             return Ok(None);
         }
@@ -1282,14 +1297,15 @@ impl Settings {
         Ok(Some(Change::RecordingStopped))
     }
 
-    /// Scrolls by a mouse wheel delta.
-    pub fn wheel(&mut self, delta: i32) -> Result<()> {
-        // The list of languages goes first, until it can't go any further.
-        if let Some(picking) = self.picking.as_mut() {
-            let rows = -(delta as f32 / 120.0 * ui::WHEEL_ROWS).round() as isize;
-            if picking.scroll(rows) {
-                return self.relayout();
-            }
+    /// Scrolls by a mouse wheel delta, the pointer at a point in window
+    /// pixels: the list of languages, however far it can go, when it's on
+    /// it, or else the window.
+    pub fn wheel(&mut self, delta: i32, (x, y): (i32, i32)) -> Result<()> {
+        let in_boxes = self.boxes_point(x, y);
+        if in_boxes.is_some_and(|(x, y)| self.list.contains(x, y)) {
+            self.list.wheel(&self.anim, delta)?;
+            // The highlight moves to the row the pointer's on now.
+            return self.hover(Some((x, y)));
         }
         let mut step = -(delta as f32 / 120.0) * WHEEL_STEP * self.scale;
         // Past the end, it gives a little, and springs back.
@@ -1656,6 +1672,7 @@ impl Settings {
 
     fn hit_at(&self, x: i32, y: i32) -> Option<Hit> {
         let view = self.view.as_ref()?;
+        let in_boxes = self.boxes_point(x, y);
         let (x, y) = self.card_point(x, y);
         if x < 0.0 || x >= self.card.0 || y < 0.0 || y >= self.card.1 {
             return None;
@@ -1666,10 +1683,25 @@ impl Settings {
         if y < view.header_h {
             return None;
         }
+        if let Some((bx, by)) = in_boxes.filter(|&(bx, by)| self.list.contains(bx, by)) {
+            return self.list.row_at(bx, by).map(Hit::Pick);
+        }
         let y = y - view.header_h + self.scroll;
         view.hits(&self.open)
             .find(|(_, r)| r.contains(x, y))
             .map(|(hit, _)| hit)
+    }
+
+    /// A point in window pixels in the default languages' boxes, in pixels
+    /// from their top left, if it's on the part of the window that scrolls.
+    fn boxes_point(&self, x: i32, y: i32) -> Option<(f32, f32)> {
+        let view = self.view.as_ref()?;
+        let (x, y) = self.card_point(x, y);
+        if x < 0.0 || x >= self.card.0 || y < view.header_h || y >= self.card.1 {
+            return None;
+        }
+        let at = view.boxes.at + view.boxes.group_at;
+        Some((x - at.X, y - view.header_h + self.scroll - at.Y))
     }
 
     fn set_hovered(&mut self, hit: Option<Hit>) -> Result<()> {
@@ -1684,12 +1716,12 @@ impl Settings {
         self.show_hover(hit)?;
         // Over the list of languages, the highlight moves along.
         if let Some(Hit::Pick(i)) = hit {
-            let moved = self.picking.as_mut().is_some_and(|p| {
-                let code = p.matches.get(i).copied();
-                code.is_some_and(|code| p.highlight(code))
+            let moved = self.picking.as_mut().and_then(|p| {
+                let code = p.matches.get(i).copied()?;
+                p.highlight(code).then_some(p.highlight)
             });
-            if moved {
-                self.relayout()?;
+            if let Some(row) = moved {
+                self.list.set_highlight(&self.anim, row)?;
             }
         }
         Ok(())

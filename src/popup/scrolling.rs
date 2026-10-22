@@ -22,6 +22,30 @@ impl Popup {
         self.scroll_step(step, precise)
     }
 
+    /// Scrolls the list of languages by a mouse wheel delta, if the pointer
+    /// is on it, however far it can go. Returns whether it was.
+    pub fn scroll_list(&mut self, wheel_delta: i32) -> Result<bool> {
+        let at = self.pointer.and_then(|(x, y)| self.body_point(x, y));
+        let list = self.content.list();
+        if !at.is_some_and(|(x, y)| list.contains(x, y)) {
+            return Ok(false);
+        }
+        list.wheel(&self.anim, wheel_delta)?;
+        Ok(true)
+    }
+
+    /// The row of the list of languages under a point in window pixels.
+    pub fn list_row_at(&mut self, x: i32, y: i32) -> Option<usize> {
+        let (x, y) = self.body_point(x, y)?;
+        self.content.list().row_at(x, y)
+    }
+
+    /// Puts the fill behind `row` in the list of languages, fading from
+    /// where it was.
+    pub fn highlight_list(&mut self, row: Option<usize>) -> Result<()> {
+        self.content.list().set_highlight(&self.anim, row)
+    }
+
     /// Up or Down: scrolls the body as far as a notch of the wheel does.
     pub fn scroll_line(&mut self, down: bool) -> Result<()> {
         if !self.scrolls() {
@@ -112,6 +136,7 @@ impl Popup {
             content_h: self.body_h,
             max: self.max_scroll(),
             s: self.scale,
+            ends: ui::CARD_ENDS,
         }
     }
 
@@ -127,6 +152,11 @@ impl Popup {
     /// scrollbar, it grabs the thumb, or pages towards the point. Returns
     /// whether it was on it.
     pub fn press(&mut self, x: i32, y: i32) -> Result<bool> {
+        if let Some((bx, by)) = self.body_point(x, y) {
+            if self.content.list().press(&self.anim, bx, by)? {
+                return Ok(true);
+            }
+        }
         let (over, y) = self.bar_point(x, y);
         if !over {
             return Ok(false);
@@ -143,9 +173,9 @@ impl Popup {
     /// The left button came up. Returns whether it had gone down on the
     /// scrollbar.
     pub fn release(&mut self) -> Result<bool> {
-        let held = self.scroll_chrome.bar.release();
+        let held = self.content.list().release(&self.anim)? | self.scroll_chrome.bar.release();
         if held {
-            self.hover_bar(self.pointer)?;
+            self.hover(self.pointer)?;
         }
         Ok(held)
     }

@@ -5,14 +5,19 @@ use super::*;
 impl Popup {
     /// The link under a point in window coordinates, if any.
     pub fn link_at(&self, x: i32, y: i32) -> Option<&Target> {
+        let (x, y) = self.body_point(x, y)?;
+        self.content.link_at(x, y, self.scale)
+    }
+
+    /// A point in window coordinates in the body, in pixels from its top
+    /// left, if it's on the part of it in view.
+    pub(super) fn body_point(&self, x: i32, y: i32) -> Option<(f32, f32)> {
         let s = self.scale;
         let (x, y) = (x as f32 - MARGIN * s, y as f32 - self.frame_y());
-        // Only the visible part of the body is clickable.
         if y < self.header_h || y >= self.card_h || x < 0.0 || x >= CARD_W * s {
             return None;
         }
-        let (bx, by) = ((x - PAD_X * s) / s, (y - self.header_h + self.scroll) / s);
-        self.content.link_at(bx, by)
+        Some((x - PAD_X * s, y - self.header_h + self.scroll))
     }
 
     /// Whether the card has links, or buttons, to Tab through.

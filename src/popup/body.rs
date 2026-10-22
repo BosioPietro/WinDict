@@ -19,6 +19,9 @@ pub(super) struct Content {
     /// The first of the focused link's rectangles in `links`.
     focused: Option<usize>,
     swap: SwapHighlight,
+    /// The list a translation's language is picked from, while it's open;
+    /// inside `visual` too.
+    list: List,
 }
 
 impl Content {
@@ -35,6 +38,8 @@ impl Content {
         caret.SetBrush(&caret_brush)?;
         caret.SetOpacity(0.0)?;
         visual.Children()?.InsertAtTop(&caret)?;
+        let list = List::new(c)?;
+        list.attach(&visual.cast()?)?;
         let fade = ScrollFade::new(c, card, &host)?;
         Ok(Content {
             host,
@@ -47,6 +52,7 @@ impl Content {
             caret_brush,
             focused: None,
             swap,
+            list,
         })
     }
 
@@ -70,12 +76,14 @@ impl Content {
         self.rings.brush.SetColor(t.focus())?;
         self.swap.brush.SetColor(t.highlight())?;
         self.caret_brush.SetColor(t.accent)?;
+        self.list.apply_theme(t)?;
         self.fade.set_scale(c, s)
     }
 
     /// Lets go of the body's surface while the card is idle.
-    pub(super) fn release(&self) {
+    pub(super) fn release(&mut self, anim: &Animator) {
         let _ = self.brush.SetSurface(None::<&ICompositionSurface>);
+        let _ = self.list.hide(anim, 0);
     }
 
     pub(super) fn links(&self) -> &[Link] {
@@ -86,12 +94,37 @@ impl Content {
         self.links = links;
     }
 
-    /// The link at a point in the body, in DIPs from its top left.
-    pub(super) fn link_at(&self, x: f32, y: f32) -> Option<&Target> {
+    /// The link at a point in the body, in pixels from its top left, `s`
+    /// per DIP: in the list of languages, the row under it.
+    pub(super) fn link_at(&self, x: f32, y: f32, s: f32) -> Option<&Target> {
+        if self.list.contains(x, y) {
+            return self.list.link_at(x, y);
+        }
+        let (x, y) = (x / s, y / s);
         self.links
             .iter()
             .find(|l| x >= l.x && x < l.x + l.width && y >= l.y && y < l.y + l.height)
             .map(|l| &l.target)
+    }
+
+    /// The list of languages, which takes points in the body's pixels.
+    pub(super) fn list(&mut self) -> &mut List {
+        &mut self.list
+    }
+
+    /// Shows the list of languages `list` lays out, or takes it away.
+    pub(super) fn show_list(
+        &mut self,
+        anim: &Animator,
+        renderer: &Renderer,
+        theme: &Theme,
+        list: Option<&ListLayout>,
+        s: f32,
+    ) -> Result<()> {
+        match list {
+            Some(list) => self.list.show(anim, renderer, theme, list, s),
+            None => self.list.hide(anim, 0),
+        }
     }
 
     /// Where the link Tab is on starts in [`Content::links`], if it's on one.
