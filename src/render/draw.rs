@@ -104,51 +104,13 @@ impl Renderer {
                         width,
                         height,
                     } => {
-                        let outline = D2D1_ROUNDED_RECT {
-                            rect: D2D_RECT_F {
-                                left: *x,
-                                top: *y,
-                                right: x + width,
-                                bottom: y + height,
-                            },
-                            radiusX: 2.0,
-                            radiusY: 2.0,
+                        let rect = D2D_RECT_F {
+                            left: *x,
+                            top: *y,
+                            right: x + width,
+                            bottom: y + height,
                         };
-                        let mask = self.d2d.CreateRoundedRectangleGeometry(&outline)?;
-                        let mut layer = D2D1_LAYER_PARAMETERS1 {
-                            contentBounds: outline.rect,
-                            geometricMask: std::mem::ManuallyDrop::new(Some(mask.cast()?)),
-                            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                            maskTransform: Matrix3x2::identity(),
-                            opacity: 1.0,
-                            opacityBrush: std::mem::ManuallyDrop::new(None),
-                            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
-                        };
-                        dc.PushLayer(&layer, None);
-                        let mut outer = Matrix3x2::default();
-                        dc.GetTransform(&mut outer);
-                        // Drawn on a 60 by 40 grid.
-                        dc.SetTransform(
-                            &(Matrix3x2::scale(width / 60.0, height / 40.0)
-                                * Matrix3x2::translation(*x, *y)
-                                * outer),
-                        );
-                        let result = draw_flag(dc, *flag);
-                        dc.SetTransform(&outer);
-                        dc.PopLayer();
-                        std::mem::ManuallyDrop::drop(&mut layer.geometricMask);
-                        result?;
-                        let half = 0.5 / scale;
-                        let edge = D2D1_ROUNDED_RECT {
-                            rect: D2D_RECT_F {
-                                left: x + half,
-                                top: y + half,
-                                right: x + width - half,
-                                bottom: y + height - half,
-                            },
-                            ..outline
-                        };
-                        dc.DrawRoundedRectangle(&edge, &flag_edge, 1.0 / scale, None);
+                        self.draw_flag_item(dc, *flag, rect, scale, &flag_edge)?;
                     }
                     Item::Shape {
                         x,
@@ -198,57 +160,8 @@ impl Renderer {
                         top,
                         bottom,
                     } => {
-                        let at = |position: f32, faded: bool| D2D1_GRADIENT_STOP {
-                            position,
-                            color: D2D1_COLOR_F {
-                                r: 0.0,
-                                g: 0.0,
-                                b: 0.0,
-                                a: if faded { LIST_FADE_EDGE } else { 1.0 },
-                            },
-                        };
-                        let length = (LIST_FADE / height).min(0.5);
-                        let stops = [
-                            at(0.0, *top),
-                            at(length, false),
-                            at(1.0 - length, false),
-                            at(1.0, *bottom),
-                        ];
-                        let target: &ID2D1RenderTarget = dc;
-                        let stops = target.CreateGradientStopCollection(
-                            &stops,
-                            D2D1_GAMMA_2_2,
-                            D2D1_EXTEND_MODE_CLAMP,
-                        )?;
-                        let mask = dc.CreateLinearGradientBrush(
-                            &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
-                                startPoint: Vector2 { X: 0.0, Y: *y },
-                                endPoint: Vector2 {
-                                    X: 0.0,
-                                    Y: y + height,
-                                },
-                            },
-                            None,
-                            &stops,
-                        )?;
-                        let mut layer = D2D1_LAYER_PARAMETERS1 {
-                            contentBounds: D2D_RECT_F {
-                                left: -f32::MAX,
-                                top: -f32::MAX,
-                                right: f32::MAX,
-                                bottom: f32::MAX,
-                            },
-                            geometricMask: std::mem::ManuallyDrop::new(None),
-                            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                            maskTransform: Matrix3x2::identity(),
-                            opacity: 1.0,
-                            opacityBrush: std::mem::ManuallyDrop::new(Some(mask.cast()?)),
-                            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
-                        };
-                        dc.PushLayer(&layer, None);
-                        std::mem::ManuallyDrop::drop(&mut layer.opacityBrush);
                         // Kept until the layer's popped.
-                        fading = Some(mask);
+                        fading = Some(fade_layer(dc, *y, *height, *top, *bottom)?);
                     }
                     Item::Unfade => {
                         dc.PopLayer();
@@ -259,6 +172,59 @@ impl Renderer {
             Ok(())
         })?;
         Ok(surface)
+    }
+
+    /// Draws `flag` clipped to the rounded `rect`, with a hairline edge.
+    unsafe fn draw_flag_item(
+        &self,
+        dc: &ID2D1DeviceContext,
+        flag: Flag,
+        rect: D2D_RECT_F,
+        scale: f32,
+        edge_brush: &ID2D1SolidColorBrush,
+    ) -> Result<()> {
+        let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+        let outline = D2D1_ROUNDED_RECT {
+            rect,
+            radiusX: 2.0,
+            radiusY: 2.0,
+        };
+        let mask = self.d2d.CreateRoundedRectangleGeometry(&outline)?;
+        let mut layer = D2D1_LAYER_PARAMETERS1 {
+            contentBounds: outline.rect,
+            geometricMask: std::mem::ManuallyDrop::new(Some(mask.cast()?)),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: 1.0,
+            opacityBrush: std::mem::ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+        };
+        dc.PushLayer(&layer, None);
+        let mut outer = Matrix3x2::default();
+        dc.GetTransform(&mut outer);
+        // Drawn on a 60 by 40 grid.
+        dc.SetTransform(
+            &(Matrix3x2::scale(width / 60.0, height / 40.0)
+                * Matrix3x2::translation(rect.left, rect.top)
+                * outer),
+        );
+        let result = draw_flag(dc, flag);
+        dc.SetTransform(&outer);
+        dc.PopLayer();
+        std::mem::ManuallyDrop::drop(&mut layer.geometricMask);
+        result?;
+        let half = 0.5 / scale;
+        let edge = D2D1_ROUNDED_RECT {
+            rect: D2D_RECT_F {
+                left: rect.left + half,
+                top: rect.top + half,
+                right: rect.right - half,
+                bottom: rect.bottom - half,
+            },
+            ..outline
+        };
+        dc.DrawRoundedRectangle(&edge, edge_brush, 1.0 / scale, None);
+        Ok(())
     }
 
     /// A soft shadow for a rounded rectangle, meant to be stretched by a
@@ -447,6 +413,65 @@ impl Renderer {
             result
         }
     }
+}
+
+/// Pushes a layer that fades what's drawn into it towards the top and
+/// bottom of `y` to `y + height`, where `top` and `bottom` say it's cut off.
+/// The returned brush must be kept until the layer is popped.
+unsafe fn fade_layer(
+    dc: &ID2D1DeviceContext,
+    y: f32,
+    height: f32,
+    top: bool,
+    bottom: bool,
+) -> Result<ID2D1LinearGradientBrush> {
+    let at = |position: f32, faded: bool| D2D1_GRADIENT_STOP {
+        position,
+        color: D2D1_COLOR_F {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: if faded { LIST_FADE_EDGE } else { 1.0 },
+        },
+    };
+    let length = (LIST_FADE / height).min(0.5);
+    let stops = [
+        at(0.0, top),
+        at(length, false),
+        at(1.0 - length, false),
+        at(1.0, bottom),
+    ];
+    let target: &ID2D1RenderTarget = dc;
+    let stops =
+        target.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)?;
+    let mask = dc.CreateLinearGradientBrush(
+        &D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+            startPoint: Vector2 { X: 0.0, Y: y },
+            endPoint: Vector2 {
+                X: 0.0,
+                Y: y + height,
+            },
+        },
+        None,
+        &stops,
+    )?;
+    let mut layer = D2D1_LAYER_PARAMETERS1 {
+        contentBounds: D2D_RECT_F {
+            left: -f32::MAX,
+            top: -f32::MAX,
+            right: f32::MAX,
+            bottom: f32::MAX,
+        },
+        geometricMask: std::mem::ManuallyDrop::new(None),
+        maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+        maskTransform: Matrix3x2::identity(),
+        opacity: 1.0,
+        opacityBrush: std::mem::ManuallyDrop::new(Some(mask.cast()?)),
+        layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+    };
+    dc.PushLayer(&layer, None);
+    std::mem::ManuallyDrop::drop(&mut layer.opacityBrush);
+    Ok(mask)
 }
 
 /// Draws `flag` filling 0,0 to 60,40.
