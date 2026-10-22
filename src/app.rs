@@ -965,14 +965,6 @@ impl App {
     }
 }
 
-/// Where `language` comes in the order of preference: that of the
-/// settings' list, then any it doesn't know.
-fn language_rank(language: &str) -> usize {
-    dicts::languages()
-        .position(|(code, _)| code == language)
-        .unwrap_or(usize::MAX)
-}
-
 /// Why the shortcut couldn't be registered.
 enum Unbound {
     Invalid(String),

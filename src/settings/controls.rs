@@ -21,8 +21,7 @@ impl Settings {
         if on {
             // In the order of the list, which is the order of preference.
             languages.push(code.to_owned());
-            let rank = |l: &String| dicts::languages().position(|(c, _)| c == l);
-            languages.sort_by_key(|l| rank(l).unwrap_or(usize::MAX));
+            languages.sort_by_key(|l| dicts::rank(l));
         } else if languages.len() > 1 {
             languages.retain(|l| l != code);
         } else {

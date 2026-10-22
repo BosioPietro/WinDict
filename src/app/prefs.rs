@@ -16,7 +16,7 @@ impl App {
                 config.languages.push(language.to_owned());
             }
         }
-        config.languages.sort_by_key(|l| language_rank(l));
+        config.languages.sort_by_key(|l| dicts::rank(l));
         Values {
             config,
             autostart: autostart::is_enabled(),
@@ -287,7 +287,7 @@ impl App {
     /// Looks words up in the languages of the setting, in order of
     /// preference, and saves it.
     pub(super) fn use_languages(&mut self) {
-        self.config.languages.sort_by_key(|l| language_rank(l));
+        self.config.languages.sort_by_key(|l| dicts::rank(l));
         if let Err(e) = offline::set_languages(&self.config.languages) {
             self.tray.notify(tr().dictionary_not_loaded, &e);
         }

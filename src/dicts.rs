@@ -42,6 +42,14 @@ pub fn languages() -> impl Iterator<Item = (&'static str, &'static str)> {
     std::iter::once(("en", "English")).chain(DOWNLOADS.iter().map(|d| (d.language, d.name)))
 }
 
+/// Where `language` comes in the order of preference: that of
+/// [`languages`], then any it doesn't know.
+pub fn rank(language: &str) -> usize {
+    languages()
+        .position(|(code, _)| code == language)
+        .unwrap_or(usize::MAX)
+}
+
 /// What `language` is called, in itself ("Italiano"), or its code, in
 /// capitals, if it isn't one WinDict knows.
 pub fn name(language: &str) -> String {
