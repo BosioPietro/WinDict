@@ -33,7 +33,7 @@ use windows_numerics::{Vector2, Vector3};
 
 use crate::app::edit::{Input, LineEdit, Motion};
 use crate::app::picking::Picking;
-use crate::config::{Config, ThemeMode};
+use crate::config::{Config, SelectionMode, ThemeMode};
 use crate::dicts;
 use crate::hotkey::{self, held_modifiers, is_modifier, Hotkey};
 use crate::i18n::{tr, Language, Strings};
@@ -74,7 +74,7 @@ pub enum Change {
     MaxSynonyms(usize),
     ShowExamples(bool),
     OnlineLookup(bool),
-    UiAutomation(bool),
+    Selection(SelectionMode),
     Animations(bool),
     Autostart(bool),
     /// The languages translated from and into when the card can't tell,
@@ -89,15 +89,13 @@ pub enum Change {
 enum Switch {
     Autostart,
     Online,
-    Automation,
     Examples,
     Animations,
 }
 
-const SWITCHES: [Switch; 5] = [
+const SWITCHES: [Switch; 4] = [
     Switch::Autostart,
     Switch::Online,
-    Switch::Automation,
     Switch::Examples,
     Switch::Animations,
 ];
@@ -138,14 +136,43 @@ const THEMES: [(ThemeMode, Label); 3] = [
     (ThemeMode::Dark, |s| s.theme_dark),
 ];
 
+/// The ways of reading the selection, each with what it does.
+const SELECTIONS: [(SelectionMode, Label, Label); 3] = [
+    (
+        SelectionMode::Automatic,
+        |s| s.selection_automatic,
+        |s| s.selection_automatic_detail,
+    ),
+    (
+        SelectionMode::Direct,
+        |s| s.selection_direct,
+        |s| s.selection_direct_detail,
+    ),
+    (
+        SelectionMode::Clipboard,
+        |s| s.selection_clipboard,
+        |s| s.selection_clipboard_detail,
+    ),
+];
+
+/// What the chosen way of reading the selection does.
+fn selection_detail(mode: SelectionMode) -> &'static str {
+    let (_, _, detail) = SELECTIONS
+        .iter()
+        .find(|(m, _, _)| *m == mode)
+        .unwrap_or(&SELECTIONS[0]);
+    detail(tr())
+}
+
 /// A setting chosen from a few options, side by side.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Choice {
     Theme,
     Language,
+    Selection,
 }
 
-const CHOICES: [Choice; 2] = [Choice::Theme, Choice::Language];
+const CHOICES: [Choice; 3] = [Choice::Theme, Choice::Language, Choice::Selection];
 
 impl Choice {
     fn names(self) -> Vec<&'static str> {
@@ -153,6 +180,16 @@ impl Choice {
             Choice::Theme => THEMES.iter().map(|(_, name)| name(tr())).collect(),
             // Each in itself, so that it's found whichever language this is.
             Choice::Language => Language::ALL.iter().map(|l| l.name()).collect(),
+            Choice::Selection => SELECTIONS.iter().map(|(_, name, _)| name(tr())).collect(),
+        }
+    }
+
+    /// How wide each option is: the way of reading the selection has the
+    /// row to itself, the others share it with their names.
+    fn segment_w(self) -> f32 {
+        match self {
+            Choice::Selection => (GROUP_W - TEXT_X - ROW_PAD) / SELECTIONS.len() as f32,
+            Choice::Theme | Choice::Language => SEGMENT_W,
         }
     }
 }
@@ -172,15 +209,17 @@ fn summary(languages: &[LangCode]) -> String {
 enum Note {
     Shortcut,
     Language,
+    Selection,
 }
 
-const NOTES: [Note; 2] = [Note::Shortcut, Note::Language];
+const NOTES: [Note; 3] = [Note::Shortcut, Note::Language, Note::Selection];
 
 impl Note {
     fn usual(self, values: &Values) -> String {
         match self {
             Note::Shortcut => tr().shortcut_detail.into(),
             Note::Language => summary(&values.config.languages),
+            Note::Selection => selection_detail(values.config.selection).into(),
         }
     }
 }
@@ -252,8 +291,8 @@ enum Control {
     Switch(Switch),
     Choice(Choice),
     Counter(Counter),
-    /// Opens the list of languages under it. It's the last row, so that
-    /// only the footer moves as the list opens.
+    /// Opens the list of languages under it. It's the last row of its
+    /// group, so that only what's below the group moves as the list opens.
     Languages,
     /// The field for the MyMemory email, with an info symbol after the
     /// setting's name.
@@ -262,6 +301,9 @@ enum Control {
     /// picked. It's taller than the other rows, and as tall as the list
     /// when that's open.
     Translate,
+    /// The ways of reading the selection, under the setting's name and over
+    /// what the chosen one does.
+    Selection,
 }
 
 impl Control {
@@ -269,11 +311,11 @@ impl Control {
         match self {
             Control::Shortcut => SHORTCUT_W,
             Control::Switch(_) => SWITCH_W,
-            Control::Choice(choice) => choice.names().len() as f32 * SEGMENT_W,
+            Control::Choice(choice) => choice.names().len() as f32 * choice.segment_w(),
             Control::Counter(counter) => counter.width(),
             Control::Languages => CHEVRON_W,
             Control::Email => FIELD_W,
-            Control::Translate => 0.0,
+            Control::Translate | Control::Selection => 0.0,
         }
     }
 }
@@ -369,6 +411,26 @@ const SECTIONS: &[(Label, &[Row])] = &[
         ],
     ),
     (
+        |s| s.lookup,
+        &[
+            row(
+                "\u{E753}",
+                |s| s.online_dictionary,
+                |s| s.online_dictionary_detail,
+                Control::Switch(Switch::Online),
+            ),
+            // Its description is what the chosen way does.
+            row("\u{E77F}", |s| s.read_selection, |_| "", Control::Selection),
+            // Its description sums up the languages chosen, each in itself.
+            row(
+                "\u{E774}",
+                |s| s.languages,
+                |_| "English",
+                Control::Languages,
+            ),
+        ],
+    ),
+    (
         |s| s.translation,
         &[
             row(
@@ -382,30 +444,6 @@ const SECTIONS: &[(Label, &[Row])] = &[
                 |s| s.mymemory_email,
                 |s| s.mymemory_email_detail,
                 Control::Email,
-            ),
-        ],
-    ),
-    (
-        |s| s.lookup,
-        &[
-            row(
-                "\u{E753}",
-                |s| s.online_dictionary,
-                |s| s.online_dictionary_detail,
-                Control::Switch(Switch::Online),
-            ),
-            row(
-                "\u{E8B3}",
-                |s| s.read_selection,
-                |s| s.read_selection_detail,
-                Control::Switch(Switch::Automation),
-            ),
-            // Its description sums up the languages chosen, each in itself.
-            row(
-                "\u{E774}",
-                |s| s.languages,
-                |_| "English",
-                Control::Languages,
             ),
         ],
     ),
@@ -570,10 +608,9 @@ struct LanguagesView {
     list_h: f32,
     /// In the order of [`dicts::languages`].
     items: Vec<LanguageView>,
-    /// What comes after, which moves down as the list opens, and where it
-    /// rests with the list shut.
-    footer: ContainerVisual,
-    footer_at: Vector3,
+    /// What comes after, which moves down as the list opens: the groups
+    /// below and the footer. It rests at the top with the list shut.
+    after: ContainerVisual,
     /// How much shorter the languages row is than with the list full, and
     /// where, with it full, what it moves up starts.
     slack: f32,
@@ -1282,10 +1319,6 @@ impl Settings {
                         v.config.online_lookup = on;
                         Change::OnlineLookup(on)
                     }
-                    Switch::Automation => {
-                        v.config.use_ui_automation = on;
-                        Change::UiAutomation(on)
-                    }
                     Switch::Examples => {
                         v.config.show_examples = on;
                         Change::ShowExamples(on)
@@ -1494,8 +1527,9 @@ mod tests {
 
     #[test]
     fn languages_row_comes_last() {
-        // Only the footer moves as the list of languages opens.
-        let (_, rows) = SECTIONS.last().unwrap();
+        // Only what's below its group moves as the list of languages opens.
+        let listed = |rows: &[Row]| rows.iter().any(|r| matches!(r.control, Control::Languages));
+        let (_, rows) = SECTIONS.iter().find(|(_, rows)| listed(rows)).unwrap();
         assert!(matches!(rows.last().unwrap().control, Control::Languages));
         let count = SECTIONS
             .iter()

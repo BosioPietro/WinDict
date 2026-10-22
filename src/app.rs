@@ -31,7 +31,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Composition::Compositor;
 
 use crate::autostart;
-use crate::config::{self, Config};
+use crate::config::{self, Config, SelectionMode};
 use crate::dictionary::{self, Definition, Detail, Lookup, NormalizeError};
 use crate::dicts;
 use crate::hotkey;
@@ -72,7 +72,11 @@ const WM_APP_TRAY: u32 = WM_APP + 1;
 const WM_APP_EVENT: u32 = WM_APP + 2;
 const WM_APP_DISMISS: u32 = WM_APP + 4;
 const WM_APP_WHEEL: u32 = WM_APP + 5;
+/// Read the selection: the request in `wparam`, and how in `lparam`, as
+/// `CAPTURE_*` flags.
 const WM_APP_CAPTURE: u32 = WM_APP + 6;
+const CAPTURE_UI_AUTOMATION: isize = 1;
+const CAPTURE_SKIP_CLIPBOARD: isize = 2;
 const WM_APP_CLICK: u32 = WM_APP + 7;
 const WM_APP_BACK: u32 = WM_APP + 8;
 const WM_APP_CLOSE_SETTINGS: u32 = WM_APP + 9;
@@ -311,6 +315,8 @@ struct Installing {
 
 /// What the capture, lookup and download threads hand the UI thread.
 enum Event {
+    /// The capture is waiting for a copy of the selection, for the request.
+    Copying(u64),
     Captured(Captured),
     Looked(Looked),
     Corrected(Corrected),
@@ -383,6 +389,8 @@ pub struct App {
     inbox: Receiver<Event>,
     events: Events,
     request: u64,
+    /// The card is open on its way, while the capture waits for a copy.
+    copying: bool,
     /// Online answers: definitions, and definite "not found"s.
     cache: Recent<Query, Lookup>,
     /// The offline entry for the current request, if any.
@@ -471,6 +479,7 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             inbox,
             events,
             request: 0,
+            copying: false,
             cache: Recent::new(CACHE_SIZE),
             local: None,
             current: None,
@@ -577,8 +586,11 @@ fn spawn_capture_thread(events: Events) -> u32 {
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             if msg.hwnd.is_invalid() && msg.message == WM_APP_CAPTURE {
                 let id = msg.wParam.0 as u64;
-                let use_ui_automation = msg.lParam.0 != 0;
-                let selection = capturer.capture(use_ui_automation);
+                let use_ui_automation = msg.lParam.0 & CAPTURE_UI_AUTOMATION != 0;
+                let use_clipboard = msg.lParam.0 & CAPTURE_SKIP_CLIPBOARD == 0;
+                let selection = capturer.capture(use_ui_automation, use_clipboard, || {
+                    events.send(Event::Copying(id))
+                });
                 events.send(Event::Captured(Captured { id, selection }));
             } else {
                 let _ = TranslateMessage(&msg);
@@ -688,6 +700,7 @@ impl App {
 
     fn on_hotkey(&mut self) {
         self.request += 1;
+        self.copying = false;
         // The card has the keyboard (a search): there's no selection to
         // read, so open a fresh search box, or close the one that's open.
         let focused = self
@@ -706,8 +719,8 @@ impl App {
                 self.capture_thread,
                 WM_APP_CAPTURE,
                 WPARAM(self.request as usize),
-                // Sent with every request so "Reload settings" applies it.
-                LPARAM(self.config.use_ui_automation as isize),
+                // Sent with every request so "Reload settings" applies them.
+                LPARAM(capture_flags(&self.config)),
             );
         }
     }
@@ -716,6 +729,7 @@ impl App {
     fn on_events(&mut self) {
         while let Ok(event) = self.inbox.try_recv() {
             match event {
+                Event::Copying(id) => self.on_copying(id),
                 Event::Captured(captured) => self.on_selection(captured),
                 Event::Looked(looked) => self.on_result(looked),
                 Event::Corrected(corrected) => self.on_corrected(corrected),
@@ -726,8 +740,37 @@ impl App {
         }
     }
 
+    /// The selection is being copied, which can take up to a few hundred ms
+    /// (or never come, when nothing is selected): open the card on its way,
+    /// at the pointer, where a copied word would open it too.
+    fn on_copying(&mut self, id: u64) {
+        if id != self.request {
+            return;
+        }
+        self.current = None;
+        self.search = None;
+        self.history.clear();
+        (self.translatable, self.translating) = (None, None);
+        self.sync_back_keys();
+        self.show_body(
+            anchor_or_cursor(None),
+            "WinDict",
+            None,
+            Body::Loading,
+            false,
+        );
+        self.copying = self.popup.as_ref().is_some_and(|p| p.visible);
+    }
+
     fn on_selection(&mut self, captured: Captured) {
         if captured.id != self.request {
+            return;
+        }
+        // The card opened on its way turns into the answer in place, unless
+        // it was closed meanwhile.
+        let in_place = std::mem::take(&mut self.copying);
+        let visible = self.popup.as_ref().is_some_and(|p| p.visible);
+        if in_place && !visible {
             return;
         }
         self.current = None;
@@ -750,7 +793,12 @@ impl App {
             word,
             language: None,
         };
-        self.lookup(query, Place::New(anchor_or_cursor(anchor)));
+        let place = if in_place {
+            Place::Same(Transition::Replace)
+        } else {
+            Place::New(anchor_or_cursor(anchor))
+        };
+        self.lookup(query, place);
     }
 
     /// The pointer over the card: over the list of languages, it moves the
@@ -977,6 +1025,15 @@ enum Unbound {
 /// on a screen.
 fn usable_anchor(anchor: Option<RECT>) -> Option<RECT> {
     anchor.filter(|r| r.right > r.left && selection::is_line_sized(r))
+}
+
+/// How the settings say to read the selection, as `CAPTURE_*` flags.
+fn capture_flags(config: &Config) -> isize {
+    match config.selection {
+        SelectionMode::Automatic => CAPTURE_UI_AUTOMATION,
+        SelectionMode::Direct => CAPTURE_UI_AUTOMATION | CAPTURE_SKIP_CLIPBOARD,
+        SelectionMode::Clipboard => 0,
+    }
 }
 
 fn anchor_or_cursor(anchor: Option<RECT>) -> RECT {

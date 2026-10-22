@@ -153,7 +153,7 @@ impl App {
                 }
                 self.sync_link_keys();
             }
-            Change::UiAutomation(on) => self.config.use_ui_automation = on,
+            Change::Selection(mode) => self.config.selection = mode,
             Change::Animations(on) => {
                 self.config.animations = Some(on);
                 ui::set_motion(on);

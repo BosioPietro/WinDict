@@ -84,7 +84,8 @@ impl Settings {
             self.scale,
         );
         let px = |dip: f32| (dip * s).round();
-        let (segment, h) = (px(SEGMENT_W), px(SEGMENT_H));
+        let (segment_w, h) = (choice.segment_w(), px(SEGMENT_H));
+        let segment = px(segment_w);
         let names = choice.names();
         let n = names.len() as f32;
         let at = Rect {
@@ -125,7 +126,7 @@ impl Settings {
             let x = i as f32 * segment;
             let label = Text::new(c, &root)?;
             let line =
-                r.layout_aligned(name, Face::Menu, Ink::Primary, SEGMENT_W, Align::Center)?;
+                r.layout_aligned(name, Face::Menu, Ink::Primary, segment_w, Align::Center)?;
             let size = label.show(r, &line, s, t)?;
             label
                 .visual

@@ -178,8 +178,17 @@ strings! {
     lookup: "Lookup",
     online_dictionary: "Online dictionary",
     online_dictionary_detail: "For pronunciations, and words the built-in one lacks",
-    read_selection: "Read selections directly",
-    read_selection_detail: "Leaves the clipboard alone in apps that allow it",
+    read_selection: "Read selections",
+    // Its options, each explained under them once chosen.
+    selection_automatic: "Automatic",
+    selection_automatic_detail: "Reads the selection directly, and copies it in apps \
+        where that isn\u{2019}t possible. Works in every app",
+    selection_direct: "Direct only",
+    selection_direct_detail: "Opens faster, but misses selections in apps that \
+        can\u{2019}t be read directly. Switch back if words go missing",
+    selection_clipboard: "Clipboard only",
+    selection_clipboard_detail: "Always copies the selection, which is slower. Try it \
+        if an app gives the wrong text",
     languages: "Languages",
 
     // Errors, which reach the user as the detail of a message.

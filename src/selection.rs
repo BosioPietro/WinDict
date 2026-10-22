@@ -98,8 +98,20 @@ impl Capturer {
         }
     }
 
-    pub fn capture(&self, use_ui_automation: bool) -> Option<Selection> {
+    /// Reads the selection, calling `copying` first if it has to wait for a
+    /// copy that may take a while to come, or never come. Without
+    /// `use_clipboard`, only what UI Automation finds is read.
+    pub fn capture(
+        &self,
+        use_ui_automation: bool,
+        use_clipboard: bool,
+        copying: impl FnOnce(),
+    ) -> Option<Selection> {
         let foreground = unsafe { GetForegroundWindow() };
+        // Start and Search sit in a z-order band above every normal window,
+        // so the card would open hidden behind them. With UI access (the
+        // signed install) the card can go above them instead.
+        let flyout = !has_ui_access() && is_shell_flyout(foreground);
         let found = if use_ui_automation {
             self.via_ui_automation()
         } else {
@@ -113,7 +125,11 @@ impl Capturer {
         // When nothing is selected, a copy would never come: skip waiting
         // for one where UI Automation has already said so. In terminals
         // Ctrl+C without a selection interrupts the running program.
-        if selection.is_none() && !known_empty && !is_terminal(foreground) {
+        if use_clipboard && selection.is_none() && !known_empty && !is_terminal(foreground) {
+            // A card can't be shown over Start/Search until they're closed.
+            if !flyout {
+                copying();
+            }
             selection = self
                 .via_clipboard()
                 .map(|text| Selection { text, anchor: None });
@@ -126,10 +142,8 @@ impl Capturer {
                 anchor: Some(r),
             });
         }
-        // Start and Search sit in a z-order band above every normal window,
-        // so the card would open hidden behind them: close them first. With
-        // UI access (the signed install) the card can go above them instead.
-        if !has_ui_access() && is_shell_flyout(foreground) {
+        // Close Start/Search before the card appears.
+        if flyout {
             close_flyout();
             // Let the closing animation finish before the card appears.
             wait(Duration::from_millis(200));
@@ -248,7 +262,7 @@ impl Capturer {
         let before = unsafe { GetClipboardSequenceNumber() };
         send_copy();
 
-        let deadline = Instant::now() + Duration::from_millis(600);
+        let deadline = Instant::now() + Duration::from_millis(400);
         let mut changed = false;
         while Instant::now() < deadline {
             wait(Duration::from_millis(10));

@@ -42,7 +42,6 @@ impl Settings {
         match sw {
             Switch::Autostart => self.values.autostart,
             Switch::Online => self.values.config.online_lookup,
-            Switch::Automation => self.values.config.use_ui_automation,
             Switch::Examples => self.values.config.show_examples,
             Switch::Animations => self.values.config.animated(),
         }
@@ -70,6 +69,9 @@ impl Settings {
         match choice {
             Choice::Theme => THEMES.iter().position(|(mode, _)| *mode == config.theme),
             Choice::Language => Language::ALL.iter().position(|&l| l == config.ui_language),
+            Choice::Selection => SELECTIONS
+                .iter()
+                .position(|(mode, _, _)| *mode == config.selection),
         }
         .unwrap_or(0)
     }
@@ -89,6 +91,12 @@ impl Settings {
                 let language = Language::ALL[i];
                 self.values.config.ui_language = language;
                 Change::Interface(language)
+            }
+            Choice::Selection => {
+                let mode = SELECTIONS[i].0;
+                self.values.config.selection = mode;
+                self.set_note(Note::Selection, selection_detail(mode), false)?;
+                Change::Selection(mode)
             }
         };
         self.show_choice(choice, true)?;

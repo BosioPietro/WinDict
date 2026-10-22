@@ -444,7 +444,7 @@ impl Settings {
     }
 
     /// Opens the list under the languages row, or shuts it: the group grows
-    /// or shrinks with it, the footer moving down or up, and the chevron
+    /// or shrinks with it, what's below moving down or up, and the chevron
     /// turns over.
     pub(super) fn show_open(&self, animate: bool) -> Result<()> {
         let Some(view) = &self.view else {
@@ -454,13 +454,13 @@ impl Settings {
         let grow = if self.open { v.list_h } else { 0.0 };
         let h = v.group_h + grow;
         let (clip, outline) = (v2(v.group_w, h), v2(v.group_w - 1.0, h - 1.0));
-        let footer = v3(v.footer_at.X, v.footer_at.Y + grow);
+        let after = v3(0.0, grow);
         let (opacity, angle) = if self.open { (1.0, 180.0) } else { (0.0, 0.0) };
         if animate {
             let ease = &anim.decelerate;
             anim.vector2(&v.clip, "Size", clip, EXPAND_MS)?;
             anim.vector2(&v.outline, "Size", outline, EXPAND_MS)?;
-            anim.vector3(&v.footer, "Offset", footer, EXPAND_MS, 0, ease)?;
+            anim.vector3(&v.after, "Offset", after, EXPAND_MS, 0, ease)?;
             anim.scalar(&v.list, "Opacity", opacity, EXPAND_MS, 0, ease)?;
             anim.scalar(
                 &v.chevron,
@@ -473,12 +473,12 @@ impl Settings {
         } else {
             Animator::stop(&v.clip, &["Size"]);
             Animator::stop(&v.outline, &["Size"]);
-            Animator::stop(&v.footer, &["Offset"]);
+            Animator::stop(&v.after, &["Offset"]);
             Animator::stop(&v.list, &["Opacity"]);
             Animator::stop(&v.chevron, &["RotationAngleInDegrees"]);
             v.clip.SetSize(clip)?;
             v.outline.SetSize(outline)?;
-            v.footer.SetOffset(footer)?;
+            v.after.SetOffset(after)?;
             v.list.SetOpacity(opacity)?;
             v.chevron.SetRotationAngleInDegrees(angle)
         }

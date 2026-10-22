@@ -17,6 +17,20 @@ pub enum ThemeMode {
     Light,
 }
 
+/// How the selection is read.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum SelectionMode {
+    /// Through UI Automation, falling back to the clipboard in apps it
+    /// can't read.
+    Automatic,
+    /// Through UI Automation only: no copy to wait for, but blind in apps
+    /// it can't read.
+    Direct,
+    /// By copying it, in every app.
+    Clipboard,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
@@ -33,8 +47,11 @@ pub struct Config {
     pub max_synonyms: usize,
     /// Show the example sentences under the senses.
     pub show_examples: bool,
-    /// Read the selection through UI Automation before falling back to the clipboard.
-    pub use_ui_automation: bool,
+    /// "automatic", "direct" or "clipboard".
+    pub selection: SelectionMode,
+    /// What older versions saved instead: false was "clipboard".
+    #[serde(skip_serializing)]
+    use_ui_automation: Option<bool>,
     /// Use the online dictionary for words (and pronunciations) the bundled one lacks.
     pub online_lookup: bool,
     /// The languages words are looked up in, as codes in order of preference:
@@ -69,7 +86,8 @@ impl Default for Config {
             max_definitions: 4,
             max_synonyms: 6,
             show_examples: true,
-            use_ui_automation: true,
+            selection: SelectionMode::Automatic,
+            use_ui_automation: None,
             online_lookup: true,
             languages: vec!["en".into()],
             translate_from: "en".into(),
@@ -154,6 +172,9 @@ fn parse(bytes: &[u8]) -> Result<Config, String> {
             .unwrap_or_default();
     }
     config.mymemory_email = config.mymemory_email.trim().to_string();
+    if config.use_ui_automation.take() == Some(false) {
+        config.selection = SelectionMode::Clipboard;
+    }
     Ok(config)
 }
 
@@ -186,6 +207,7 @@ mod tests {
         assert_eq!(config.max_synonyms, 6);
         assert!(config.online_lookup);
         assert!(config.show_examples);
+        assert_eq!(config.selection, SelectionMode::Automatic);
         assert_eq!(config.languages, ["en"]);
         assert_eq!(
             parse(br#"{"max_definitions": 0}"#).unwrap().max_definitions,
@@ -201,6 +223,23 @@ mod tests {
         // Unset, it's the system's.
         assert_eq!(language("{}"), Language::system());
         assert!(parse(br#"{"ui_language": "klingon"}"#).is_err());
+    }
+
+    #[test]
+    fn reads_the_selection_mode() {
+        let mode = |json: &str| parse(json.as_bytes()).unwrap().selection;
+        assert_eq!(mode(r#"{"selection": "direct"}"#), SelectionMode::Direct);
+        // The switch older versions saved.
+        assert_eq!(
+            mode(r#"{"use_ui_automation": false}"#),
+            SelectionMode::Clipboard
+        );
+        assert_eq!(
+            mode(r#"{"use_ui_automation": true}"#),
+            SelectionMode::Automatic
+        );
+        let json = serde_json::to_string(&parse(br#"{"use_ui_automation": false}"#).unwrap());
+        assert!(!json.unwrap().contains("use_ui_automation"));
     }
 
     #[test]

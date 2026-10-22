@@ -276,8 +276,10 @@ impl Settings {
         let mut parts = Parts::default();
         let mut list = None;
         let mut y = 0.0;
-        // What the groups go in: after the languages row's, what slides up.
+        // What the groups go in: after the languages list, what slides down
+        // as it opens; after the default languages' row, what slides up.
         let mut parent = scroller.clone();
+        let mut after_list = None;
         let mut spare = None;
         let mut slack_y = 0.0;
         for (i, (name, rows)) in SECTIONS.iter().enumerate() {
@@ -296,6 +298,7 @@ impl Settings {
                 .iter()
                 .map(|row| match row.control {
                     Control::Translate => translate_h,
+                    Control::Selection => px(SELECTION_H),
                     _ => row_h,
                 })
                 .collect();
@@ -351,7 +354,7 @@ impl Settings {
                 resizable_outline(c, &group, open, px(GROUP_RADIUS), t.group_stroke())?;
             border.SetSize(v2(bounds.w - 1.0, bounds.h - 1.0))?;
             if let Some(tail) = tail {
-                let below = container(c, &scroller, v3(0.0, 0.0))?;
+                let below = container(c, &parent, v3(0.0, 0.0))?;
                 parent = below.clone();
                 spare = Some(SpareView {
                     tail,
@@ -363,6 +366,9 @@ impl Settings {
                 });
             }
             if let Some((visual, items)) = built {
+                let after = container(c, &parent, v3(0.0, 0.0))?;
+                parent = after.clone();
+                after_list = Some(after);
                 let list_y = group_at.Y + group_h;
                 list = Some((
                     visual,
@@ -415,8 +421,7 @@ impl Settings {
             list_y,
             list_h,
             items,
-            footer,
-            footer_at,
+            after: after_list.ok_or_else(missing)?,
             slack,
             slack_y,
         };
@@ -788,8 +793,12 @@ impl Settings {
             };
             rounded(c, r, group, line, 0.0, t.separator())?;
         }
-        if matches!(spec.control, Control::Translate) {
-            return self.build_translate(parts, group, group_at, spec, row, languages);
+        match spec.control {
+            Control::Translate => {
+                return self.build_translate(parts, group, group_at, spec, row, languages);
+            }
+            Control::Selection => return self.build_selection(parts, group, group_at, spec, row),
+            _ => {}
         }
         // Rows that are clicked as a whole light up under the pointer.
         let hover = match spec.control {
@@ -798,7 +807,11 @@ impl Settings {
                 hover.SetOpacity(0.0)?;
                 Some(hover)
             }
-            Control::Choice(_) | Control::Counter(_) | Control::Email | Control::Translate => None,
+            Control::Choice(_)
+            | Control::Counter(_)
+            | Control::Email
+            | Control::Translate
+            | Control::Selection => None,
         };
 
         let room = GROUP_W - ROW_PAD - TEXT_X - spec.control.width() - CONTROL_GAP;
@@ -911,7 +924,7 @@ impl Settings {
                     .push((Stop::Counter(counter), place(at).outset(outset), radius));
                 parts.counters[counter as usize] = Some(view);
             }
-            Control::Translate => {}
+            Control::Translate | Control::Selection => {}
             Control::Languages => {
                 let chevron = self.build_chevron(group, right, middle)?;
                 parts.hits.push((Hit::Languages, place(row)));
@@ -923,6 +936,64 @@ impl Settings {
                 parts.languages = Some((hover, chevron));
             }
         }
+        Ok(())
+    }
+
+    /// The ways of reading the selection: the setting's name over its
+    /// options, side by side across the row, and what the chosen one does
+    /// under them.
+    fn build_selection(
+        &self,
+        parts: &mut Parts,
+        group: &ContainerVisual,
+        group_at: Vector3,
+        spec: &Row,
+        row: Rect,
+    ) -> Result<()> {
+        let (c, r, t, s) = (
+            &self.anim.compositor,
+            &self.renderer,
+            &self.theme,
+            self.scale,
+        );
+        let px = |dip: f32| (dip * s).round();
+        let room = GROUP_W - ROW_PAD - TEXT_X;
+        let title = Text::new(c, group)?;
+        let name = r.layout_line(spec.title(), Face::Setting, Ink::Primary, room)?;
+        let title_size = title.show(r, &name, s, t)?;
+        let top = row.y + px(TRANSLATE_PAD);
+        title.visual.SetOffset(v3(px(TEXT_X), top))?;
+        let icon = Text::new(c, group)?;
+        let glyph = r.layout_line(spec.icon, Face::LargeButton, Ink::Primary, ICON_W)?;
+        let icon_size = icon.show(r, &glyph, s, t)?;
+        let icon_y = top + ((title_size.Y - icon_size.Y) / 2.0).round();
+        icon.visual.SetOffset(v3(px(ROW_PAD), icon_y))?;
+
+        let choice = Choice::Selection;
+        let right = row.w - px(ROW_PAD);
+        let middle = row.y + px(SELECTION_HEAD) + px(SEGMENT_H) / 2.0;
+        let (view, at, segments) = self.build_choice(choice, group, right, middle)?;
+        let place = |rect: Rect| rect.offset(group_at);
+        for (i, segment) in segments.into_iter().enumerate() {
+            parts.hits.push((Hit::Choice(choice, i), place(segment)));
+        }
+        let outset = px(FOCUS_OUTSET);
+        let radius = px(SEGMENT_RADIUS) + outset;
+        parts
+            .stops
+            .push((Stop::Choice(choice), place(at).outset(outset), radius));
+        parts.choices[choice as usize] = Some(view);
+
+        // Filled in, and cross-faded as the choice changes, by the note.
+        let detail = Text::new(c, group)?;
+        let detail_at = v3(px(TEXT_X), at.y + at.h + px(SELECTION_GAP));
+        detail.visual.SetOffset(detail_at)?;
+        parts.notes[Note::Selection as usize] = Some(NoteView {
+            text: detail,
+            old: Text::new(c, group)?,
+            at: detail_at,
+            w: room,
+        });
         Ok(())
     }
 

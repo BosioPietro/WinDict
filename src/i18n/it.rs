@@ -120,8 +120,16 @@ pub const IT: Strings = Strings {
     lookup: "Ricerca",
     online_dictionary: "Dizionario online",
     online_dictionary_detail: "Offre risultati migliori",
-    read_selection: "Leggi direttamente la selezione",
-    read_selection_detail: "Non usare gli appunti nelle app che lo permettono",
+    read_selection: "Lettura della selezione",
+    selection_automatic: "Automatica",
+    selection_automatic_detail: "Legge direttamente la selezione e la copia nelle app \
+        dove non è possibile. Funziona ovunque",
+    selection_direct: "Solo diretta",
+    selection_direct_detail: "Più veloce, ma la selezione potrebbe non essere letta in \
+        alcune app. Torna ad Automatica se mancano parole",
+    selection_clipboard: "Solo appunti",
+    selection_clipboard_detail: "Copia sempre la selezione, ed è più lenta. Provala se \
+        un\u{2019}app restituisce il testo sbagliato",
     languages: "Lingue",
 
     // Errors, which reach the user as the detail of a message.

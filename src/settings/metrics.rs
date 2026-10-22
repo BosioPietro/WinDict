@@ -75,6 +75,11 @@ pub(super) const TIP_DRIFT: f32 = 4.0;
 pub(super) const TRANSLATE_PAD: f32 = 12.0;
 pub(super) const TRANSLATE_HEAD: f32 = 64.0;
 pub(super) const TRANSLATE_FOOT: f32 = 16.0;
+/// The way of reading the selection's row: its name, then the options from
+/// `SELECTION_HEAD` down, then two lines of what the chosen one does.
+pub(super) const SELECTION_HEAD: f32 = 42.0;
+pub(super) const SELECTION_GAP: f32 = 8.0;
+pub(super) const SELECTION_H: f32 = 124.0;
 /// Corner radii of the rings round the boxes and the swap button.
 pub(super) const SELECT_RING_RADIUS: f32 = 8.0;
 pub(super) const SWAP_RING_RADIUS: f32 = 6.0;
