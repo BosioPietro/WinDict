@@ -21,17 +21,17 @@ impl Popup {
 
     /// Whether the card has links, or buttons, to Tab through.
     pub fn has_links(&self) -> bool {
-        self.translate.shown || self.back.shown || !self.content.links.is_empty()
+        self.translate.shown() || self.back.shown() || !self.content.links.is_empty()
     }
 
     /// The link, or button, Tab moved to, if any.
     pub fn focused_link(&self) -> Option<&Target> {
         static TRANSLATE: Target = Target::Translate;
         static BACK: Target = Target::Back;
-        if self.translate.focused {
+        if self.translate.focused() {
             return Some(&TRANSLATE);
         }
-        if self.back.focused {
+        if self.back.focused() {
             return Some(&BACK);
         }
         self.content.focused.map(|i| &self.content.links[i].target)
@@ -39,9 +39,9 @@ impl Popup {
 
     /// Where Tab is, if anywhere.
     pub(super) fn current_stop(&self) -> Option<Stop> {
-        if self.translate.focused {
+        if self.translate.focused() {
             Some(Stop::Translate)
-        } else if self.back.focused {
+        } else if self.back.focused() {
             Some(Stop::Back)
         } else {
             self.content.focused.map(Stop::Link)
@@ -54,11 +54,11 @@ impl Popup {
     /// the back button last, so Tab doesn't start on it.
     pub fn step_link(&mut self, forward: bool) -> Result<()> {
         let mut stops = Vec::new();
-        if self.translate.shown {
+        if self.translate.shown() {
             stops.push(Stop::Translate);
         }
         stops.extend(self.content.stops().into_iter().map(Stop::Link));
-        if self.back.shown {
+        if self.back.shown() {
             stops.push(Stop::Back);
         }
         if stops.is_empty() {
@@ -115,11 +115,7 @@ impl Popup {
                     &self.translate
                 };
                 let side = BACK_SIZE * s;
-                Some((
-                    v3((button.x * s).round(), button.top),
-                    v2(side, side),
-                    BACK_RADIUS * s + grow,
-                ))
+                Some((button.offset(s), v2(side, side), BACK_RADIUS * s + grow))
             }
             Stop::Link(start) => {
                 let l = self.content.rects(start).next()?;

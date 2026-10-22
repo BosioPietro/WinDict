@@ -86,3 +86,32 @@ impl Popup {
         anim.scalar(&chrome.thumb, "Opacity", 1.0, 200, 150, &anim.decelerate)
     }
 }
+
+/// The scrollbar thumb, shown only when the content scrolls.
+pub(super) struct ScrollChrome {
+    thumb: SpriteVisual,
+    thumb_clip: CompositionRoundedRectangleGeometry,
+    thumb_brush: CompositionColorBrush,
+}
+
+impl ScrollChrome {
+    pub(super) fn new(c: &Compositor, card: &ContainerVisual) -> Result<ScrollChrome> {
+        let thumb = c.CreateSpriteVisual()?;
+        let thumb_clip = c.CreateRoundedRectangleGeometry()?;
+        thumb.SetClip(&c.CreateGeometricClipWithGeometry(&thumb_clip)?)?;
+        let thumb_brush = c.CreateColorBrush()?;
+        thumb.SetBrush(&thumb_brush)?;
+        thumb.SetOpacity(0.0)?;
+        card.Children()?.InsertAtTop(&thumb)?;
+
+        Ok(ScrollChrome {
+            thumb,
+            thumb_clip,
+            thumb_brush,
+        })
+    }
+
+    pub(super) fn apply_theme(&self, t: &Theme) -> Result<()> {
+        self.thumb_brush.SetColor(t.thumb())
+    }
+}

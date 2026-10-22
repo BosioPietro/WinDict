@@ -4,6 +4,7 @@
 //! stays smooth no matter what our UI thread is doing.
 
 mod focus;
+mod parts;
 mod scrolling;
 mod search;
 
@@ -23,6 +24,9 @@ use crate::ui::{
     Glide, Push, ScrollFade, MARGIN, RESIZE_MS,
 };
 use crate::win::{self, create_tooltip, set_tooltip_rect, Window};
+
+use parts::{IconButton, IconSpec, Loader};
+use scrolling::ScrollChrome;
 
 // Geometry, in DIPs.
 pub(crate) const CARD_W: f32 = 384.0;
@@ -361,337 +365,6 @@ impl Content {
     }
 }
 
-/// A glyph button level with the word: the arrow left of it, shown once a
-/// synonym has been followed, and the translate button right of it.
-struct IconButton {
-    visual: ContainerVisual,
-    /// Inside `visual`, which keeps the button's place: slides in and out.
-    slide: ContainerVisual,
-    hover: SpriteVisual,
-    hover_clip: CompositionRoundedRectangleGeometry,
-    hover_brush: CompositionColorBrush,
-    glyph: SpriteVisual,
-    glyph_brush: CompositionSurfaceBrush,
-    /// Rings the button while Tab is on it.
-    ring: ShapeVisual,
-    ring_shape: CompositionSpriteShape,
-    ring_clip: CompositionRoundedRectangleGeometry,
-    ring_brush: CompositionColorBrush,
-    /// Owned by the card's window, which destroys it.
-    tooltip: Option<HWND>,
-    /// The tooltip's tool, unique among the card's buttons.
-    tool: usize,
-    icon: &'static str,
-    face: Face,
-    ink: Ink,
-    /// Left edge in the card, in DIPs.
-    x: f32,
-    /// Where it slides in from, in DIPs right of its place.
-    slide_from: f32,
-    shown: bool,
-    hovered: bool,
-    focused: bool,
-    /// Top of the button in the card, physical pixels.
-    top: f32,
-}
-
-/// What distinguishes one [`IconButton`] from another.
-struct IconSpec<'a> {
-    icon: &'static str,
-    face: Face,
-    ink: Ink,
-    tip: &'a str,
-    /// The tooltip's tool, unique among the card's buttons.
-    tool: usize,
-    /// Left edge in the card, in DIPs.
-    x: f32,
-    /// Where it slides in from, in DIPs right of its place.
-    slide_from: f32,
-}
-
-impl IconButton {
-    fn new(
-        c: &Compositor,
-        card: &ContainerVisual,
-        hwnd: HWND,
-        spec: IconSpec,
-    ) -> Result<IconButton> {
-        let IconSpec {
-            icon,
-            face,
-            ink,
-            tip,
-            tool,
-            x,
-            slide_from,
-        } = spec;
-        let visual = c.CreateContainerVisual()?;
-        visual.SetOpacity(0.0)?;
-        card.Children()?.InsertAtTop(&visual)?;
-        let slide = c.CreateContainerVisual()?;
-        visual.Children()?.InsertAtTop(&slide)?;
-        let hover = c.CreateSpriteVisual()?;
-        let hover_clip = c.CreateRoundedRectangleGeometry()?;
-        hover.SetClip(&c.CreateGeometricClipWithGeometry(&hover_clip)?)?;
-        let hover_brush = c.CreateColorBrush()?;
-        hover.SetBrush(&hover_brush)?;
-        hover.SetOpacity(0.0)?;
-        slide.Children()?.InsertAtTop(&hover)?;
-        let (glyph, glyph_brush) = text_sprite(c)?;
-        slide.Children()?.InsertAtTop(&glyph)?;
-        let ring = c.CreateShapeVisual()?;
-        let ring_clip = c.CreateRoundedRectangleGeometry()?;
-        let ring_shape = c.CreateSpriteShapeWithGeometry(&ring_clip)?;
-        let ring_brush = c.CreateColorBrush()?;
-        ring_shape.SetStrokeBrush(&ring_brush)?;
-        ring.Shapes()?.Append(&ring_shape)?;
-        ring.SetOpacity(0.0)?;
-        slide.Children()?.InsertAtTop(&ring)?;
-        Ok(IconButton {
-            visual,
-            slide,
-            hover,
-            hover_clip,
-            hover_brush,
-            glyph,
-            glyph_brush,
-            ring,
-            ring_shape,
-            ring_clip,
-            ring_brush,
-            tooltip: create_tooltip(hwnd, tip, tool),
-            tool,
-            icon,
-            face,
-            ink,
-            x,
-            slide_from,
-            shown: false,
-            hovered: false,
-            focused: false,
-            top: 0.0,
-        })
-    }
-
-    fn apply_theme(&self, renderer: &Renderer, t: &Theme, s: f32) -> Result<()> {
-        self.hover_brush.SetColor(t.highlight())?;
-        let size = v2(BACK_SIZE * s, BACK_SIZE * s);
-        self.visual.SetSize(size)?;
-        self.hover.SetSize(size)?;
-        self.hover_clip.SetSize(size)?;
-        self.hover_clip
-            .SetCornerRadius(v2(BACK_RADIUS * s, BACK_RADIUS * s))?;
-        // Inside the button, the stroke centred on the ring's edge.
-        let stroke = (ui::FOCUS_STROKE * s).round();
-        self.ring_brush.SetColor(t.focus())?;
-        self.ring.SetSize(size)?;
-        self.ring_shape.SetStrokeThickness(stroke)?;
-        self.ring_clip.SetOffset(v2(stroke / 2.0, stroke / 2.0))?;
-        self.ring_clip
-            .SetSize(v2(BACK_SIZE * s - stroke, BACK_SIZE * s - stroke))?;
-        self.ring_clip
-            .SetCornerRadius(v2(BACK_RADIUS * s, BACK_RADIUS * s))?;
-        let layout = renderer.layout_line(self.icon, self.face, self.ink, BACK_SIZE)?;
-        self.glyph_brush
-            .SetSurface(&renderer.draw(&layout, s, t)?)?;
-        self.glyph
-            .SetSize(v2(layout.width * s, layout.height * s))?;
-        self.glyph
-            .SetOffset(v3(0.0, ((BACK_SIZE - layout.height) / 2.0 * s).round()))
-    }
-
-    /// Fades the button in, sliding from [`IconButton::slide_from`], or out.
-    fn set_shown(&mut self, anim: &Animator, shown: bool, s: f32) -> Result<()> {
-        if shown == self.shown {
-            return Ok(());
-        }
-        self.shown = shown;
-        let away = v3(self.slide_from * s, 0.0);
-        if shown {
-            // Slides in alongside the word making room for it.
-            Animator::stop(&self.slide, &["Offset"]);
-            self.slide.SetOffset(away)?;
-            anim.scalar(&self.visual, "Opacity", 1.0, RESIZE_MS, 0, &anim.fade)?;
-            let home = v3(0.0, 0.0);
-            anim.vector3(&self.slide, "Offset", home, RESIZE_MS, 0, &anim.decelerate)?;
-        } else {
-            // Gone before the word slides over where it was.
-            anim.scalar(&self.visual, "Opacity", 0.0, 100, 0, &anim.decelerate)?;
-            anim.vector3(&self.slide, "Offset", away, 150, 0, &anim.accelerate)?;
-            self.set_hovered(anim, false)?;
-            self.set_focused(false)?;
-        }
-        Ok(())
-    }
-
-    fn set_hovered(&mut self, anim: &Animator, hovered: bool) -> Result<()> {
-        if hovered == self.hovered {
-            return Ok(());
-        }
-        self.hovered = hovered;
-        let opacity = if hovered { 1.0 } else { 0.0 };
-        anim.scalar(&self.hover, "Opacity", opacity, 100, 0, &anim.decelerate)
-    }
-
-    fn set_focused(&mut self, focused: bool) -> Result<()> {
-        self.focused = focused;
-        Animator::stop(&self.ring, &["Opacity"]);
-        self.ring.SetOpacity(if focused { 1.0 } else { 0.0 })
-    }
-
-    /// Rings the button `delay` ms from now.
-    fn reveal(&mut self, anim: &Animator, delay: u64) -> Result<()> {
-        self.focused = true;
-        if delay == 0 {
-            Animator::stop(&self.ring, &["Opacity"]);
-            return self.ring.SetOpacity(1.0);
-        }
-        Animator::stop(&self.ring, &["Opacity"]);
-        self.ring.SetOpacity(0.0)?;
-        anim.scalar(&self.ring, "Opacity", 1.0, 1, delay, &anim.decelerate)
-    }
-
-    /// Back at rest, shown or not without animating, for a new card.
-    fn reset(&mut self) -> Result<()> {
-        Animator::stop(&self.visual, &["Opacity"]);
-        Animator::stop(&self.hover, &["Opacity"]);
-        Animator::stop(&self.slide, &["Offset"]);
-        self.visual.SetOpacity(if self.shown { 1.0 } else { 0.0 })?;
-        self.hover.SetOpacity(0.0)?;
-        self.slide.SetOffset(v3(0.0, 0.0))?;
-        self.hovered = false;
-        self.set_focused(false)
-    }
-
-    /// Moves the tooltip's area to `rect`, in window pixels; an empty one turns it off.
-    fn set_tooltip_rect(&self, owner: HWND, rect: RECT) {
-        if let Some(tooltip) = self.tooltip {
-            set_tooltip_rect(tooltip, owner, self.tool, rect);
-        }
-    }
-}
-
-fn contains(r: RECT, x: i32, y: i32) -> bool {
-    x >= r.left && x < r.right && y >= r.top && y < r.bottom
-}
-
-/// Three pulsing dots, shown while an online lookup runs.
-struct Loader {
-    visual: ContainerVisual,
-    dots: Vec<SpriteVisual>,
-    brush: CompositionColorBrush,
-    running: bool,
-}
-
-impl Loader {
-    fn new(c: &Compositor, host: &ContainerVisual, theme: &Theme) -> Result<Loader> {
-        let visual = c.CreateContainerVisual()?;
-        host.Children()?.InsertAtTop(&visual)?;
-        let brush = c.CreateColorBrushWithColor(theme.accent)?;
-        let mut dots = Vec::new();
-        for _ in 0..3 {
-            let dot = c.CreateSpriteVisual()?;
-            dot.SetBrush(&brush)?;
-            let ellipse = c.CreateEllipseGeometry()?;
-            dot.SetClip(&c.CreateGeometricClipWithGeometry(&ellipse)?)?;
-            visual.Children()?.InsertAtTop(&dot)?;
-            dots.push(dot);
-        }
-        Ok(Loader {
-            visual,
-            dots,
-            brush,
-            running: false,
-        })
-    }
-
-    fn start(&self, anim: &Animator, s: f32) -> Result<()> {
-        let size = 7.0 * s;
-        Animator::stop(&self.visual, &["Opacity"]);
-        self.visual.SetOpacity(1.0)?;
-        self.visual.SetOffset(v3(PAD_X * s, 6.0 * s))?;
-        for (i, dot) in self.dots.iter().enumerate() {
-            dot.SetSize(v2(size, size))?;
-            dot.SetOffset(v3(i as f32 * size * 1.9, 0.0))?;
-            dot.SetCenterPoint(Vector3 {
-                X: size / 2.0,
-                Y: size / 2.0,
-                Z: 0.0,
-            })?;
-            if let Ok(clip) = dot.Clip()?.cast::<CompositionGeometricClip>() {
-                if let Ok(ellipse) = clip.Geometry()?.cast::<CompositionEllipseGeometry>() {
-                    ellipse.SetCenter(v2(size / 2.0, size / 2.0))?;
-                    ellipse.SetRadius(v2(size / 2.0, size / 2.0))?;
-                }
-            }
-            if !ui::motion() {
-                dot.SetOpacity(0.6)?;
-                dot.SetScale(scale(1.0))?;
-                continue;
-            }
-            let pulse = anim.compositor.CreateScalarKeyFrameAnimation()?;
-            pulse.InsertKeyFrame(0.0, 0.25)?;
-            pulse.InsertKeyFrameWithEasingFunction(0.3, 1.0, &anim.decelerate)?;
-            pulse.InsertKeyFrameWithEasingFunction(0.7, 0.25, &anim.decelerate)?;
-            pulse.InsertKeyFrame(1.0, 0.25)?;
-            pulse.SetDuration(ts(1100))?;
-            pulse.SetDelayTime(ts(i as u64 * 160))?;
-            pulse.SetIterationBehavior(AnimationIterationBehavior::Forever)?;
-            dot.SetOpacity(0.25)?;
-            dot.StartAnimation(&HSTRING::from("Opacity"), &pulse)?;
-
-            let bounce = anim.compositor.CreateVector3KeyFrameAnimation()?;
-            let small = scale(0.8);
-            bounce.InsertKeyFrame(0.0, small)?;
-            bounce.InsertKeyFrameWithEasingFunction(0.3, scale(1.0), &anim.decelerate)?;
-            bounce.InsertKeyFrameWithEasingFunction(0.7, small, &anim.decelerate)?;
-            bounce.InsertKeyFrame(1.0, small)?;
-            bounce.SetDuration(ts(1100))?;
-            bounce.SetDelayTime(ts(i as u64 * 160))?;
-            bounce.SetIterationBehavior(AnimationIterationBehavior::Forever)?;
-            dot.SetScale(small)?;
-            dot.StartAnimation(&HSTRING::from("Scale"), &bounce)?;
-        }
-        Ok(())
-    }
-
-    fn stop(&self) {
-        for dot in &self.dots {
-            Animator::stop(dot, &["Opacity", "Scale"]);
-        }
-        let _ = self.visual.SetOpacity(0.0);
-    }
-}
-
-/// The scrollbar thumb, shown only when the content scrolls.
-struct ScrollChrome {
-    thumb: SpriteVisual,
-    thumb_clip: CompositionRoundedRectangleGeometry,
-    thumb_brush: CompositionColorBrush,
-}
-
-impl ScrollChrome {
-    fn new(c: &Compositor, card: &ContainerVisual) -> Result<ScrollChrome> {
-        let thumb = c.CreateSpriteVisual()?;
-        let thumb_clip = c.CreateRoundedRectangleGeometry()?;
-        thumb.SetClip(&c.CreateGeometricClipWithGeometry(&thumb_clip)?)?;
-        let thumb_brush = c.CreateColorBrush()?;
-        thumb.SetBrush(&thumb_brush)?;
-        thumb.SetOpacity(0.0)?;
-        card.Children()?.InsertAtTop(&thumb)?;
-
-        Ok(ScrollChrome {
-            thumb,
-            thumb_clip,
-            thumb_brush,
-        })
-    }
-
-    fn apply_theme(&self, t: &Theme) -> Result<()> {
-        self.thumb_brush.SetColor(t.thumb())
-    }
-}
-
 // ---------------------------------------------------------------------------
 
 impl Popup {
@@ -828,9 +501,8 @@ impl Popup {
         // Release the text surfaces while idle.
         let _ = self.header.brush.SetSurface(None::<&ICompositionSurface>);
         let _ = self.content.brush.SetSurface(None::<&ICompositionSurface>);
-        for button in [&self.back, &self.translate] {
-            let _ = button.glyph_brush.SetSurface(None::<&ICompositionSurface>);
-        }
+        self.back.release();
+        self.translate.release();
         let _ = self
             .header
             .back_brush
@@ -859,8 +531,8 @@ impl Popup {
         };
         let s = self.scale;
         let content_w = CARD_W - 2.0 * PAD_X;
-        let indent = if self.back.shown { BACK_INDENT } else { 0.0 };
-        let room = if self.translate.shown {
+        let indent = if self.back.shown() { BACK_INDENT } else { 0.0 };
+        let room = if self.translate.shown() {
             TRANSLATE_ROOM
         } else {
             0.0
@@ -901,9 +573,9 @@ impl Popup {
             _ => None,
         };
         self.content.links = body_layout.links.clone();
-        if kept == Some(Target::Translate) && self.translate.shown {
+        if kept == Some(Target::Translate) && self.translate.shown() {
             self.focus_translate(0)?;
-        } else if kept == Some(Target::Back) && self.back.shown {
+        } else if kept == Some(Target::Back) && self.back.shown() {
             self.focus_back(0)?;
         } else {
             let links = &self.content.links;
@@ -971,8 +643,7 @@ impl Popup {
         let line = header_layout.first_line_bottom();
         let top = ((PAD_TOP + (line - BACK_SIZE) / 2.0) * s).round();
         for button in [&mut self.back, &mut self.translate] {
-            button.top = top;
-            button.visual.SetOffset(v3((button.x * s).round(), top))?;
+            button.place(top, s)?;
         }
 
         let content = &self.content;
@@ -982,32 +653,13 @@ impl Popup {
         Animator::stop(&content.visual, &["Offset", "Opacity"]);
         Animator::stop(&content.host, &["Offset"]);
 
-        self.set_loading(matches!(body, Body::Loading))?;
+        let loading = matches!(body, Body::Loading);
+        self.loader.set_running(&self.anim, loading, self.scale)?;
 
         self.enter_body(transition, card_h, previous_header_h)?;
         self.update_scroll_chrome(false)?;
         self.sync_tooltip();
         self.sync_swap()
-    }
-
-    /// Starts the loading animation, or fades it out if it was running.
-    fn set_loading(&mut self, loading: bool) -> Result<()> {
-        let s = self.scale;
-        let was_loading = std::mem::replace(&mut self.loader.running, loading);
-        if self.loader.running {
-            self.loader.start(&self.anim, s)?;
-        } else if was_loading {
-            let anim = &self.anim;
-            anim.scalar(
-                &self.loader.visual,
-                "Opacity",
-                0.0,
-                120,
-                0,
-                &anim.accelerate,
-            )?;
-        }
-        Ok(())
     }
 
     /// Brings the new body in as `transition` says, and sizes the card to
@@ -1146,19 +798,20 @@ impl Popup {
 
     /// Whether a point in window pixels is on the back button.
     pub fn back_at(&self, x: i32, y: i32) -> bool {
-        self.back.shown && contains(self.button_rect(&self.back), x, y)
+        self.back.shown() && contains(self.button_rect(&self.back), x, y)
     }
 
     /// Whether a point in window pixels is on the translate button.
     pub fn translate_at(&self, x: i32, y: i32) -> bool {
-        self.translate.shown && contains(self.button_rect(&self.translate), x, y)
+        self.translate.shown() && contains(self.button_rect(&self.translate), x, y)
     }
 
     /// A button in window pixels.
     fn button_rect(&self, button: &IconButton) -> RECT {
         let s = self.scale;
-        let left = (MARGIN * s + (button.x * s).round()) as i32;
-        let top = (self.frame_y() + button.top) as i32;
+        let at = button.offset(s);
+        let left = (MARGIN * s + at.X) as i32;
+        let top = (self.frame_y() + at.Y) as i32;
         let size = (BACK_SIZE * s).round() as i32;
         RECT {
             left,
@@ -1171,7 +824,7 @@ impl Popup {
     /// Keeps the tooltips over the buttons, and off while they're hidden.
     fn sync_tooltip(&self) {
         for button in [&self.back, &self.translate] {
-            let rect = if button.shown {
+            let rect = if button.shown() {
                 self.button_rect(button)
             } else {
                 RECT::default()
@@ -1234,8 +887,7 @@ impl Popup {
         self.header.visual.SetScale(scale(1.0))?;
         // A new card has nowhere to go back to; whether it can be translated
         // was said before showing it.
-        self.back.shown = false;
-        self.back.reset()?;
+        self.back.hide_at_once()?;
         self.translate.reset()?;
         self.search.reset();
         // The pointer comes back to the card afresh.
@@ -1312,7 +964,7 @@ impl Popup {
         let t = self.theme;
         self.header_key = Default::default();
         self.frame.apply_theme(&self.renderer, &t, self.scale)?;
-        self.loader.brush.SetColor(t.accent)?;
+        self.loader.apply_theme(&t)?;
         self.content.focus_brush.SetColor(t.focus())?;
         self.content.swap_brush.SetColor(t.highlight())?;
         self.content.caret_brush.SetColor(t.accent)?;
@@ -1385,6 +1037,10 @@ impl Popup {
         };
         win::set_region(self.hwnd, region, self.visible);
     }
+}
+
+fn contains(r: RECT, x: i32, y: i32) -> bool {
+    x >= r.left && x < r.right && y >= r.top && y < r.bottom
 }
 
 #[cfg(test)]

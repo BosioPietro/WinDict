@@ -102,7 +102,7 @@ impl Popup {
             self.header.visual.cast()?,
             self.header.back.cast()?,
             self.content.visual.cast()?,
-            self.loader.visual.cast()?,
+            self.loader.visual().cast()?,
         ];
         for v in &shown {
             if in_place {
@@ -112,7 +112,7 @@ impl Popup {
                 v.SetOpacity(0.0)?;
             }
         }
-        self.loader.running = false;
+        self.loader.forget();
         self.content.links.clear();
         let delay = if in_place { MAKE_WAY_MS } else { 0 };
         let (renderer, theme, s) = (&self.renderer, &self.theme, self.scale);
