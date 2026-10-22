@@ -22,12 +22,12 @@ impl App {
         let visible = self.popup.as_ref().is_some_and(|p| p.visible);
         let translate = visible && (self.can_translate() || self.translating.is_some());
         self.set_link_keys(tab, enter);
-        set_hotkeys(self.hwnd, TRANSLATE_KEY, &mut self.translate_key, translate);
+        self.translate_key.set(self.hwnd, translate);
     }
 
     pub(super) fn set_link_keys(&mut self, tab: bool, enter: bool) {
-        set_hotkeys(self.hwnd, LINK_KEYS, &mut self.link_keys, tab);
-        set_hotkeys(self.hwnd, OPEN_KEY, &mut self.open_key, enter);
+        self.link_keys.set(self.hwnd, tab);
+        self.open_key.set(self.hwnd, enter);
     }
 
     /// Tab or Shift+Tab: rings the next or previous link.

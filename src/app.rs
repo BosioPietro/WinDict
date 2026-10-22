@@ -90,6 +90,33 @@ const HOTKEY_TRANSLATE: i32 = 8;
 /// Hotkeys registered only while the card has a use for them, as (id,
 /// modifiers, key).
 type Keys = &'static [(i32, HOT_KEY_MODIFIERS, VIRTUAL_KEY)];
+
+/// One of those sets of [`Keys`], and whether it's registered.
+struct KeySet {
+    keys: Keys,
+    on: bool,
+}
+
+impl KeySet {
+    fn new(keys: Keys) -> KeySet {
+        KeySet { keys, on: false }
+    }
+
+    /// Registers the keys on `hwnd`, or unregisters them, as `wanted`.
+    fn set(&mut self, hwnd: HWND, wanted: bool) {
+        if self.on == wanted {
+            return;
+        }
+        self.on = wanted;
+        for &(id, modifiers, vk) in self.keys {
+            if wanted {
+                let _ = win::register_hotkey(hwnd, id, modifiers, vk.0 as u32);
+            } else {
+                win::unregister_hotkey(hwnd, id);
+            }
+        }
+    }
+}
 const BACK_KEYS: Keys = &[
     (HOTKEY_BACK, MOD_NOREPEAT, VK_BACK),
     (
@@ -367,14 +394,14 @@ pub struct App {
     translating: Option<Translating>,
     /// Translations, most recently used last.
     translations: Vec<(TranslationKey, Translation)>,
-    /// Whether Ctrl+T is registered.
-    translate_key: bool,
-    /// Whether Backspace and Alt+Left are registered.
-    back_keys: bool,
-    /// Whether Tab and Shift+Tab are registered.
-    link_keys: bool,
-    /// Whether Enter is registered.
-    open_key: bool,
+    /// Ctrl+T.
+    translate_key: KeySet,
+    /// Backspace and Alt+Left.
+    back_keys: KeySet,
+    /// Tab and Shift+Tab.
+    link_keys: KeySet,
+    /// Enter.
+    open_key: KeySet,
     /// The search box, while the card shows one.
     search: Option<Search>,
     /// The window the search box took the keyboard from.
@@ -449,10 +476,10 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
             translatable: None,
             translating: None,
             translations: Vec::new(),
-            translate_key: false,
-            back_keys: false,
-            link_keys: false,
-            open_key: false,
+            translate_key: KeySet::new(TRANSLATE_KEY),
+            back_keys: KeySet::new(BACK_KEYS),
+            link_keys: KeySet::new(LINK_KEYS),
+            open_key: KeySet::new(OPEN_KEY),
             search: None,
             return_focus: None,
             installing: Vec::new(),
@@ -787,7 +814,7 @@ impl App {
         self.translating = None;
         self.sync_back_keys();
         self.set_link_keys(false, false);
-        set_hotkeys(self.hwnd, TRANSLATE_KEY, &mut self.translate_key, false);
+        self.translate_key.set(self.hwnd, false);
         self.remove_dismiss_hooks();
         self.dismiss_menu();
         self.search = None;
@@ -943,22 +970,6 @@ fn language_rank(language: &str) -> usize {
     dicts::languages()
         .position(|(code, _)| code == language)
         .unwrap_or(usize::MAX)
-}
-
-/// Registers `keys` on `hwnd`, or unregisters them, as `wanted`; `on` says
-/// which they are.
-fn set_hotkeys(hwnd: HWND, keys: Keys, on: &mut bool, wanted: bool) {
-    if *on == wanted {
-        return;
-    }
-    *on = wanted;
-    for &(id, modifiers, vk) in keys {
-        if wanted {
-            let _ = win::register_hotkey(hwnd, id, modifiers, vk.0 as u32);
-        } else {
-            win::unregister_hotkey(hwnd, id);
-        }
-    }
 }
 
 /// Why the shortcut couldn't be registered.

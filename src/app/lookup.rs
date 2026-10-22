@@ -364,6 +364,6 @@ impl App {
             .as_ref()
             .is_some_and(|t| t.picking.is_some());
         let wanted = (!self.history.is_empty() || self.translating.is_some()) && !picking;
-        set_hotkeys(self.hwnd, BACK_KEYS, &mut self.back_keys, wanted);
+        self.back_keys.set(self.hwnd, wanted);
     }
 }
