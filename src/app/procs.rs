@@ -173,7 +173,7 @@ pub(super) unsafe extern "system" fn popup_proc(
         // card's pinned, which takes the keyboard like any window.
         WM_MOUSEACTIVATE if win::activates(hwnd) => LRESULT(MA_ACTIVATE as isize),
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
-        // A pinned card is dragged by its heading.
+        // A card is dragged by its heading.
         WM_NCHITTEST => {
             let hit = default();
             let (x, y) = win::lparam_point(lparam);

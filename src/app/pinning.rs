@@ -159,11 +159,15 @@ impl App {
         });
     }
 
-    /// The pinned card in `hwnd` was dragged somewhere else.
+    /// The card in `hwnd` was dragged somewhere else: clicks away from it
+    /// are those away from where it is now.
     pub(super) fn card_moved(&mut self, hwnd: HWND) {
         self.with_card(hwnd, |app| {
             if let Some(p) = app.card.popup.as_mut() {
                 p.moved();
+                if !app.card.pinned {
+                    CARD_RECT.set(p.card_rect());
+                }
             }
         });
     }

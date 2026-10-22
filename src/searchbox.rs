@@ -680,6 +680,11 @@ impl SearchBox {
         Ok(self.height(0))
     }
 
+    /// Where the field starts, below the heading, in card pixels.
+    pub(crate) fn field_top(&self) -> f32 {
+        self.field_at.Y
+    }
+
     /// Whether a point in card pixels is on the field.
     pub(crate) fn field_at(&self, x: f32, y: f32) -> bool {
         let (at, size) = (self.field_at, self.field_size);

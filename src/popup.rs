@@ -781,17 +781,19 @@ impl Popup {
         win::set_title(self.hwnd, &title);
     }
 
-    /// Whether a point in window pixels is where a pinned card is dragged
-    /// from: its heading, away from the buttons.
+    /// Whether a point in window pixels is where the card is dragged from:
+    /// its heading, away from the buttons. With the search box up, that's
+    /// the heading above the field.
     pub fn caption_at(&self, x: i32, y: i32) -> bool {
-        if !self.pinned || self.search.active {
-            return false;
-        }
         let (cx, cy) = self.card_point(x, y);
         let on_button = [&self.back, &self.translate, &self.speak, &self.pin]
             .into_iter()
             .any(|b| b.shown() && contains(self.button_rect(b), x, y));
-        let in_heading = cx >= 0.0 && cx < CARD_W * self.scale && cy >= 0.0 && cy < self.header_h;
+        let heading_h = match self.search.active {
+            true => self.search.field_top(),
+            false => self.header_h,
+        };
+        let in_heading = cx >= 0.0 && cx < CARD_W * self.scale && cy >= 0.0 && cy < heading_h;
         in_heading && !on_button
     }
 
