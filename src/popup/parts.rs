@@ -200,6 +200,9 @@ pub(super) struct IconButton {
     hover_brush: CompositionColorBrush,
     glyph: SpriteVisual,
     glyph_brush: CompositionSurfaceBrush,
+    /// Fills the glyph in, over it, when the button's on.
+    fill: SpriteVisual,
+    fill_brush: CompositionSurfaceBrush,
     /// Rings the button while Tab is on it.
     ring: ShapeVisual,
     ring_shape: CompositionSpriteShape,
@@ -210,6 +213,8 @@ pub(super) struct IconButton {
     /// The tooltip's tool, unique among the card's buttons.
     tool: usize,
     icon: &'static str,
+    /// The glyph filling `icon` in, if it's filled.
+    fill_icon: Option<&'static str>,
     face: Face,
     ink: Ink,
     /// Left edge in what it's in, in DIPs.
@@ -275,6 +280,8 @@ impl IconButton {
         slide.Children()?.InsertAtTop(&hover)?;
         let (glyph, glyph_brush) = text_sprite(c)?;
         slide.Children()?.InsertAtTop(&glyph)?;
+        let (fill, fill_brush) = text_sprite(c)?;
+        slide.Children()?.InsertAtTop(&fill)?;
         let ring = c.CreateShapeVisual()?;
         let ring_clip = c.CreateRoundedRectangleGeometry()?;
         let ring_shape = c.CreateSpriteShapeWithGeometry(&ring_clip)?;
@@ -291,6 +298,8 @@ impl IconButton {
             hover_brush,
             glyph,
             glyph_brush,
+            fill,
+            fill_brush,
             ring,
             ring_shape,
             ring_clip,
@@ -298,6 +307,7 @@ impl IconButton {
             tooltip: create_tooltip(hwnd, tip, tool),
             tool,
             icon,
+            fill_icon: None,
             face,
             ink,
             x,
@@ -329,13 +339,21 @@ impl IconButton {
             .SetSize(v2(BACK_SIZE * s - stroke, BACK_SIZE * s - stroke))?;
         self.ring_clip
             .SetCornerRadius(v2(BACK_RADIUS * s, BACK_RADIUS * s))?;
-        let layout = renderer.layout_line(self.icon, self.face, self.ink, BACK_SIZE)?;
-        self.glyph_brush
-            .SetSurface(&renderer.draw(&layout, s, t)?)?;
-        self.glyph
-            .SetSize(v2(layout.width * s, layout.height * s))?;
-        self.glyph
-            .SetOffset(v3(0.0, ((BACK_SIZE - layout.height) / 2.0 * s).round()))
+        let layers = [
+            (&self.glyph, &self.glyph_brush, Some(self.icon)),
+            (&self.fill, &self.fill_brush, self.fill_icon),
+        ];
+        for (sprite, brush, icon) in layers {
+            let Some(icon) = icon else {
+                brush.SetSurface(None::<&ICompositionSurface>)?;
+                continue;
+            };
+            let layout = renderer.layout_line(icon, self.face, self.ink, BACK_SIZE)?;
+            brush.SetSurface(&renderer.draw(&layout, s, t)?)?;
+            sprite.SetSize(v2(layout.width * s, layout.height * s))?;
+            sprite.SetOffset(v3(0.0, ((BACK_SIZE - layout.height) / 2.0 * s).round()))?;
+        }
+        Ok(())
     }
 
     /// Fades the button in, sliding from [`IconButton::slide_from`], or out.
@@ -453,9 +471,23 @@ impl IconButton {
         v3(at.X + self.origin.X * s, at.Y + self.origin.Y * s)
     }
 
+    /// Changes the glyph, what fills it in, and its color, from the next
+    /// [`IconButton::apply_theme`].
+    pub(super) fn set_icon(&mut self, icon: &'static str, fill: Option<&'static str>, ink: Ink) {
+        (self.icon, self.fill_icon, self.ink) = (icon, fill, ink);
+    }
+
+    /// Changes what its tooltip says.
+    pub(super) fn set_tip(&self, owner: HWND, tip: &str) {
+        if let Some(tooltip) = self.tooltip {
+            win::set_tooltip_text(tooltip, owner, self.tool, tip);
+        }
+    }
+
     /// Lets go of the glyph's surface while the card is idle.
     pub(super) fn release(&self) {
         let _ = self.glyph_brush.SetSurface(None::<&ICompositionSurface>);
+        let _ = self.fill_brush.SetSurface(None::<&ICompositionSurface>);
     }
 
     /// Moves the tooltip's area to `rect`, in window pixels; an empty one turns it off.

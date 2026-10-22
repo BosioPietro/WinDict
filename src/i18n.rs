@@ -121,6 +121,8 @@ strings! {
     back_tip: "Back (Backspace)",
     translate_tip: "Translate (Ctrl+T)",
     speak_tip: "Listen",
+    pin_tip: "Pin window",
+    unpin_tip: "Unpin",
     swap_tip: "Swap languages",
     /// Shown for a moment once Ctrl+C has copied a word.
     copied: "Copied",

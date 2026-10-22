@@ -2,8 +2,8 @@
 //!
 //! This file holds the state, the hotkey, the timers and the dismissal of the
 //! card; the rest of `impl App` is split by flow into the submodules:
-//! `search`, `lookup`, `translating`, `links`, `tray_menu`, `prefs` and
-//! `updating`.
+//! `search`, `lookup`, `translating`, `links`, `pinning`, `tray_menu`,
+//! `prefs` and `updating`.
 //! `procs` has the window procedures, `edit` and `picking` the pure text and
 //! list logic.
 
@@ -11,6 +11,7 @@ pub(crate) mod edit;
 mod links;
 mod lookup;
 pub(crate) mod picking;
+mod pinning;
 mod prefs;
 mod procs;
 mod recent;
@@ -88,6 +89,10 @@ const WM_APP_CLOSE_SETTINGS: u32 = WM_APP + 9;
 /// `wparam`, the modifiers held after it in the low word of `lparam`, and
 /// whether it went down in the next bit.
 const WM_APP_RECORD_KEY: u32 = WM_APP + 10;
+/// A card's window was asked to close: the window in `wparam`.
+const WM_APP_CLOSE_CARD: u32 = WM_APP + 11;
+/// Enter on a card's pin button: the window in `wparam`.
+const WM_APP_PIN: u32 = WM_APP + 12;
 
 const HOTKEY_LOOKUP: i32 = 1;
 const HOTKEY_ESCAPE: i32 = 2;
@@ -171,6 +176,7 @@ const TIMER_MENU_TEARDOWN: usize = 7;
 const TIMER_SETTINGS_HIDE: usize = 8;
 const TIMER_TRANSLATING: usize = 9;
 const TIMER_UPDATE_CHECK: usize = 10;
+const TIMER_CLOSED: usize = 11;
 
 /// Free the GPU resources after this long without a lookup.
 const IDLE_TEARDOWN_MS: u32 = 3 * 60 * 1000;
@@ -392,11 +398,56 @@ enum Place {
     Same(Transition),
 }
 
+/// A card and what it shows: the one that comes and goes with lookups, or
+/// one pinned open.
+#[derive(Default)]
+struct Card {
+    /// Created when first needed, and dropped a while after it's hidden;
+    /// a pinned card's is always there.
+    popup: Option<Popup>,
+    /// Whether it's pinned open: it stays on top, has the keyboard when
+    /// clicked, and closes only when told to.
+    pinned: bool,
+    /// The id of the request the card waits on.
+    request: u64,
+    /// The card is open on its way, while the capture waits for a copy.
+    copying: bool,
+    /// The offline entry for the current request, if any.
+    local: Option<Definition>,
+    /// The word the card shows, as it was looked up.
+    current: Option<Query>,
+    /// Words the card showed before synonyms were followed, most recent last.
+    history: Vec<Query>,
+    /// The definition the card shows, if it does.
+    translatable: Option<Translatable>,
+    /// The translation the card turned into, if it did.
+    translating: Option<Translating>,
+    /// The word the card shows, and the voice that says it, if there's one
+    /// for its language.
+    speakable: Option<(String, HSTRING)>,
+    /// The search box, while the card shows one.
+    search: Option<Search>,
+    /// The window the search box took the keyboard from.
+    return_focus: Option<HWND>,
+}
+
+impl Card {
+    fn hwnd(&self) -> Option<HWND> {
+        self.popup.as_ref().map(|p| p.hwnd)
+    }
+}
+
 pub struct App {
     config: Config,
     hwnd: HWND,
     compositor: Compositor,
-    popup: Option<Popup>,
+    /// The card that opens for a lookup and closes on a click away, and
+    /// while a pinned card's window is being handled, that one.
+    card: Card,
+    /// The cards pinned open, each in its own window.
+    pinned: Vec<Card>,
+    /// Cards unpinned or closed, fading out before their windows go.
+    closing: Vec<Popup>,
     menu: Option<Menu>,
     /// The settings window, while it's open.
     settings: Option<Settings>,
@@ -410,25 +461,11 @@ pub struct App {
     /// What the capture and lookup threads sent, and how they send it.
     inbox: Receiver<Event>,
     events: Events,
-    request: u64,
-    /// The card is open on its way, while the capture waits for a copy.
-    copying: bool,
+    /// The last request's id: each lookup, capture and translation has its own.
+    requests: u64,
     /// Online answers: definitions, and definite "not found"s.
     cache: Recent<Query, Lookup>,
-    /// The offline entry for the current request, if any.
-    local: Option<Definition>,
-    /// The word the card shows, as it was looked up.
-    current: Option<Query>,
-    /// Words the card showed before synonyms were followed, most recent last.
-    history: Vec<Query>,
-    /// The definition the card shows, if it does.
-    translatable: Option<Translatable>,
-    /// The translation the card turned into, if it did.
-    translating: Option<Translating>,
     translations: Recent<TranslationKey, Translation>,
-    /// The word the card shows, and the voice that says it, if there's one
-    /// for its language.
-    speakable: Option<(String, HSTRING)>,
     /// The voices installed, once a card has needed them, until it's gone.
     voices: Option<Voices>,
     speaker: Speaker,
@@ -444,10 +481,6 @@ pub struct App {
     scroll_keys: KeySet,
     /// Ctrl+C.
     copy_key: KeySet,
-    /// The search box, while the card shows one.
-    search: Option<Search>,
-    /// The window the search box took the keyboard from.
-    return_focus: Option<HWND>,
     /// The dictionaries being downloaded, one at most for each language.
     installing: Vec<Installing>,
     /// A newer version, once one has been found.
@@ -505,7 +538,9 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             config,
             hwnd,
             compositor,
-            popup: None,
+            card: Card::default(),
+            pinned: Vec::new(),
+            closing: Vec::new(),
             menu: None,
             settings: None,
             menu_closed_at: 0,
@@ -515,16 +550,9 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             capture_thread,
             inbox,
             events,
-            request: 0,
-            copying: false,
+            requests: 0,
             cache: Recent::new(CACHE_SIZE),
-            local: None,
-            current: None,
-            history: Vec::new(),
-            translatable: None,
-            translating: None,
             translations: Recent::new(TRANSLATION_CACHE_SIZE),
-            speakable: None,
             voices: None,
             speaker: Speaker::default(),
             translate_key: KeySet::new(TRANSLATE_KEY),
@@ -533,8 +561,6 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             open_key: KeySet::new(OPEN_KEY),
             scroll_keys: KeySet::new(SCROLL_KEYS),
             copy_key: KeySet::new(COPY_KEY),
-            search: None,
-            return_focus: None,
             installing: Vec::new(),
             update: None,
             updating: false,
@@ -609,7 +635,8 @@ unsafe fn register_classes(instance: HINSTANCE) -> windows::core::Result<()> {
             HCURSOR::default(),
             HICON::default(),
         ),
-        (POPUP_CLASS, Some(popup_proc), arrow, HICON::default()),
+        // Pinned, the card has a taskbar button, which shows the icon.
+        (POPUP_CLASS, Some(popup_proc), arrow, icon),
         (MENU_CLASS, Some(menu_proc), arrow, HICON::default()),
         (SETTINGS_CLASS, Some(settings_proc), arrow, icon),
     ];
@@ -699,18 +726,18 @@ impl App {
     }
 
     fn ensure_popup(&mut self) -> Option<&mut Popup> {
-        if self.popup.is_none() {
+        if self.card.popup.is_none() {
             let window =
                 Window::create(POPUP_CLASS, w!("WinDict"), FLYOUT_EX_STYLE, WS_POPUP).ok()?;
             match Popup::new(window, self.compositor.clone(), self.theme()) {
-                Ok(p) => self.popup = Some(p),
+                Ok(p) => self.card.popup = Some(p),
                 Err(e) => {
                     self.tray.notify(tr().draw_window_failed, &e.message());
                     return None;
                 }
             }
         }
-        self.popup.as_mut()
+        self.card.popup.as_mut()
     }
 
     fn ensure_menu(&mut self) -> Option<&mut Menu> {
@@ -755,20 +782,26 @@ impl App {
     // Flow
 
     fn on_hotkey(&mut self) {
-        self.request += 1;
-        self.copying = false;
+        self.new_request();
+        self.card.copying = false;
         // The card has the keyboard (a search): there's no selection to
         // read, so open a fresh search box, or close the one that's open.
+        let foreground = unsafe { GetForegroundWindow() };
         let focused = self
+            .card
             .popup
             .as_ref()
-            .is_some_and(|p| p.visible && unsafe { GetForegroundWindow() } == p.hwnd);
+            .is_some_and(|p| p.visible && foreground == p.hwnd);
         if focused {
-            return if self.search.is_some() {
+            return if self.card.search.is_some() {
                 self.dismiss()
             } else {
                 self.open_search(tr().search_again_title, None)
             };
+        }
+        // Nor is there in a pinned card.
+        if self.is_pinned(foreground) {
+            return self.open_search(tr().search_title, None);
         }
         // The capture may press Ctrl+C itself, which is the app's to read.
         self.copy_key.set(self.hwnd, false);
@@ -776,7 +809,7 @@ impl App {
             let _ = PostThreadMessageW(
                 self.capture_thread,
                 WM_APP_CAPTURE,
-                WPARAM(self.request as usize),
+                WPARAM(self.card.request as usize),
                 // Sent with every request so "Reload settings" applies them.
                 LPARAM(capture_flags(&self.config)),
             );
@@ -789,11 +822,14 @@ impl App {
             match event {
                 Event::Copying(id) => self.on_copying(id),
                 Event::Captured(captured) => self.on_selection(captured),
-                Event::Looked(looked) => self.on_result(looked),
-                Event::Corrected(corrected) => self.on_corrected(corrected),
+                // The card waiting on it may be pinned.
+                Event::Looked(looked) => self.with_request(looked.id, |app| app.on_result(looked)),
+                Event::Corrected(c) => self.with_request(c.id, |app| app.on_corrected(c)),
                 Event::Installing(language, percent) => self.on_installing(language, percent),
                 Event::Installed(language, result) => self.on_installed(language, result),
-                Event::Translated(translated) => self.on_translated(translated),
+                Event::Translated(translated) => {
+                    self.with_request(translated.id, |app| app.on_translated(translated))
+                }
                 Event::UpdateChecked(result) => self.on_update_checked(result),
                 Event::Updated(result) => self.on_updated(result),
             }
@@ -804,13 +840,13 @@ impl App {
     /// (or never come, when nothing is selected): open the card on its way,
     /// at the pointer, where a copied word would open it too.
     fn on_copying(&mut self, id: u64) {
-        if id != self.request {
+        if id != self.card.request {
             return;
         }
-        self.current = None;
-        self.search = None;
-        self.history.clear();
-        (self.translatable, self.translating) = (None, None);
+        self.card.current = None;
+        self.card.search = None;
+        self.card.history.clear();
+        (self.card.translatable, self.card.translating) = (None, None);
         self.sync_back_keys();
         self.show_body(
             anchor_or_cursor(None),
@@ -819,24 +855,24 @@ impl App {
             Body::Loading,
             false,
         );
-        self.copying = self.popup.as_ref().is_some_and(|p| p.visible);
+        self.card.copying = self.card.popup.as_ref().is_some_and(|p| p.visible);
     }
 
     fn on_selection(&mut self, captured: Captured) {
-        if captured.id != self.request {
+        if captured.id != self.card.request {
             return;
         }
         // The card opened on its way turns into the answer in place, unless
         // it was closed meanwhile.
-        let in_place = std::mem::take(&mut self.copying);
-        let visible = self.popup.as_ref().is_some_and(|p| p.visible);
+        let in_place = std::mem::take(&mut self.card.copying);
+        let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
         if in_place && !visible {
             return;
         }
-        self.current = None;
-        self.search = None;
-        self.history.clear();
-        self.translating = None;
+        self.card.current = None;
+        self.card.search = None;
+        self.card.history.clear();
+        self.card.translating = None;
         self.sync_back_keys();
         let (text, anchor) = match captured.selection {
             Some(s) => (s.text, s.anchor),
@@ -864,7 +900,7 @@ impl App {
     /// The pointer over the card: over the list of languages, it moves the
     /// highlight along.
     fn hover_card(&mut self, point: Option<(i32, i32)>) {
-        let Some(popup) = self.popup.as_mut() else {
+        let Some(popup) = self.card.popup.as_mut() else {
             return;
         };
         let _ = popup.hover(point);
@@ -883,7 +919,8 @@ impl App {
     /// The left button down on the card: on the scrollbar, it grabs the
     /// thumb or pages. Returns whether it was on it.
     fn press_card(&mut self, x: i32, y: i32) -> bool {
-        self.popup
+        self.card
+            .popup
             .as_mut()
             .is_some_and(|p| p.press(x, y).unwrap_or(false))
     }
@@ -891,7 +928,8 @@ impl App {
     /// The left button up on the card. Returns whether it had gone down on
     /// the scrollbar, and so isn't a click.
     fn release_card(&mut self) -> bool {
-        self.popup
+        self.card
+            .popup
             .as_mut()
             .is_some_and(|p| p.release().unwrap_or(false))
     }
@@ -906,21 +944,26 @@ impl App {
             }
             return;
         }
-        if let Some(popup) = self.popup.as_mut() {
+        if let Some(popup) = self.card.popup.as_mut() {
             let _ = popup.scroll_by(delta);
         }
     }
 
     /// Up or Down: scrolls the card.
     fn scroll_line(&mut self, down: bool) {
-        if let Some(popup) = self.popup.as_mut().filter(|p| p.visible) {
+        if let Some(popup) = self.card.popup.as_mut().filter(|p| p.visible) {
             let _ = popup.scroll_line(down);
         }
     }
 
-    /// Esc: closes the list of languages, if it's open, or else the card.
+    /// Esc: closes the list of languages, if it's open, or else the card,
+    /// unless it's pinned.
     fn escape(&mut self) {
-        let closed = self.translating.as_mut().and_then(|t| t.picking.take());
+        let closed = self
+            .card
+            .translating
+            .as_mut()
+            .and_then(|t| t.picking.take());
         match closed {
             Some(picking) => {
                 let focus = Some(Target::Language(picking.side));
@@ -933,18 +976,29 @@ impl App {
     /// Gives the card the keyboard, to type into, until it closes and hands
     /// it back.
     fn take_keyboard(&mut self) {
-        let Some(hwnd) = self.popup.as_ref().filter(|p| p.visible).map(|p| p.hwnd) else {
+        let Some(hwnd) = self
+            .card
+            .popup
+            .as_ref()
+            .filter(|p| p.visible)
+            .map(|p| p.hwnd)
+        else {
             return;
         };
         let previous = unsafe { GetForegroundWindow() };
-        if previous != hwnd && selection::take_foreground(hwnd) && self.return_focus.is_none() {
-            self.return_focus = Some(previous);
+        if previous != hwnd && selection::take_foreground(hwnd) && self.card.return_focus.is_none()
+        {
+            self.card.return_focus = Some(previous);
         }
     }
 
     fn dismiss(&mut self) {
-        self.history.clear();
-        self.translating = None;
+        // A pinned card closes only when told to.
+        if self.card.pinned {
+            return;
+        }
+        self.card.history.clear();
+        self.card.translating = None;
         self.sync_back_keys();
         self.set_link_keys(false, false);
         self.scroll_keys.set(self.hwnd, false);
@@ -952,11 +1006,12 @@ impl App {
         self.copy_key.set(self.hwnd, false);
         self.remove_dismiss_hooks();
         self.dismiss_menu();
-        self.search = None;
+        self.card.search = None;
         // Hand the keyboard back to the app the search box took it from,
         // unless the user has moved on to another one already.
-        if let Some(previous) = self.return_focus.take() {
+        if let Some(previous) = self.card.return_focus.take() {
             let focused = self
+                .card
                 .popup
                 .as_ref()
                 .is_some_and(|p| unsafe { GetForegroundWindow() } == p.hwnd);
@@ -966,7 +1021,7 @@ impl App {
                 }
             }
         }
-        let Some(popup) = self.popup.as_mut() else {
+        let Some(popup) = self.card.popup.as_mut() else {
             return;
         };
         if !popup.visible {
@@ -982,12 +1037,10 @@ impl App {
         match id {
             TIMER_AUTOHIDE => self.dismiss(),
             TIMER_COVERED => self.uncover(),
-            TIMER_TRANSLATING => self.stop_waiting(),
             TIMER_UPDATE_CHECK => self.check_for_update(),
-            TIMER_SETTLE => {
-                if let Some(p) = self.popup.as_mut() {
-                    p.settle();
-                }
+            TIMER_CLOSED => {
+                self.closing.clear();
+                trim_working_set();
             }
             TIMER_MENU_HIDE => {
                 if let Some(m) = self.menu.as_mut() {
@@ -1001,7 +1054,7 @@ impl App {
                 trim_working_set();
             }
             TIMER_HIDE => {
-                if let Some(p) = self.popup.as_mut() {
+                if let Some(p) = self.card.popup.as_mut() {
                     p.finish_hide();
                 }
                 trim_working_set();
@@ -1015,8 +1068,8 @@ impl App {
                 self.keyboard_hook = None;
                 trim_working_set();
             }
-            TIMER_TEARDOWN if self.popup.as_ref().is_some_and(|p| !p.visible) => {
-                self.popup = None;
+            TIMER_TEARDOWN if self.card.popup.as_ref().is_some_and(|p| !p.visible) => {
+                self.card.popup = None;
                 // Read afresh next time, so that voices installed meanwhile are found.
                 self.voices = None;
                 trim_working_set();
@@ -1043,25 +1096,44 @@ impl App {
         (self.mouse_hook, self.focus_hook) = (None, None);
     }
 
-    fn on_click(&mut self, x: i32, y: i32) {
-        let suggestion = self.popup.as_ref().and_then(|p| p.suggestion_at(x, y));
-        if self.search.is_some() && suggestion.is_some() {
+    /// A click on the card in `hwnd`.
+    fn on_click(&mut self, hwnd: HWND, x: i32, y: i32) {
+        if self.popup_of(hwnd).is_some_and(|p| p.pin_at(x, y)) {
+            return self.toggle_pin(hwnd);
+        }
+        self.with_card(hwnd, |app| app.click(x, y));
+    }
+
+    fn click(&mut self, x: i32, y: i32) {
+        let suggestion = self.card.popup.as_ref().and_then(|p| p.suggestion_at(x, y));
+        if self.card.search.is_some() && suggestion.is_some() {
             return self.submit_search(suggestion);
         }
-        if self.popup.as_ref().is_some_and(|p| p.back_at(x, y)) {
+        if self.card.popup.as_ref().is_some_and(|p| p.back_at(x, y)) {
             return self.back();
         }
-        if self.popup.as_ref().is_some_and(|p| p.translate_at(x, y)) {
+        if self
+            .card
+            .popup
+            .as_ref()
+            .is_some_and(|p| p.translate_at(x, y))
+        {
             return self.translate();
         }
-        if self.popup.as_ref().is_some_and(|p| p.speak_at(x, y)) {
+        if self.card.popup.as_ref().is_some_and(|p| p.speak_at(x, y)) {
             return self.speak();
         }
-        if let Some(target) = self.popup.as_ref().and_then(|p| p.link_at(x, y)).cloned() {
+        if let Some(target) = self
+            .card
+            .popup
+            .as_ref()
+            .and_then(|p| p.link_at(x, y))
+            .cloned()
+        {
             self.open_link(target);
         } else if self.picking().is_some() {
             // A click away from the list shuts it.
-            if let Some(t) = self.translating.as_mut() {
+            if let Some(t) = self.card.translating.as_mut() {
                 t.picking = None;
             }
             self.show_translation(Transition::Refine, None);

@@ -67,6 +67,8 @@ pub const IT: Strings = Strings {
     back_tip: "Indietro (Backspace)",
     translate_tip: "Traduci (Ctrl+T)",
     speak_tip: "Ascolta",
+    pin_tip: "Fissa finestra (ESC la chiude)",
+    unpin_tip: "Togli finestra",
     swap_tip: "Inverti le lingue",
     copied: "Copiato",
     translate_ambiguous: "\u{201C}{word}\u{201D} è una parola sia in {from} che in {to}.",

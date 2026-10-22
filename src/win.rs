@@ -11,7 +11,8 @@ use windows::Win32::UI::Accessibility::{
 };
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX, TOOLTIPS_CLASSW, TTF_SUBCLASS,
-    TTM_ADDTOOLW, TTM_NEWTOOLRECTW, TTM_POP, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW,
+    TTM_ADDTOOLW, TTM_NEWTOOLRECTW, TTM_POP, TTM_UPDATETIPTEXTW, TTS_ALWAYSTIP, TTS_NOPREFIX,
+    TTTOOLINFOW,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     RegisterHotKey, TrackMouseEvent, UnregisterHotKey, HOT_KEY_MODIFIERS, TME_LEAVE,
@@ -19,9 +20,12 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, GetClassNameW, GetCursorPos, KillTimer, SendMessageW, SetTimer,
-    SetWindowsHookExW, UnhookWindowsHookEx, CW_USEDEFAULT, HHOOK, HOOKPROC, SW_SHOWNORMAL,
-    WINDOWS_HOOK_ID, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WS_EX_TOPMOST,
+    CreateWindowExW, DestroyWindow, GetClassNameW, GetCursorPos, GetWindowLongPtrW, KillTimer,
+    SendMessageW, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, SetWindowsHookExW,
+    ShowWindow, UnhookWindowsHookEx, CW_USEDEFAULT, GWL_EXSTYLE, GWL_STYLE, HHOOK, HOOKPROC,
+    HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    SW_HIDE, SW_SHOWNORMAL, WINDOWS_HOOK_ID, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
+    WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_SYSMENU,
 };
 
 /// A window of ours, destroyed when dropped.
@@ -208,6 +212,72 @@ pub fn set_tooltip_rect(tooltip: HWND, owner: HWND, tool: usize, rect: RECT) {
         if rect.right <= rect.left {
             SendMessageW(tooltip, TTM_POP, None, None);
         }
+    }
+}
+
+/// Changes what `tooltip` says over `owner`'s `tool`.
+pub fn set_tooltip_text(tooltip: HWND, owner: HWND, tool: usize, text: &str) {
+    // The tooltip keeps its own copy.
+    let mut wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+    let info = TTTOOLINFOW {
+        cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
+        hwnd: owner,
+        uId: tool,
+        lpszText: PWSTR(wide.as_mut_ptr()),
+        ..Default::default()
+    };
+    unsafe {
+        SendMessageW(
+            tooltip,
+            TTM_UPDATETIPTEXTW,
+            None,
+            Some(LPARAM(&info as *const _ as isize)),
+        );
+    }
+}
+
+/// Turns a flyout, which is never activated and has no taskbar button,
+/// into a window of its own that has both, still above everything, or
+/// back. It's hidden and shown again meanwhile, as that's when the taskbar
+/// looks at it.
+pub fn set_standalone(hwnd: HWND, standalone: bool) {
+    let flyout = (WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) as isize;
+    let own = WS_EX_APPWINDOW.0 as isize;
+    // A system menu, for Close on the taskbar and Alt+Space.
+    let menu = WS_SYSMENU.0 as isize;
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        let (ex, style) = if standalone {
+            (ex & !flyout | own, style | menu)
+        } else {
+            (ex & !own | flyout, style & !menu)
+        };
+        let _ = ShowWindow(hwnd, SW_HIDE);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
+        SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW,
+        );
+    }
+}
+
+/// Whether `hwnd` is activated when clicked, as a flyout isn't.
+pub fn activates(hwnd: HWND) -> bool {
+    let ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    ex & WS_EX_NOACTIVATE.0 as isize == 0
+}
+
+/// Sets the title the taskbar shows for `hwnd`.
+pub fn set_title(hwnd: HWND, title: &str) {
+    unsafe {
+        let _ = SetWindowTextW(hwnd, &HSTRING::from(title));
     }
 }
 

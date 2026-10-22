@@ -96,6 +96,7 @@ impl Popup {
         self.set_back(false)?;
         self.set_translate(false)?;
         self.set_speak(false)?;
+        self.pin.set_shown(&self.anim, false, self.scale)?;
         self.focus_link(None, 0)?;
         self.header_indent = 0.0;
         let anim = &self.anim;

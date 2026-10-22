@@ -2,6 +2,11 @@
 
 use super::*;
 
+/// How far below its middle the speaker glyph's ink reaches in a heading
+/// button, in DIPs: in Segoe Fluent Icons and Segoe MDL2 Assets alike, it
+/// spans 161 to 1887 of the 2048 units of a 14 DIP em, around its middle.
+const BUTTON_INK_BELOW: f32 = (1887.0 - 161.0) / 2.0 / 2048.0 * 14.0;
+
 impl Renderer {
     /// The word and its pronunciation, `indent` DIPs from the left, with
     /// room after them for a button `button` DIPs wide, if there's one.
@@ -20,12 +25,15 @@ impl Renderer {
             Some(_) => room,
             None => room - button_room,
         };
-        let title = self.text(&capitalize(word), &self.formats.word, word_room)?;
+        let word = capitalize(word);
+        let title = self.text(&word, &self.formats.word, word_room)?;
         let (title_w, title_h, baseline) = metrics(&title);
-        let title_line = first_line_height(&title);
         let mut height = title_h;
-        // Where what the button follows ends, and the middle of its line.
-        let mut end = (indent + title_w, title_line / 2.0);
+        // Where what the button follows ends, and where the button's middle
+        // goes so that its glyph rests on the last line's baseline, as one
+        // more letter would.
+        let (end_x, base) = line_end(&title, &word);
+        let mut end = (indent + end_x, base - BUTTON_INK_BELOW);
         let mut pronunciation = None;
         if let Some(p) = phonetic {
             let gap = 10.0;
@@ -39,12 +47,8 @@ impl Renderer {
                 // Same line, sharing the baseline.
                 (indent + title_w + gap, baseline - phon_baseline)
             };
-            let line = if wrapped {
-                first_line_height(&phon)
-            } else {
-                title_line
-            };
-            end = (x + phon_w, if wrapped { y } else { 0.0 } + line / 2.0);
+            let (end_x, base) = line_end(&phon, p);
+            end = (x + end_x, y + base - BUTTON_INK_BELOW);
             pronunciation = Some(Placed {
                 layout: Layout {
                     items: vec![Item::Text {

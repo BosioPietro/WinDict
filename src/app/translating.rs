@@ -5,12 +5,14 @@ use super::*;
 impl App {
     /// Whether the card shows a definition it can turn into a translation.
     pub(super) fn can_translate(&self) -> bool {
-        self.config.online_lookup && self.translatable.is_some() && self.translating.is_none()
+        self.config.online_lookup
+            && self.card.translatable.is_some()
+            && self.card.translating.is_none()
     }
 
     /// Ctrl+T: turns the definition into a translation, or back.
     pub(super) fn toggle_translation(&mut self) {
-        if self.translating.is_some() {
+        if self.card.translating.is_some() {
             self.back();
         } else {
             self.translate();
@@ -21,11 +23,11 @@ impl App {
     /// it's in to the other one in use, or as the settings say when that
     /// can't be told.
     pub(super) fn translate(&mut self) {
-        let visible = self.popup.as_ref().is_some_and(|p| p.visible);
+        let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
         if !visible || !self.can_translate() {
             return;
         }
-        let Some(about) = self.translatable.clone() else {
+        let Some(about) = self.card.translatable.clone() else {
             return;
         };
         let found: Vec<&str> = about.senses.iter().map(|(l, _)| l.as_str()).collect();
@@ -35,7 +37,7 @@ impl App {
         );
         let direction = translate::pick(&found, &self.config.languages, defaults);
         let asking = !direction.sure;
-        self.translating = Some(Translating {
+        self.card.translating = Some(Translating {
             about,
             from: direction.from,
             to: direction.to,
@@ -47,7 +49,7 @@ impl App {
             shown: false,
         });
         // Answers still on their way are for the definition.
-        self.request += 1;
+        self.new_request();
         if !asking {
             self.fetch_translation();
         }
@@ -58,7 +60,7 @@ impl App {
 
     /// Translates the word the way the card says, from the cache when it can.
     pub(super) fn fetch_translation(&mut self) {
-        let Some(t) = self.translating.as_ref() else {
+        let Some(t) = self.card.translating.as_ref() else {
             return;
         };
         let key = (t.about.word.clone(), t.from.clone(), t.to.clone());
@@ -69,7 +71,7 @@ impl App {
             .find(|(language, _)| *language == t.from)
             .and_then(|(_, sense)| sense.clone());
         let cached = self.translations.get(&key);
-        let Some(t) = self.translating.as_mut() else {
+        let Some(t) = self.card.translating.as_mut() else {
             return;
         };
         t.result = cached.map(Ok);
@@ -77,9 +79,11 @@ impl App {
         if !t.waiting {
             return;
         }
-        win::set_timer(self.hwnd, TIMER_TRANSLATING, TRANSLATING_WAIT_MS);
-        self.request += 1;
-        let (id, events) = (self.request, self.events.clone());
+        if let Some(hwnd) = self.card.hwnd() {
+            win::set_timer(hwnd, TIMER_TRANSLATING, TRANSLATING_WAIT_MS);
+        }
+        self.new_request();
+        let (id, events) = (self.card.request, self.events.clone());
         let email = self.config.mymemory_email.clone();
         std::thread::spawn(move || {
             let (word, from, to) = &key;
@@ -94,16 +98,19 @@ impl App {
             self.translations
                 .put(translated.key.clone(), translation.clone());
         }
-        let visible = self.popup.as_ref().is_some_and(|p| p.visible);
-        if translated.id != self.request || !visible {
+        let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
+        if translated.id != self.card.request || !visible {
             return;
         }
-        let Some(t) = self.translating.as_mut() else {
+        let hwnd = self.card.hwnd();
+        let Some(t) = self.card.translating.as_mut() else {
             return;
         };
         t.result = Some(translated.result);
         t.waiting = false;
-        win::kill_timer(self.hwnd, TIMER_TRANSLATING);
+        if let Some(hwnd) = hwnd {
+            win::kill_timer(hwnd, TIMER_TRANSLATING);
+        }
         let focus = t.focus.take();
         let transition = t.transition();
         self.show_translation(transition, focus);
@@ -111,7 +118,7 @@ impl App {
 
     /// No quick answer: shows the translation on its way.
     pub(super) fn stop_waiting(&mut self) {
-        let Some(t) = self.translating.as_mut().filter(|t| t.waiting) else {
+        let Some(t) = self.card.translating.as_mut().filter(|t| t.waiting) else {
             return;
         };
         t.waiting = false;
@@ -123,7 +130,7 @@ impl App {
     /// Shows the translation as it stands, the focus on `focus`, or where
     /// it was.
     pub(super) fn show_translation(&mut self, transition: Transition, focus: Option<Target>) {
-        let Some(t) = self.translating.as_mut() else {
+        let Some(t) = self.card.translating.as_mut() else {
             return;
         };
         if t.waiting && !t.shown {
@@ -131,7 +138,7 @@ impl App {
             t.focus = focus.or(t.focus.take());
             return;
         }
-        let Some(popup) = self.popup.as_mut().filter(|p| p.visible) else {
+        let Some(popup) = self.card.popup.as_mut().filter(|p| p.visible) else {
             return;
         };
         // The list has the keyboard while it's open.
@@ -186,7 +193,7 @@ impl App {
     /// The list a language is being picked from, if it's open, and the
     /// language that side has now.
     pub(super) fn picking(&mut self) -> Option<(&mut Picking, &str)> {
-        let t = self.translating.as_mut()?;
+        let t = self.card.translating.as_mut()?;
         let picking = t.picking.as_mut()?;
         let current = match picking.side {
             Side::From => &t.from,
@@ -198,7 +205,7 @@ impl App {
     /// A character typed while the list of languages is open: narrows it
     /// down, or, with Enter, picks the highlighted one.
     pub(super) fn type_language(&mut self, unit: u16) {
-        let hwnd = self.popup.as_ref().map(|p| p.hwnd);
+        let hwnd = self.card.popup.as_ref().map(|p| p.hwnd);
         let Some((picking, current)) = self.picking() else {
             return;
         };
@@ -272,7 +279,7 @@ impl App {
 
     /// A click, or Enter, on the translation card.
     pub(super) fn steer_translation(&mut self, target: Target) {
-        let Some(t) = self.translating.as_mut() else {
+        let Some(t) = self.card.translating.as_mut() else {
             return;
         };
         let mut focus = None;
@@ -320,7 +327,7 @@ impl App {
         }
         // Until the way is confirmed, only the offer changes.
         if !t.asking {
-            self.request += 1;
+            self.new_request();
             self.fetch_translation();
         }
         self.show_translation(Transition::Refine, focus);

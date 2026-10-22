@@ -12,10 +12,10 @@ impl App {
             examples: self.config.show_examples,
         };
         let word = query.word.clone();
-        self.current = Some(query.clone());
-        self.local = offline::lookup(&word, detail).and_then(|def| query.within(def));
+        self.card.current = Some(query.clone());
+        self.card.local = offline::lookup(&word, detail).and_then(|def| query.within(def));
         let online_key = Query {
-            word: match &self.local {
+            word: match &self.card.local {
                 Some(def) => def.word.to_lowercase(),
                 None => word.clone(),
             },
@@ -23,7 +23,7 @@ impl App {
         };
         let online = self.cache.get(&online_key);
 
-        match (&self.local, online) {
+        match (&self.card.local, online) {
             (Some(local), online) => {
                 let order = offline::languages();
                 let shown = dictionary::merge(local.clone(), online.as_ref(), &order);
@@ -45,7 +45,7 @@ impl App {
             (None, None) => self.present_body(place, &word, None, Body::Loading),
         }
 
-        let (id, events) = (self.request, self.events.clone());
+        let (id, events) = (self.card.request, self.events.clone());
         // In the languages of the dictionaries in use, which is English when
         // the chosen ones couldn't be read, or the one picked.
         let languages = match &online_key.language {
@@ -67,11 +67,11 @@ impl App {
         if !matches!(looked.result, Lookup::Failed(_)) {
             self.cache.put(looked.query.clone(), looked.result.clone());
         }
-        let visible = self.popup.as_ref().is_some_and(|p| p.visible);
-        if looked.id != self.request || !visible {
+        let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
+        if looked.id != self.card.request || !visible {
             return;
         }
-        match self.local.clone() {
+        match self.card.local.clone() {
             // Already showing the offline entry: refine it in place, if the
             // online one adds anything. Errors are irrelevant here.
             Some(local) => {
@@ -143,7 +143,7 @@ impl App {
         if matches!(result, Lookup::Found(_)) {
             return self.present_corrected(place, word, result, None);
         }
-        let (id, events) = (self.request, self.events.clone());
+        let (id, events) = (self.card.request, self.events.clone());
         let (word, result) = (word.to_string(), result.clone());
         std::thread::spawn(move || {
             let correction = offline::Words::load().correct(&word).map(str::to_string);
@@ -158,8 +158,8 @@ impl App {
     }
 
     pub(super) fn on_corrected(&mut self, c: Corrected) {
-        let visible = self.popup.as_ref().is_some_and(|p| p.visible);
-        if c.id != self.request || (matches!(c.place, Place::Same(_)) && !visible) {
+        let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
+        if c.id != self.card.request || (matches!(c.place, Place::Same(_)) && !visible) {
             return;
         }
         self.present_corrected(c.place, &c.word, &c.result, c.correction.as_deref());
@@ -183,22 +183,22 @@ impl App {
         phonetic: Option<&str>,
         body: Body,
     ) {
-        self.translatable = match &body {
+        self.card.translatable = match &body {
             Body::Definition(def) => Some(Translatable::of(def)),
             _ => None,
         };
-        self.speakable = match &body {
+        self.card.speakable = match &body {
             Body::Definition(def) => self.voice_for(&def.language).map(|v| (def.word.clone(), v)),
             _ => None,
         };
-        self.translating = None;
+        self.card.translating = None;
         match place {
             Place::New(anchor) => self.show_body(anchor, title, phonetic, body, false),
             Place::Same(transition) => {
-                let back = !self.history.is_empty();
+                let back = !self.card.history.is_empty();
                 let translate = self.can_translate();
-                let speak = self.speakable.is_some();
-                let Some(popup) = self.popup.as_mut() else {
+                let speak = self.card.speakable.is_some();
+                let Some(popup) = self.card.popup.as_mut() else {
                     return;
                 };
                 let _ = popup.set_back(back);
@@ -223,8 +223,8 @@ impl App {
         detail: &str,
         auto_hide: bool,
     ) {
-        (self.translatable, self.translating) = (None, None);
-        self.speakable = None;
+        (self.card.translatable, self.card.translating) = (None, None);
+        self.card.speakable = None;
         let anchor = anchor_or_cursor(anchor);
         self.show_body(
             anchor,
@@ -250,7 +250,7 @@ impl App {
         self.dismiss_menu();
         let theme = self.theme();
         let translate = self.can_translate();
-        let speak = self.speakable.is_some();
+        let speak = self.card.speakable.is_some();
         let Some(popup) = self.ensure_popup() else {
             return;
         };
@@ -282,11 +282,14 @@ impl App {
     /// The card changed size: clicks outside it now are those outside the
     /// new size, and its clickable area shrinks once the resize has played.
     pub(super) fn on_resized(&mut self) {
-        let Some(popup) = self.popup.as_ref() else {
+        let Some(popup) = self.card.popup.as_ref() else {
             return;
         };
-        CARD_RECT.set(popup.card_rect());
-        win::set_timer(self.hwnd, TIMER_SETTLE, SETTLE_MS);
+        // A pinned card stays open whatever is clicked.
+        if !self.card.pinned {
+            CARD_RECT.set(popup.card_rect());
+        }
+        win::set_timer(popup.hwnd, TIMER_SETTLE, SETTLE_MS);
     }
 
     /// The id of a voice saying words in `language`, if one is installed.
@@ -297,8 +300,8 @@ impl App {
 
     /// Says the word the card shows out loud, in its own language.
     pub(super) fn speak(&mut self) {
-        let visible = self.popup.as_ref().is_some_and(|p| p.visible);
-        if let Some((word, voice)) = self.speakable.as_ref().filter(|_| visible) {
+        let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
+        if let Some((word, voice)) = self.card.speakable.as_ref().filter(|_| visible) {
             self.speaker.say(word, voice);
         }
     }
@@ -308,7 +311,7 @@ impl App {
         if selection::has_ui_access() {
             return;
         }
-        let Some(popup) = self.popup.as_ref().filter(|p| p.visible) else {
+        let Some(popup) = self.card.popup.as_ref().filter(|p| p.visible) else {
             return;
         };
         let r = popup.card_rect();
@@ -329,19 +332,19 @@ impl App {
         let Ok(word) = dictionary::normalize(word) else {
             return;
         };
-        let language = self.current.as_ref().and_then(|q| q.language.clone());
+        let language = self.card.current.as_ref().and_then(|q| q.language.clone());
         let query = Query { word, language };
-        if self.current.as_ref() == Some(&query) {
+        if self.card.current.as_ref() == Some(&query) {
             return;
         }
-        if let Some(current) = self.current.take() {
-            self.history.push(current);
-            if self.history.len() > HISTORY_SIZE {
-                self.history.remove(0);
+        if let Some(current) = self.card.current.take() {
+            self.card.history.push(current);
+            if self.card.history.len() > HISTORY_SIZE {
+                self.card.history.remove(0);
             }
         }
         // Answers still on their way are for the word we're leaving.
-        self.request += 1;
+        self.new_request();
         self.lookup(query, Place::Same(Transition::Replace));
         self.sync_back_keys();
     }
@@ -349,17 +352,17 @@ impl App {
     /// Goes back to the word shown before the last synonym was followed, or
     /// from a translation to the definition it was of.
     pub(super) fn back(&mut self) {
-        if !self.popup.as_ref().is_some_and(|p| p.visible) {
+        if !self.card.popup.as_ref().is_some_and(|p| p.visible) {
             return;
         }
-        let query = match self.translating.take() {
-            Some(_) => self.current.clone(),
-            None => self.history.pop(),
+        let query = match self.card.translating.take() {
+            Some(_) => self.card.current.clone(),
+            None => self.card.history.pop(),
         };
         let Some(query) = query else {
             return;
         };
-        self.request += 1;
+        self.new_request();
         self.lookup(query, Place::Same(Transition::Replace));
         self.sync_back_keys();
     }
@@ -367,12 +370,17 @@ impl App {
     /// Backspace and Alt+Left go back, but only while there's somewhere to
     /// go: otherwise they belong to the app underneath.
     pub(super) fn sync_back_keys(&mut self) {
+        // A pinned card reads its own keys, while it has the keyboard.
+        if self.card.pinned {
+            return;
+        }
         // Backspace edits what's typed in the list of languages.
         let picking = self
+            .card
             .translating
             .as_ref()
             .is_some_and(|t| t.picking.is_some());
-        let wanted = (!self.history.is_empty() || self.translating.is_some()) && !picking;
+        let wanted = (!self.card.history.is_empty() || self.card.translating.is_some()) && !picking;
         self.back_keys.set(self.hwnd, wanted);
     }
 }

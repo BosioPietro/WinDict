@@ -7,9 +7,9 @@ impl App {
     /// can't be selected (in an image, a protected PDF, a game). It opens at
     /// `anchor`, the text caret, when there is one.
     pub(super) fn open_search(&mut self, title: &'static str, anchor: Option<RECT>) {
-        self.current = None;
-        self.history.clear();
-        (self.translatable, self.translating) = (None, None);
+        self.card.current = None;
+        self.card.history.clear();
+        (self.card.translatable, self.card.translating) = (None, None);
         self.sync_back_keys();
         let previous = unsafe { GetForegroundWindow() };
         self.dismiss_menu();
@@ -35,9 +35,9 @@ impl App {
         }
         // Opened again from the card itself, it keeps the original app.
         if previous != hwnd {
-            self.return_focus = Some(previous);
+            self.card.return_focus = Some(previous);
         }
-        self.search = Some(Search {
+        self.card.search = Some(Search {
             title,
             ..Search::default()
         });
@@ -49,16 +49,22 @@ impl App {
         if self.picking().is_some() {
             return self.type_language(unit);
         }
-        let Some(hwnd) = self.popup.as_ref().filter(|p| p.visible).map(|p| p.hwnd) else {
+        let Some(hwnd) = self
+            .card
+            .popup
+            .as_ref()
+            .filter(|p| p.visible)
+            .map(|p| p.hwnd)
+        else {
             return;
         };
-        let Some(search) = self.search.as_mut() else {
+        let Some(search) = self.card.search.as_mut() else {
             return;
         };
         match search.edit.type_unit(unit) {
             Input::Edited => {}
             Input::Enter => {
-                let picked = self.popup.as_ref().and_then(|p| p.suggestion());
+                let picked = self.card.popup.as_ref().and_then(|p| p.suggestion());
                 return self.submit_search(picked);
             }
             Input::Paste => {
@@ -74,10 +80,14 @@ impl App {
     /// pick a suggestion; Left, Right, Home and End move the caret, by
     /// words with Ctrl; Delete removes what's after it.
     pub(super) fn on_key(&mut self, key: VIRTUAL_KEY) {
+        if self.card.pinned && self.pinned_key(key) {
+            return;
+        }
         if self.picking().is_some() {
             return self.language_key(key);
         }
-        let (Some(search), Some(popup)) = (self.search.as_mut(), self.popup.as_mut()) else {
+        let (Some(search), Some(popup)) = (self.card.search.as_mut(), self.card.popup.as_mut())
+        else {
             return;
         };
         let ctrl = hotkey::is_held(VK_CONTROL);
@@ -120,7 +130,8 @@ impl App {
     /// Shows what's typed in the search box, and the words it could be the
     /// start of.
     pub(super) fn refresh_search(&mut self) {
-        let (Some(search), Some(popup)) = (self.search.as_mut(), self.popup.as_mut()) else {
+        let (Some(search), Some(popup)) = (self.card.search.as_mut(), self.card.popup.as_mut())
+        else {
             return;
         };
         // Typing again answers the complaint: the heading goes back.
@@ -164,7 +175,7 @@ impl App {
     /// into the definition of the `picked` suggestion, in its language when
     /// there are several, or of what's typed, in all of them.
     pub(super) fn submit_search(&mut self, picked: Option<usize>) {
-        let Some(search) = self.search.as_mut() else {
+        let Some(search) = self.card.search.as_mut() else {
             return;
         };
         let picked_row = picked.filter(|&i| i < search.suggestions.len());
@@ -174,9 +185,9 @@ impl App {
         let language = picked.filter(|_| multilingual).map(|s| s.language.clone());
         let complaint = match dictionary::normalize(text) {
             Ok(word) => {
-                self.search = None;
+                self.card.search = None;
                 // The heading grows out of the word that was picked.
-                if let Some(popup) = self.popup.as_mut() {
+                if let Some(popup) = self.card.popup.as_mut() {
                     let _ = popup.pick_suggestion(picked_row);
                 }
                 let query = Query { word, language };
@@ -189,7 +200,7 @@ impl App {
             }
             Err(NormalizeError::TooLong) => None,
         };
-        if let Some(popup) = self.popup.as_mut() {
+        if let Some(popup) = self.card.popup.as_mut() {
             let _ = popup.shake_search();
             if let Some(complaint) = complaint {
                 let _ = popup.set_search_title(complaint);

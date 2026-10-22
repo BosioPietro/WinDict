@@ -147,11 +147,13 @@ impl App {
             Change::OnlineLookup(on) => {
                 self.config.online_lookup = on;
                 // The translate button needs the internet, like the answers.
-                let translate = self.can_translate();
-                if let Some(popup) = self.popup.as_mut() {
-                    let _ = popup.set_translate(translate);
-                }
-                self.sync_link_keys();
+                self.each_card(|app| {
+                    let translate = app.can_translate();
+                    if let Some(popup) = app.card.popup.as_mut() {
+                        let _ = popup.set_translate(translate);
+                    }
+                    app.sync_link_keys();
+                });
             }
             Change::Selection(mode) => self.config.selection = mode,
             Change::CheckUpdates(on) => {

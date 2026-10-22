@@ -81,17 +81,29 @@ pub(super) unsafe extern "system" fn main_proc(
             with_app(|app| app.dismiss());
             LRESULT(0)
         }
+        // From a card's window: the window in `lparam`.
         WM_APP_WHEEL => {
-            with_app(|app| app.on_wheel(wparam.0 as i16 as i32));
+            let card = HWND(lparam.0 as _);
+            with_app(|app| app.with_card(card, |app| app.on_wheel(wparam.0 as i16 as i32)));
             LRESULT(0)
         }
+        // From a card's window: the window in `wparam`, the point in `lparam`.
         WM_APP_CLICK => {
             let (x, y) = win::lparam_point(lparam);
-            with_app(|app| app.on_click(x, y));
+            with_app(|app| app.on_click(HWND(wparam.0 as _), x, y));
             LRESULT(0)
         }
         WM_APP_BACK => {
-            with_app(|app| app.back());
+            let card = HWND(wparam.0 as _);
+            with_app(|app| app.with_card(card, |app| app.back()));
+            LRESULT(0)
+        }
+        WM_APP_PIN => {
+            with_app(|app| app.pin_by_key(HWND(wparam.0 as _)));
+            LRESULT(0)
+        }
+        WM_APP_CLOSE_CARD => {
+            with_app(|app| app.close_card(HWND(wparam.0 as _)));
             LRESULT(0)
         }
         WM_APP_CLOSE_SETTINGS => {
@@ -143,9 +155,33 @@ pub(super) unsafe extern "system" fn popup_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // Runs `f` on the card shown in this window.
+    let card = |f: &mut dyn FnMut(&mut App)| with_app(|app| app.with_card(hwnd, |app| f(app)));
+    let default = || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     match msg {
-        // Never steal focus from the app the user is reading in.
+        // Never steal focus from the app the user is reading in, unless the
+        // card's pinned, which takes the keyboard like any window.
+        WM_MOUSEACTIVATE if win::activates(hwnd) => LRESULT(MA_ACTIVATE as isize),
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        // A pinned card is dragged by its heading.
+        WM_NCHITTEST => {
+            let hit = default();
+            let (x, y) = win::lparam_point(lparam);
+            let mut pt = POINT { x, y };
+            let caption = hit.0 == HTCLIENT as isize
+                && unsafe { ScreenToClient(hwnd, &mut pt).as_bool() }
+                && with_app(|app| app.popup_of(hwnd).is_some_and(|p| p.caption_at(pt.x, pt.y)))
+                    .unwrap_or(false);
+            if caption {
+                LRESULT(HTCAPTION as isize)
+            } else {
+                hit
+            }
+        }
+        WM_EXITSIZEMOVE => {
+            with_app(|app| app.card_moved(hwnd));
+            LRESULT(0)
+        }
         WM_MOUSEMOVE => {
             // Ask for WM_MOUSELEAVE, to drop the hover when the pointer goes.
             win::track_mouse_leave(hwnd);
@@ -156,54 +192,60 @@ pub(super) unsafe extern "system" fn popup_proc(
                 return LRESULT(0);
             }
             let (x, y) = win::lparam_point(lparam);
-            with_app(|app| app.hover_card(Some((x, y))));
+            card(&mut |app| app.hover_card(Some((x, y))));
             LRESULT(0)
         }
         WM_MOUSELEAVE => {
             POINTER_AT.set(None);
-            with_app(|app| app.hover_card(None));
+            card(&mut |app| app.hover_card(None));
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {
             let delta = (wparam.0 >> 16) & 0xFFFF;
-            post(WM_APP_WHEEL, WPARAM(delta), LPARAM(0));
+            post(WM_APP_WHEEL, WPARAM(delta), LPARAM(hwnd.0 as isize));
             LRESULT(0)
         }
         // The scrollbar: its thumb follows the pointer, even off the card,
         // until the button comes up.
         WM_LBUTTONDOWN => {
             let (x, y) = win::lparam_point(lparam);
-            if with_app(|app| app.press_card(x, y)).unwrap_or(false) {
+            let mut pressed = false;
+            card(&mut |app| pressed = app.press_card(x, y));
+            if pressed {
                 unsafe { SetCapture(hwnd) };
             }
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            if with_app(|app| app.release_card()).unwrap_or(false) {
+            let mut released = false;
+            card(&mut |app| released = app.release_card());
+            if released {
                 unsafe {
                     let _ = ReleaseCapture();
                 }
             } else {
-                post(WM_APP_CLICK, WPARAM(0), lparam);
+                post(WM_APP_CLICK, WPARAM(hwnd.0 as usize), lparam);
             }
             LRESULT(0)
         }
         // Another window took the mouse: the thumb lets go.
         WM_CAPTURECHANGED => {
-            with_app(|app| app.release_card());
+            card(&mut |app| {
+                app.release_card();
+            });
             LRESULT(0)
         }
         // The mouse's back button.
         WM_XBUTTONUP => {
             if (wparam.0 >> 16) as u16 == XBUTTON1 {
-                post(WM_APP_BACK, WPARAM(0), LPARAM(0));
+                post(WM_APP_BACK, WPARAM(hwnd.0 as usize), LPARAM(0));
             }
             LRESULT(1)
         }
         // A hand over the links, a text cursor over the search field.
         WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
             let shown = set_cursor(hwnd, |app, pt| {
-                let popup = app.popup.as_ref()?;
+                let popup = app.popup_of(hwnd)?;
                 if popup.link_at(pt.x, pt.y).is_some() {
                     Some(IDC_HAND)
                 } else if popup.search_at(pt.x, pt.y) {
@@ -215,28 +257,53 @@ pub(super) unsafe extern "system" fn popup_proc(
             if shown {
                 LRESULT(1)
             } else {
-                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+                default()
             }
         }
-        // Picking a suggestion, or moving the caret, in the search box.
+        // Picking a suggestion, or moving the caret, in the search box; or
+        // any of a pinned card's keys.
         WM_KEYDOWN => {
-            with_app(|app| app.on_key(VIRTUAL_KEY(wparam.0 as u16)));
+            card(&mut |app| app.on_key(VIRTUAL_KEY(wparam.0 as u16)));
+            LRESULT(0)
+        }
+        // Alt+Left goes back in a pinned card; Alt+F4 and Alt+Space work as
+        // they do everywhere.
+        WM_SYSKEYDOWN if VIRTUAL_KEY(wparam.0 as u16) == VK_LEFT => {
+            card(&mut |app| {
+                if app.card.pinned {
+                    app.back();
+                }
+            });
+            LRESULT(0)
+        }
+        // Alt on its own: there's no menu bar to go to. Nor does a pinned
+        // card grow to fill the screen when its heading is double-clicked,
+        // or go down to the taskbar when its button is clicked.
+        WM_SYSCOMMAND
+            if matches!((wparam.0 & 0xFFF0) as u32, SC_MAXIMIZE | SC_MINIMIZE)
+                || ((wparam.0 & 0xFFF0) as u32 == SC_KEYMENU && lparam.0 == 0) =>
+        {
             LRESULT(0)
         }
         // Typing in the search box.
         WM_CHAR => {
-            with_app(|app| app.on_char(wparam.0 as u16));
+            card(&mut |app| app.on_char(wparam.0 as u16));
             LRESULT(0)
         }
-        // Alt+F4 while the search box has the keyboard: close the card, but
-        // keep the window for next time.
+        // Esc, Alt+F4, Ctrl+W, or Close on the taskbar: a pinned card goes; any
+        // other closes, but its window is kept for next time.
         WM_CLOSE => {
-            post(WM_APP_DISMISS, WPARAM(0), LPARAM(0));
+            post(WM_APP_CLOSE_CARD, WPARAM(hwnd.0 as usize), LPARAM(0));
+            LRESULT(0)
+        }
+        // The card's own: other timers on the window, its tooltips', aren't.
+        WM_TIMER if matches!(wparam.0, TIMER_SETTLE | TIMER_TRANSLATING) => {
+            with_app(|app| app.on_card_timer(hwnd, wparam.0));
             LRESULT(0)
         }
         // We size ourselves for the target monitor's DPI already.
         WM_DPICHANGED => LRESULT(0),
-        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+        _ => default(),
     }
 }
 
@@ -523,10 +590,12 @@ pub(super) unsafe extern "system" fn focus_hook(
     if win::now_ms().saturating_sub(SHOWN_AT.get()) < FOREGROUND_GRACE_MS {
         return;
     }
-    // Nor the card itself taking the keyboard for the search box.
+    // Nor the card itself taking the keyboard for the search box; but a
+    // pinned card is another window, as another app's would be.
     let mut pid = 0;
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-    if pid == unsafe { GetCurrentProcessId() } {
+    let pinned = win::activates(hwnd) && win::class_name(hwnd) == "WinDict.Popup";
+    if pid == unsafe { GetCurrentProcessId() } && !pinned {
         return;
     }
     post(WM_APP_DISMISS, WPARAM(0), LPARAM(0));

@@ -17,7 +17,7 @@ use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
 use crate::i18n::tr;
-use crate::render::{Body, Face, Ink, Link, Mark, Renderer, Target, WORD_SIZE};
+use crate::render::{self, Body, Face, Ink, Link, Mark, Renderer, Target, WORD_SIZE};
 use crate::searchbox::SearchBox;
 use crate::theme::Theme;
 use crate::ui::{
@@ -50,9 +50,17 @@ const BACK_RADIUS: f32 = 5.0;
 const BACK_SLIDE: f32 = 10.0;
 /// "Back" in Segoe Fluent Icons and Segoe MDL2 Assets.
 const BACK_GLYPH: &str = "\u{E72B}";
-/// The translate button's left edge: mirrors the back button's, at the right.
-const TRANSLATE_X: f32 = CARD_W - BACK_X - BACK_SIZE;
-/// How much narrower the heading is beside the translate button.
+/// The pin button's left edge: mirrors the back button's, at the right.
+const PIN_X: f32 = CARD_W - BACK_X - BACK_SIZE;
+/// How much narrower the heading is beside the pin button.
+const PIN_ROOM: f32 = CARD_W - PAD_X - PIN_X + 6.0;
+/// "Pinned" in Segoe Fluent Icons and Segoe MDL2 Assets, and "Pinned fill",
+/// which fills its head in but leaves out the needle.
+const PIN_GLYPH: &str = "\u{E840}";
+const PIN_FILL_GLYPH: &str = "\u{E842}";
+/// The translate button's left edge: left of the pin button.
+const TRANSLATE_X: f32 = PIN_X - BACK_SIZE - 2.0;
+/// How much narrower the heading is beside the translate and pin buttons.
 const TRANSLATE_ROOM: f32 = CARD_W - PAD_X - TRANSLATE_X + 6.0;
 /// "Translate" in Segoe Fluent Icons and Segoe MDL2 Assets.
 const TRANSLATE_GLYPH: &str = "\u{E8C1}";
@@ -60,6 +68,8 @@ const TRANSLATE_GLYPH: &str = "\u{E8C1}";
 const SWAP_TOOL: usize = 3;
 /// The speak button's tooltip's tool, after the swap button's.
 const SPEAK_TOOL: usize = 4;
+/// The pin button's tooltip's tool, after the speak button's.
+const PIN_TOOL: usize = 5;
 /// "Volume" in Segoe Fluent Icons and Segoe MDL2 Assets.
 const SPEAK_GLYPH: &str = "\u{E767}";
 /// How far the speak button slides in from the left as it appears.
@@ -185,6 +195,8 @@ pub struct Popup {
     translate: IconButton,
     /// Says the word: after its pronunciation, and moving with the heading.
     speak: IconButton,
+    /// Keeps the card open, or lets it go again.
+    pin: IconButton,
     search: SearchBox,
     glide: SpriteVisual,
     glide_source: CompositionSurfaceBrush,
@@ -217,6 +229,8 @@ pub struct Popup {
     /// Where the pointer last was on the window, in window pixels.
     pointer: Option<(i32, i32)>,
     pub visible: bool,
+    /// Pinned open: a window of its own, dragged by its heading.
+    pinned: bool,
     /// Last, so it goes after everything shown on it.
     _window: Window,
 }
@@ -226,6 +240,7 @@ pub struct Popup {
 enum Stop {
     Speak,
     Translate,
+    Pin,
     /// The link starting at this index in the body's links.
     Link(usize),
     Back,
@@ -299,6 +314,21 @@ impl Popup {
                 slide_from: 0.0,
             },
         )?;
+        let pin = IconButton::new(
+            c,
+            &frame.card,
+            hwnd,
+            IconSpec {
+                icon: PIN_GLYPH,
+                face: Face::Button,
+                ink: Ink::Secondary,
+                tip: tr().pin_tip,
+                tool: PIN_TOOL,
+                x: PIN_X,
+                origin: v2(0.0, 0.0),
+                slide_from: 0.0,
+            },
+        )?;
         let content = Content::new(c, &frame.card, hwnd)?;
         let loader = Loader::new(c, content.host(), &theme)?;
         let scroll_chrome = ScrollChrome::new(c, &frame.card)?;
@@ -332,6 +362,7 @@ impl Popup {
             back,
             translate,
             speak,
+            pin,
             search,
             glide,
             glide_source,
@@ -353,6 +384,7 @@ impl Popup {
             wheel_bursts: Bursts::default(),
             pointer: None,
             visible: false,
+            pinned: false,
             _window: window,
         })
     }
@@ -397,6 +429,7 @@ impl Popup {
         self.back.release();
         self.translate.release();
         self.speak.release();
+        self.pin.release();
         self.badge.release();
         self.loader.stop();
         self.search.reset();
@@ -422,10 +455,12 @@ impl Popup {
         let s = self.scale;
         let content_w = CARD_W - 2.0 * PAD_X;
         let indent = if self.back.shown() { BACK_INDENT } else { 0.0 };
+        // The pin button's there whenever the search box isn't.
+        self.pin.set_shown(&self.anim, true, s)?;
         let room = if self.translate.shown() {
             TRANSLATE_ROOM
         } else {
-            0.0
+            PIN_ROOM
         };
         let button = self.speak.shown().then_some(BACK_SIZE);
         let heading =
@@ -471,6 +506,8 @@ impl Popup {
             self.focus_translate(0)?;
         } else if kept == Some(Target::Back) && self.back.shown() {
             self.focus_back(0)?;
+        } else if kept == Some(Target::Pin) {
+            self.focus_pin(0)?;
         } else {
             let links = self.content.links();
             let focused = kept.and_then(|t| links.iter().position(|l| l.target == t));
@@ -521,7 +558,7 @@ impl Popup {
         // The buttons sit level with the word.
         let line = heading.word.first_line_bottom();
         let top = ((PAD_TOP + (line - BACK_SIZE) / 2.0) * s).round();
-        for button in [&mut self.back, &mut self.translate] {
+        for button in [&mut self.back, &mut self.translate, &mut self.pin] {
             button.place(top, s)?;
         }
 
@@ -532,6 +569,7 @@ impl Popup {
 
         let loading = matches!(body, Body::Loading);
         self.loader.set_running(&self.anim, loading, self.scale)?;
+        self.sync_title();
 
         self.enter_body(transition, card_h, previous_header_h)?;
         self.update_scroll_chrome(false)?;
@@ -599,6 +637,59 @@ impl Popup {
         Ok(())
     }
 
+    /// Pins the card open, as a window of its own titled with its word, or
+    /// lets it go again.
+    pub fn set_pinned(&mut self, pinned: bool) -> Result<()> {
+        if pinned == self.pinned {
+            return Ok(());
+        }
+        self.pinned = pinned;
+        let (fill, ink, tip) = if pinned {
+            (Some(PIN_FILL_GLYPH), Ink::Accent, tr().unpin_tip)
+        } else {
+            (None, Ink::Secondary, tr().pin_tip)
+        };
+        self.pin.set_icon(PIN_GLYPH, fill, ink);
+        self.pin.set_tip(self.hwnd, tip);
+        self.pin
+            .apply_theme(&self.renderer, &self.theme, self.scale)?;
+        self.sync_title();
+        win::set_standalone(self.hwnd, pinned);
+        Ok(())
+    }
+
+    /// Titles a pinned card's window, which the taskbar and Alt+Tab show,
+    /// after its word.
+    fn sync_title(&self) {
+        let title = match self.pinned {
+            true => format!("{} - WinDict", render::capitalize(&self.header_key.0)),
+            false => "WinDict".to_string(),
+        };
+        win::set_title(self.hwnd, &title);
+    }
+
+    /// Whether a point in window pixels is where a pinned card is dragged
+    /// from: its heading, away from the buttons.
+    pub fn caption_at(&self, x: i32, y: i32) -> bool {
+        if !self.pinned || self.search.active {
+            return false;
+        }
+        let (cx, cy) = self.card_point(x, y);
+        let on_button = [&self.back, &self.translate, &self.speak, &self.pin]
+            .into_iter()
+            .any(|b| b.shown() && contains(self.button_rect(b), x, y));
+        let in_heading = cx >= 0.0 && cx < CARD_W * self.scale && cy >= 0.0 && cy < self.header_h;
+        in_heading && !on_button
+    }
+
+    /// The window was dragged somewhere else.
+    pub fn moved(&mut self) {
+        let mut r = RECT::default();
+        if unsafe { GetWindowRect(self.hwnd, &mut r) }.is_ok() {
+            self.window = r;
+        }
+    }
+
     /// Shows for a moment, at the bottom of the card, that something was
     /// copied.
     pub fn show_copied(&self) -> Result<()> {
@@ -619,7 +710,9 @@ impl Popup {
         let over_back = point.is_some_and(|(x, y)| self.back_at(x, y));
         let over_translate = point.is_some_and(|(x, y)| self.translate_at(x, y));
         let over_speak = point.is_some_and(|(x, y)| self.speak_at(x, y));
+        let over_pin = point.is_some_and(|(x, y)| self.pin_at(x, y));
         self.back.set_hovered(&self.anim, over_back)?;
+        self.pin.set_hovered(&self.anim, over_pin)?;
         self.translate.set_hovered(&self.anim, over_translate)?;
         self.speak.set_hovered(&self.anim, over_speak)?;
         self.sync_swap()
@@ -671,6 +764,11 @@ impl Popup {
         self.speak.shown() && contains(self.button_rect(&self.speak), x, y)
     }
 
+    /// Whether a point in window pixels is on the pin button.
+    pub fn pin_at(&self, x: i32, y: i32) -> bool {
+        self.pin.shown() && contains(self.button_rect(&self.pin), x, y)
+    }
+
     /// A button in window pixels.
     fn button_rect(&self, button: &IconButton) -> RECT {
         let s = self.scale;
@@ -688,7 +786,7 @@ impl Popup {
 
     /// Keeps the tooltips over the buttons, and off while they're hidden.
     fn sync_tooltip(&self) {
-        for button in [&self.back, &self.translate, &self.speak] {
+        for button in [&self.back, &self.translate, &self.speak, &self.pin] {
             let rect = if button.shown() {
                 self.button_rect(button)
             } else {
@@ -743,6 +841,7 @@ impl Popup {
         self.back.hide_at_once()?;
         self.translate.reset()?;
         self.speak.reset()?;
+        self.pin.reset()?;
         self.search.reset();
         self.badge.reset()?;
         // The pointer comes back to the card afresh.
@@ -823,6 +922,7 @@ impl Popup {
         self.back.apply_theme(&self.renderer, &t, self.scale)?;
         self.translate.apply_theme(&self.renderer, &t, self.scale)?;
         self.speak.apply_theme(&self.renderer, &t, self.scale)?;
+        self.pin.apply_theme(&self.renderer, &t, self.scale)?;
         self.badge.apply_theme(&self.renderer, &t, self.scale)?;
         self.scroll_chrome.apply_theme(&t)
     }

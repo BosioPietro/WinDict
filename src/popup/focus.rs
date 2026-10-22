@@ -19,6 +19,7 @@ impl Popup {
     pub fn has_links(&self) -> bool {
         self.speak.shown()
             || self.translate.shown()
+            || self.pin.shown()
             || self.back.shown()
             || !self.content.links().is_empty()
     }
@@ -28,6 +29,7 @@ impl Popup {
         static SPEAK: Target = Target::Speak;
         static TRANSLATE: Target = Target::Translate;
         static BACK: Target = Target::Back;
+        static PIN: Target = Target::Pin;
         if self.speak.focused() {
             return Some(&SPEAK);
         }
@@ -36,6 +38,9 @@ impl Popup {
         }
         if self.back.focused() {
             return Some(&BACK);
+        }
+        if self.pin.focused() {
+            return Some(&PIN);
         }
         let links = self.content.links();
         self.content.focused().map(|i| &links[i].target)
@@ -49,6 +54,8 @@ impl Popup {
             Some(Stop::Translate)
         } else if self.back.focused() {
             Some(Stop::Back)
+        } else if self.pin.focused() {
+            Some(Stop::Pin)
         } else {
             self.content.focused().map(Stop::Link)
         }
@@ -65,6 +72,9 @@ impl Popup {
         }
         if self.translate.shown() {
             stops.push(Stop::Translate);
+        }
+        if self.pin.shown() {
+            stops.push(Stop::Pin);
         }
         stops.extend(self.content.stops().into_iter().map(Stop::Link));
         if self.back.shown() {
@@ -100,6 +110,7 @@ impl Popup {
             Stop::Speak => self.focus_speak(reveal)?,
             Stop::Translate => self.focus_translate(reveal)?,
             Stop::Back => self.focus_back(reveal)?,
+            Stop::Pin => self.focus_pin(reveal)?,
             Stop::Link(start) => {
                 self.focus_link(Some(start), reveal)?;
                 self.scroll_into_view(start)?;
@@ -118,10 +129,11 @@ impl Popup {
         let stroke = (ui::FOCUS_STROKE * s).round();
         let grow = stroke / 2.0;
         match stop {
-            Stop::Speak | Stop::Translate | Stop::Back => {
+            Stop::Speak | Stop::Translate | Stop::Back | Stop::Pin => {
                 let button = match stop {
                     Stop::Speak => &self.speak,
                     Stop::Back => &self.back,
+                    Stop::Pin => &self.pin,
                     _ => &self.translate,
                 };
                 let side = BACK_SIZE * s;
@@ -203,6 +215,12 @@ impl Popup {
         self.back.reveal(&self.anim, reveal)
     }
 
+    /// Rings the pin button, `reveal` ms from now.
+    pub(super) fn focus_pin(&mut self, reveal: u64) -> Result<()> {
+        self.focus_link(None, reveal)?;
+        self.pin.reveal(&self.anim, reveal)
+    }
+
     /// Rings the link starting at `start` in the body's links, or none,
     /// `reveal` ms from now. With a delay, the rings that are showing go at
     /// once, as another is gliding over the card to take their place.
@@ -210,6 +228,7 @@ impl Popup {
         self.speak.set_focused(false)?;
         self.translate.set_focused(false)?;
         self.back.set_focused(false)?;
+        self.pin.set_focused(false)?;
         self.content
             .focus(&self.anim, &self.renderer, start, reveal, self.scale)
     }
