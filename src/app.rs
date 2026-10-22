@@ -585,13 +585,11 @@ impl App {
     }
 
     fn bind_hotkey(&mut self) -> Result<(), Unbound> {
-        unsafe {
-            let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_LOOKUP);
-        }
+        win::unregister_hotkey(self.hwnd, HOTKEY_LOOKUP);
         self.hotkey_ok = false;
         let hk = hotkey::parse(&self.config.hotkey).map_err(Unbound::Invalid)?;
         let modifiers = hk.modifiers | MOD_NOREPEAT;
-        unsafe { RegisterHotKey(Some(self.hwnd), HOTKEY_LOOKUP, modifiers, hk.vk) }
+        win::register_hotkey(self.hwnd, HOTKEY_LOOKUP, modifiers, hk.vk)
             .map_err(|_| Unbound::Taken)?;
         self.hotkey_ok = true;
         self.tray
@@ -866,14 +864,7 @@ impl App {
     // Light dismiss: Esc, a click outside the card, or switching apps.
 
     fn install_dismiss_hooks(&mut self) {
-        unsafe {
-            let _ = RegisterHotKey(
-                Some(self.hwnd),
-                HOTKEY_ESCAPE,
-                MOD_NOREPEAT,
-                VK_ESCAPE.0 as u32,
-            );
-        }
+        let _ = win::register_hotkey(self.hwnd, HOTKEY_ESCAPE, MOD_NOREPEAT, VK_ESCAPE.0 as u32);
         if self.mouse_hook.is_none() {
             self.mouse_hook = win::Hook::low_level(WH_MOUSE_LL, Some(mouse_hook));
         }
@@ -883,9 +874,7 @@ impl App {
     }
 
     fn remove_dismiss_hooks(&mut self) {
-        unsafe {
-            let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_ESCAPE);
-        }
+        win::unregister_hotkey(self.hwnd, HOTKEY_ESCAPE);
         (self.mouse_hook, self.focus_hook) = (None, None);
     }
 
@@ -964,12 +953,10 @@ fn set_hotkeys(hwnd: HWND, keys: Keys, on: &mut bool, wanted: bool) {
     }
     *on = wanted;
     for &(id, modifiers, vk) in keys {
-        unsafe {
-            let _ = if wanted {
-                RegisterHotKey(Some(hwnd), id, modifiers, vk.0 as u32)
-            } else {
-                UnregisterHotKey(Some(hwnd), id)
-            };
+        if wanted {
+            let _ = win::register_hotkey(hwnd, id, modifiers, vk.0 as u32);
+        } else {
+            win::unregister_hotkey(hwnd, id);
         }
     }
 }

@@ -13,7 +13,10 @@ use windows::Win32::UI::Controls::{
     InitCommonControlsEx, ICC_WIN95_CLASSES, INITCOMMONCONTROLSEX, TOOLTIPS_CLASSW, TTF_SUBCLASS,
     TTM_ADDTOOLW, TTM_NEWTOOLRECTW, TTM_POP, TTS_ALWAYSTIP, TTS_NOPREFIX, TTTOOLINFOW,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    RegisterHotKey, TrackMouseEvent, UnregisterHotKey, HOT_KEY_MODIFIERS, TME_LEAVE,
+    TRACKMOUSEEVENT,
+};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetClassNameW, GetCursorPos, KillTimer, SendMessageW, SetTimer,
@@ -94,6 +97,20 @@ impl Drop for EventHook {
         unsafe {
             let _ = UnhookWinEvent(self.0);
         }
+    }
+}
+
+/// Has `hwnd` sent WM_HOTKEY with `id` whenever `vk` is pressed with
+/// `modifiers`, whichever app has the keyboard. Fails if another app, or
+/// Windows, has that combination already.
+pub fn register_hotkey(hwnd: HWND, id: i32, modifiers: HOT_KEY_MODIFIERS, vk: u32) -> Result<()> {
+    unsafe { RegisterHotKey(Some(hwnd), id, modifiers, vk) }
+}
+
+/// Gives the combination registered as `id` back to the app with the keyboard.
+pub fn unregister_hotkey(hwnd: HWND, id: i32) {
+    unsafe {
+        let _ = UnregisterHotKey(Some(hwnd), id);
     }
 }
 

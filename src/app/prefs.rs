@@ -109,10 +109,7 @@ impl App {
             Change::OpenConfig => return open_config_file(),
             Change::Autostart(on) => return autostart::set(on),
             // The shortcut being replaced mustn't fire as it's pressed to keep it.
-            Change::RecordingStarted => unsafe {
-                let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_LOOKUP);
-                return;
-            },
+            Change::RecordingStarted => return win::unregister_hotkey(self.hwnd, HOTKEY_LOOKUP),
             Change::RecordingStopped => return self.register_hotkey(),
             Change::Hotkey(hotkey) => {
                 let previous = std::mem::replace(&mut self.config.hotkey, hotkey);
