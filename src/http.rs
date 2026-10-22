@@ -85,18 +85,20 @@ pub fn fetch(
     mut sink: impl FnMut(&[u8]) -> Result<(), String>,
 ) -> Result<u32, String> {
     let offline = || tr().network_unavailable.to_string();
-    unsafe {
-        let session = session()?;
-        let connect = Handle(WinHttpConnect(
+    let session = session()?;
+    let connect = Handle(unsafe {
+        WinHttpConnect(
             session.0,
             &HSTRING::from(host),
             INTERNET_DEFAULT_HTTPS_PORT,
             0,
-        ));
-        if connect.0.is_null() {
-            return Err(offline());
-        }
-        let request = Handle(WinHttpOpenRequest(
+        )
+    });
+    if connect.0.is_null() {
+        return Err(offline());
+    }
+    let request = Handle(unsafe {
+        WinHttpOpenRequest(
             connect.0,
             w!("GET"),
             &HSTRING::from(path),
@@ -104,15 +106,19 @@ pub fn fetch(
             PCWSTR::null(),
             std::ptr::null(),
             WINHTTP_FLAG_SECURE,
-        ));
-        if request.0.is_null() {
-            return Err(offline());
-        }
+        )
+    });
+    if request.0.is_null() {
+        return Err(offline());
+    }
+    unsafe {
         WinHttpSendRequest(request.0, None, None, 0, 0, 0).map_err(|_| offline())?;
         WinHttpReceiveResponse(request.0, std::ptr::null_mut()).map_err(|_| offline())?;
+    }
 
-        let mut status: u32 = 0;
-        let mut len = std::mem::size_of::<u32>() as u32;
+    let mut status: u32 = 0;
+    let mut len = std::mem::size_of::<u32>() as u32;
+    unsafe {
         WinHttpQueryHeaders(
             request.0,
             WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
@@ -121,23 +127,27 @@ pub fn fetch(
             &mut len,
             std::ptr::null_mut(),
         )
-        .map_err(|_| offline())?;
+    }
+    .map_err(|_| offline())?;
 
-        let mut chunk = vec![0u8; CHUNK];
-        loop {
-            let mut read = 0u32;
+    let mut chunk = vec![0u8; CHUNK];
+    loop {
+        let mut read = 0u32;
+        // SAFETY: WinHTTP writes at most `chunk.len()` bytes, and says how
+        // many in `read`.
+        unsafe {
             WinHttpReadData(
                 request.0,
                 chunk.as_mut_ptr() as *mut c_void,
                 chunk.len() as u32,
                 &mut read,
             )
-            .map_err(|_| offline())?;
-            if read == 0 {
-                break;
-            }
-            sink(&chunk[..read as usize])?;
         }
-        Ok(status)
+        .map_err(|_| offline())?;
+        if read == 0 {
+            break;
+        }
+        sink(&chunk[..read as usize])?;
     }
+    Ok(status)
 }
