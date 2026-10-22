@@ -148,10 +148,51 @@ fn placement(anchor: RECT, work: RECT, scale: f32, downward: bool) -> (RECT, boo
 const CENTRED_RISE: f32 = 68.0;
 
 /// An anchor that opens a search box in the middle of the screen `near`
-/// (screen pixels) is on, for when there's no caret to open it at.
-pub fn centred_anchor(near: POINT) -> RECT {
+/// (screen pixels) is on, for when there's no caret to open it at, on a
+/// card zoomed to `zoom`.
+pub fn centred_anchor(near: POINT, zoom: f32) -> RECT {
     let (work, scale) = monitor_at(near);
-    centred_in(work, scale)
+    centred_in(work, zoomed(work, scale, zoom))
+}
+
+/// The scale of a card zoomed to `zoom` on a monitor of `scale` pixels per
+/// DIP: no larger than fits the tallest card in the `work` area, unless
+/// even the unzoomed one doesn't.
+fn zoomed(work: RECT, scale: f32, zoom: f32) -> f32 {
+    let room_w = (work.right - work.left) as f32 / (CARD_W + 2.0 * SCREEN_GAP);
+    let room_h = (work.bottom - work.top) as f32 / (MAX_CARD_H + 2.0 * SCREEN_GAP);
+    (scale * zoom).min(room_w.min(room_h).max(scale))
+}
+
+/// Where the window at `window`, its card drawn at `old` pixels per DIP,
+/// goes for the card at `s`: its left edge, and the edge it grows from,
+/// stay put, as far as the `work` area has room for it.
+fn rescaled(window: RECT, grow_up: bool, old: f32, s: f32, work: RECT) -> RECT {
+    let px = |dip: f32| (dip * s).round() as i32;
+    let (card_w, max_h, m, edge) = (px(CARD_W), px(MAX_CARD_H), px(MARGIN), px(SCREEN_GAP));
+    let old_m = (MARGIN * old).round() as i32;
+    let card_x = (window.left + old_m).clamp(
+        work.left + edge,
+        (work.right - edge - card_w).max(work.left + edge),
+    );
+    let window_h = max_h + 2 * m;
+    let window_y = if grow_up {
+        let card_bottom = (window.bottom - old_m)
+            .min(work.bottom - edge)
+            .max(work.top + edge + max_h);
+        card_bottom + m - window_h
+    } else {
+        let card_top = (window.top + old_m)
+            .min(work.bottom - edge - max_h)
+            .max(work.top + edge);
+        card_top - m
+    };
+    RECT {
+        left: card_x - m,
+        top: window_y,
+        right: card_x + card_w + m,
+        bottom: window_y + window_h,
+    }
 }
 
 fn centred_in(work: RECT, s: f32) -> RECT {
@@ -176,6 +217,19 @@ pub enum Transition {
     Replace,
     /// The same entry, refined: no fade, scroll position kept.
     Refine,
+    /// The same content, drawn at another size: nothing moves.
+    Rescale,
+}
+
+/// What the card shows, laid out, to be drawn again at another size.
+struct Shown {
+    word: String,
+    phonetic: Option<String>,
+    heading: render::Heading,
+    body: render::Layout,
+    /// How far the word is indented for the back button, in DIPs.
+    indent: f32,
+    loading: bool,
 }
 
 pub struct Popup {
@@ -205,6 +259,10 @@ pub struct Popup {
 
     theme: Theme,
     scale: f32,
+    /// How much larger than the monitor's scale the card is drawn.
+    zoom: f32,
+    /// The content last shown, unless the search box is.
+    shown: Option<Shown>,
     grow_up: bool,
     /// Window position and size, physical pixels.
     window: RECT,
@@ -255,7 +313,7 @@ impl Stop {
 // ---------------------------------------------------------------------------
 
 impl Popup {
-    pub fn new(window: Window, compositor: Compositor, theme: Theme) -> Result<Popup> {
+    pub fn new(window: Window, compositor: Compositor, theme: Theme, zoom: f32) -> Result<Popup> {
         let hwnd = window.hwnd();
         let target = attach(hwnd, &compositor)?;
         let renderer = Renderer::new(&compositor)?;
@@ -370,6 +428,8 @@ impl Popup {
             badge,
             theme,
             scale: 1.0,
+            zoom,
+            shown: None,
             grow_up: false,
             window: RECT::default(),
             card_h: 0.0,
@@ -452,11 +512,10 @@ impl Popup {
             }
             (true, _) => Some(self.search.leave(&self.anim)?),
         };
-        let s = self.scale;
         let content_w = CARD_W - 2.0 * PAD_X;
         let indent = if self.back.shown() { BACK_INDENT } else { 0.0 };
         // The pin button's there whenever the search box isn't.
-        self.pin.set_shown(&self.anim, true, s)?;
+        self.pin.set_shown(&self.anim, true, self.scale)?;
         let room = if self.translate.shown() {
             TRANSLATE_ROOM
         } else {
@@ -466,10 +525,34 @@ impl Popup {
         let heading =
             self.renderer
                 .layout_header(word, phonetic, content_w - room, indent, button)?;
-        let body_layout = self.renderer.layout_body(&body, content_w, PAD_BOTTOM)?;
+        let shown = Shown {
+            word: word.to_owned(),
+            phonetic: phonetic.map(str::to_owned),
+            heading,
+            body: self.renderer.layout_body(&body, content_w, PAD_BOTTOM)?,
+            indent,
+            loading: matches!(body, Body::Loading),
+        };
+        self.draw_content(&shown, transition, rise_from)?;
+        self.shown = Some(shown);
+        Ok(())
+    }
+
+    /// Draws `shown` on the card, bringing it in as `transition` says, the
+    /// word rising from the search box when it comes `rise_from` there.
+    fn draw_content(
+        &mut self,
+        shown: &Shown,
+        transition: Transition,
+        rise_from: Option<(Vector3, f32)>,
+    ) -> Result<()> {
+        let s = self.scale;
+        let content_w = CARD_W - 2.0 * PAD_X;
+        let (word, phonetic, indent) = (&shown.word, shown.phonetic.as_deref(), shown.indent);
+        let (heading, body_layout) = (&shown.heading, &shown.body);
         let (word_w, word_h) = heading.word_size;
         let key = (
-            word.to_owned(),
+            word.clone(),
             (word_w.to_bits(), word_h.to_bits()),
             indent.to_bits(),
         );
@@ -479,7 +562,7 @@ impl Popup {
             Some(surface) => surface,
             None => self.renderer.draw(&heading.word, s, &self.theme)?,
         };
-        let body_surface = self.renderer.draw(&body_layout, s, &self.theme)?;
+        let body_surface = self.renderer.draw(body_layout, s, &self.theme)?;
 
         let header_h = (PAD_TOP + heading.height + HEADER_GAP) * s;
         let body_h = body_layout.height * s;
@@ -496,8 +579,8 @@ impl Popup {
         self.body_h = body_h;
         // A refinement keeps the reader's place, and so the focused link.
         let kept = match transition {
-            Transition::Refine => self.focused_link().cloned(),
-            _ => None,
+            Transition::Refine | Transition::Rescale => self.focused_link().cloned(),
+            Transition::Instant | Transition::Replace => None,
         };
         self.content.set_links(body_layout.links.clone());
         if kept == Some(Target::Speak) && self.speak.shown() {
@@ -521,7 +604,7 @@ impl Popup {
         self.header
             .show(&self.anim, &header_surface, size, crossfade, s)?;
         // The pronunciation fades in once it's known, whatever else changes.
-        let moving = transition != Transition::Instant;
+        let moving = matches!(transition, Transition::Replace | Transition::Refine);
         match (phonetic, &heading.phonetic) {
             (Some(text), Some(placed)) => {
                 let surface = self.renderer.draw(&placed.layout, s, &self.theme)?;
@@ -567,8 +650,7 @@ impl Popup {
         self.content
             .show(c, &body_surface, size, body_layout.caret, s)?;
 
-        let loading = matches!(body, Body::Loading);
-        self.loader.set_running(&self.anim, loading, self.scale)?;
+        self.loader.set_running(&self.anim, shown.loading, s)?;
         self.sync_title();
 
         self.enter_body(transition, card_h, previous_header_h)?;
@@ -608,6 +690,13 @@ impl Popup {
                 self.scroll_anim = None;
                 self.content.keep_place(self.scroll, s)?;
                 self.move_content_host(previous_header_h)?;
+            }
+            Transition::Rescale => {
+                self.resize(card_h, false)?;
+                self.scroll = self.scroll.min(self.max_scroll());
+                self.scroll_anim = None;
+                self.content.keep_place(self.scroll, s)?;
+                self.content.move_host(&self.anim, self.header_h, false)?;
             }
         }
         Ok(())
@@ -680,6 +769,43 @@ impl Popup {
             .any(|b| b.shown() && contains(self.button_rect(b), x, y));
         let in_heading = cx >= 0.0 && cx < CARD_W * self.scale && cy >= 0.0 && cy < self.header_h;
         in_heading && !on_button
+    }
+
+    /// Draws the card `zoom` times as large as the monitor has it, in
+    /// place, from the next card on if it shows the search box.
+    pub fn set_zoom(&mut self, zoom: f32) -> Result<()> {
+        self.zoom = zoom;
+        let Some(shown) = self.shown.take().filter(|_| self.visible) else {
+            return Ok(());
+        };
+        let r = self.card_rect();
+        let center = POINT {
+            x: (r.left + r.right) / 2,
+            y: (r.top + r.bottom) / 2,
+        };
+        let (work, scale) = monitor_at(center);
+        let old = self.scale;
+        self.scale = zoomed(work, scale, zoom);
+        if self.scale != old {
+            self.window = rescaled(self.window, self.grow_up, old, self.scale, work);
+            let w = &self.window;
+            unsafe {
+                let _ = SetWindowPos(
+                    self.hwnd,
+                    None,
+                    w.left,
+                    w.top,
+                    w.right - w.left,
+                    w.bottom - w.top,
+                    SWP_NOACTIVATE | SWP_NOZORDER,
+                );
+            }
+            self.scroll *= self.scale / old;
+            self.apply_theme()?;
+            self.draw_content(&shown, Transition::Rescale, None)?;
+        }
+        self.shown = Some(shown);
+        Ok(())
     }
 
     /// The window was dragged somewhere else.
@@ -908,8 +1034,8 @@ impl Popup {
             y: (anchor.top + anchor.bottom) / 2,
         };
         let (work, scale) = monitor_at(center);
-        self.scale = scale;
-        (self.window, self.grow_up) = placement(anchor, work, scale, downward);
+        self.scale = zoomed(work, scale, self.zoom);
+        (self.window, self.grow_up) = placement(anchor, work, self.scale, downward);
     }
 
     fn apply_theme(&mut self) -> Result<()> {
@@ -1059,6 +1185,42 @@ mod tests {
             let expected = ((SCREEN.top + SCREEN.bottom) / 2 - rise).min(lowest);
             assert!((card_top - expected).abs() <= 1, "@{scale}");
         }
+    }
+
+    #[test]
+    fn zooms_only_as_far_as_the_card_fits() {
+        assert_eq!(zoomed(SCREEN, 1.0, 1.5), 1.5);
+        assert_eq!(zoomed(SCREEN, 1.5, 0.8), 1.2);
+        // 1040 pixels tall: the tallest card fits up to about 2.2 times.
+        let most = zoomed(SCREEN, 2.0, 2.0);
+        assert!(most < 2.3 && most > 2.0, "{most}");
+        assert!((MAX_CARD_H + 2.0 * SCREEN_GAP) * most <= 1040.0);
+        // Too small a screen for the card unzoomed: as Windows has it.
+        assert_eq!(zoomed(SCREEN, 3.0, 1.5), 3.0);
+    }
+
+    #[test]
+    fn keeps_a_zoomed_card_in_place() {
+        let (window, _) = placement(word_at(500, 100), SCREEN, 1.0, false);
+        let larger = rescaled(window, false, 1.0, 1.5, SCREEN);
+        let card = |w: RECT, s: f32| (w.left + (MARGIN * s) as i32, w.top + (MARGIN * s) as i32);
+        assert_eq!(card(larger, 1.5), card(window, 1.0));
+        assert_eq!(
+            larger.right - larger.left,
+            ((CARD_W + 2.0 * MARGIN) * 1.5) as i32
+        );
+        // Growing up, its bottom stays put.
+        let (window, _) = placement(word_at(500, 950), SCREEN, 1.0, false);
+        let larger = rescaled(window, true, 1.0, 1.5, SCREEN);
+        assert_eq!(
+            larger.bottom - (MARGIN * 1.5) as i32,
+            window.bottom - MARGIN as i32
+        );
+        // Near an edge, it moves only as far as it must to fit.
+        let (window, _) = placement(word_at(1700, 100), SCREEN, 1.0, false);
+        let larger = rescaled(window, false, 1.0, 2.0, SCREEN);
+        let edge = (SCREEN_GAP * 2.0) as i32;
+        assert_eq!(larger.right - (MARGIN * 2.0) as i32, SCREEN.right - edge);
     }
 
     #[test]

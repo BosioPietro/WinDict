@@ -117,6 +117,7 @@ impl Popup {
         }
         self.loader.forget();
         self.content.set_links(Vec::new());
+        self.shown = None;
         let delay = if in_place { MAKE_WAY_MS } else { 0 };
         let (renderer, theme, s) = (&self.renderer, &self.theme, self.scale);
         let h = self

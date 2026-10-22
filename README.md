@@ -44,6 +44,12 @@ or **Ctrl+T**, shows a translation of the word instead.
 
 The card follows the system's light or dark theme and accent color.
 
+To make the card's text larger or smaller, press **Ctrl+plus** or
+**Ctrl+minus**, or hold Ctrl and turn the mouse wheel over the card. **Ctrl+0**
+goes back to the usual size. The settings window follows the same size, and
+the same keys work there. The size is kept, and it's also under **Text size**
+in the settings.
+
 ## Dictionaries and network use
 
 - English comes from Open English WordNet (about 150,000 words and phrases),

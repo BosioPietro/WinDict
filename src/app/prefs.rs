@@ -161,6 +161,7 @@ impl App {
                 self.schedule_update_check(updating::SOON_MS);
                 return self.save_setting(|_| {});
             }
+            Change::Zoom(zoom) => return self.zoom_to(zoom),
             Change::Animations(on) => {
                 self.config.animations = Some(on);
                 ui::set_motion(on);

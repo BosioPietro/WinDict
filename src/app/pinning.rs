@@ -95,6 +95,7 @@ impl App {
         self.scroll_keys.set(self.hwnd, false);
         self.translate_key.set(self.hwnd, false);
         self.copy_key.set(self.hwnd, false);
+        self.zoom_keys.set(self.hwnd, false);
         self.back_keys.set(self.hwnd, false);
         self.remove_dismiss_hooks();
         for timer in [TIMER_AUTOHIDE, TIMER_COVERED] {
@@ -187,6 +188,9 @@ impl App {
             _ if picking => return false,
             k if ctrl && k.0 == b'C' as u16 => self.copy(),
             k if ctrl && k.0 == b'T' as u16 => self.toggle_translation(),
+            VK_OEM_PLUS | VK_ADD if ctrl => self.zoom(Some(1)),
+            VK_OEM_MINUS | VK_SUBTRACT if ctrl => self.zoom(Some(-1)),
+            k if ctrl && (k.0 == b'0' as u16 || k == VK_NUMPAD0) => self.zoom(None),
             VK_TAB => self.step_link(!hotkey::is_held(VK_SHIFT)),
             VK_RETURN => self.open_focused_link(),
             VK_BACK => self.back(),

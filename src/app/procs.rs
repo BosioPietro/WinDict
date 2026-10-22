@@ -69,6 +69,9 @@ pub(super) unsafe extern "system" fn main_proc(
                 HOTKEY_SCROLL_UP => with_app(|app| app.scroll_line(false)),
                 HOTKEY_SCROLL_DOWN => with_app(|app| app.scroll_line(true)),
                 HOTKEY_COPY => with_app(|app| app.copy()),
+                HOTKEY_ZOOM_IN | HOTKEY_ZOOM_IN_PAD => with_app(|app| app.zoom(Some(1))),
+                HOTKEY_ZOOM_OUT | HOTKEY_ZOOM_OUT_PAD => with_app(|app| app.zoom(Some(-1))),
+                HOTKEY_ZOOM_RESET | HOTKEY_ZOOM_RESET_PAD => with_app(|app| app.zoom(None)),
                 _ => None,
             };
             LRESULT(0)
@@ -85,6 +88,12 @@ pub(super) unsafe extern "system" fn main_proc(
         WM_APP_WHEEL => {
             let card = HWND(lparam.0 as _);
             with_app(|app| app.with_card(card, |app| app.on_wheel(wparam.0 as i16 as i32)));
+            LRESULT(0)
+        }
+        // Likewise, with Ctrl held.
+        WM_APP_ZOOM => {
+            let card = HWND(lparam.0 as _);
+            with_app(|app| app.with_card(card, |app| app.zoom_by_wheel(wparam.0 as i16 as i32)));
             LRESULT(0)
         }
         // From a card's window: the window in `wparam`, the point in `lparam`.
@@ -200,9 +209,12 @@ pub(super) unsafe extern "system" fn popup_proc(
             card(&mut |app| app.hover_card(None));
             LRESULT(0)
         }
+        // With Ctrl held, it zooms the card instead.
         WM_MOUSEWHEEL => {
             let delta = (wparam.0 >> 16) & 0xFFFF;
-            post(WM_APP_WHEEL, WPARAM(delta), LPARAM(hwnd.0 as isize));
+            let ctrl = wparam.0 as u32 & 0x0008 != 0; // MK_CONTROL
+            let msg = if ctrl { WM_APP_ZOOM } else { WM_APP_WHEEL };
+            post(msg, WPARAM(delta), LPARAM(hwnd.0 as isize));
             LRESULT(0)
         }
         // The scrollbar: its thumb follows the pointer, even off the card,
@@ -398,9 +410,15 @@ pub(super) unsafe extern "system" fn settings_proc(
             with_app(|app| app.in_settings(|s| s.lose_capture().map(|_| None)));
             LRESULT(0)
         }
+        // With Ctrl held, it zooms the window instead.
         WM_MOUSEWHEEL => {
             let delta = (wparam.0 >> 16) as u16 as i16 as i32;
-            with_app(|app| app.in_settings(|s| s.wheel(delta).map(|_| None)));
+            if wparam.0 as u32 & 0x0008 != 0 {
+                // MK_CONTROL
+                with_app(|app| app.zoom_settings_by_wheel(delta));
+            } else {
+                with_app(|app| app.in_settings(|s| s.wheel(delta).map(|_| None)));
+            }
             LRESULT(0)
         }
         // The card has shrunk: the window follows.

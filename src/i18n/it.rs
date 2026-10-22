@@ -116,6 +116,8 @@ pub const IT: Strings = Strings {
     card: "Scheda",
     theme: "Tema",
     theme_detail: "Colori dell\u{2019}applicazione",
+    text_size: "Dimensione testo",
+    text_size_detail: "Anche Ctrl+più, Ctrl+meno o Ctrl+rotellina sulla scheda",
     definitions: "Definizioni",
     definitions_detail: "Significati mostrati per parola",
     synonyms: "Sinonimi",

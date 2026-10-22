@@ -31,10 +31,13 @@ impl App {
         let translate = visible && (self.can_translate() || self.card.translating.is_some());
         // And Ctrl+C only while there's something to copy.
         let copy = popup.is_some() && self.copyable().is_some();
+        // Ctrl+plus and Ctrl+minus zoom any card but the search box.
+        let zoom = visible && self.card.search.is_none();
         self.set_link_keys(tab, enter);
         self.scroll_keys.set(self.hwnd, scroll);
         self.translate_key.set(self.hwnd, translate);
         self.copy_key.set(self.hwnd, copy);
+        self.zoom_keys.set(self.hwnd, zoom);
     }
 
     pub(super) fn set_link_keys(&mut self, tab: bool, enter: bool) {

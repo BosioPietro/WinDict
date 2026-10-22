@@ -13,13 +13,13 @@ impl App {
         self.sync_back_keys();
         let previous = unsafe { GetForegroundWindow() };
         self.dismiss_menu();
-        let theme = self.theme();
+        let (theme, zoom) = (self.theme(), self.config.zoom_factor());
         let Some(popup) = self.ensure_popup() else {
             return;
         };
         // With no caret to open at (an image, a game), the middle of the
         // screen the app is on.
-        let anchor = anchor_or_centre(anchor, previous);
+        let anchor = anchor_or_centre(anchor, previous, zoom);
         if let Err(e) = popup.show_search(anchor, theme, title, tr().search_placeholder) {
             self.tray.notify(tr().draw_window_failed, &e.message());
             return;

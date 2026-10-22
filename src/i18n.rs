@@ -177,6 +177,8 @@ strings! {
     card: "Card",
     theme: "Theme",
     theme_detail: "Card and menu colors",
+    text_size: "Text size",
+    text_size_detail: "Also Ctrl+plus, Ctrl+minus or Ctrl+wheel on the card",
     definitions: "Definitions",
     definitions_detail: "Senses shown per part of speech",
     synonyms: "Synonyms",

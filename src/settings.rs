@@ -33,7 +33,7 @@ use windows_numerics::{Vector2, Vector3};
 
 use crate::app::edit::{Input, LineEdit, Motion};
 use crate::app::picking::Picking;
-use crate::config::{Config, SelectionMode, ThemeMode};
+use crate::config::{self, Config, SelectionMode, ThemeMode, ZOOMS};
 use crate::dicts;
 use crate::hotkey::{self, held_modifiers, is_modifier, Hotkey};
 use crate::i18n::{tr, Language, Strings};
@@ -74,6 +74,8 @@ pub enum Change {
     MaxDefinitions(usize),
     MaxSynonyms(usize),
     ShowExamples(bool),
+    /// How large the card is drawn, in percent.
+    Zoom(u32),
     OnlineLookup(bool),
     Selection(SelectionMode),
     Animations(bool),
@@ -109,9 +111,11 @@ const SWITCHES: [Switch; 5] = [
 enum Counter {
     Definitions,
     Synonyms,
+    /// Which of [`ZOOMS`] the card is drawn at.
+    Zoom,
 }
 
-const COUNTERS: [Counter; 2] = [Counter::Definitions, Counter::Synonyms];
+const COUNTERS: [Counter; 3] = [Counter::Definitions, Counter::Synonyms, Counter::Zoom];
 
 impl Counter {
     /// The lowest and highest values.
@@ -119,12 +123,14 @@ impl Counter {
         match self {
             Counter::Definitions => (1, 10),
             Counter::Synonyms => (0, 12),
+            Counter::Zoom => (0, ZOOMS.len() - 1),
         }
     }
 
     fn text(self, n: usize) -> String {
-        match n {
-            0 => tr().off.into(),
+        match (self, n) {
+            (Counter::Zoom, _) => format!("{}%", ZOOMS[n]),
+            (_, 0) => tr().off.into(),
             _ => n.to_string(),
         }
     }
@@ -395,6 +401,12 @@ const SECTIONS: &[(Label, &[Row])] = &[
                 Control::Choice(Choice::Theme),
             ),
             row(
+                "\u{E8E9}",
+                |s| s.text_size,
+                |s| s.text_size_detail,
+                Control::Counter(Counter::Zoom),
+            ),
+            row(
                 "\u{E736}",
                 |s| s.definitions,
                 |s| s.definitions_detail,
@@ -497,6 +509,14 @@ impl Rect {
     fn size(&self) -> Vector2 {
         v2(self.w, self.h)
     }
+}
+
+/// The scale of the window zoomed to `zoom` on a monitor of `scale` pixels
+/// per DIP: no wider than fits in the `work` area, unless even the unzoomed
+/// one isn't. It scrolls to fit in height.
+fn zoomed(work: RECT, scale: f32, zoom: f32) -> f32 {
+    let room = (work.right - work.left) as f32 / (CARD_W + 2.0 * SCREEN_GAP);
+    (scale * zoom).min(room.max(scale))
 }
 
 /// The keys of the shortcut `text`, as written when it can't be read.
@@ -850,6 +870,7 @@ impl Settings {
     /// is on, showing `values`.
     pub fn show(&mut self, near: POINT, theme: Theme, values: Values) -> Result<()> {
         let (work, s) = ui::monitor_at(near);
+        let s = zoomed(work, s, values.config.zoom_factor());
         (self.theme, self.scale, self.values) = (theme, s, values);
         (self.hovered, self.pressed, self.focus) = (None, None, None);
         (self.ring, self.recording, self.scroll) = (false, false, 0.0);
@@ -1013,6 +1034,17 @@ impl Settings {
         }
         let shift = hotkey::is_held(VK_SHIFT);
         let ctrl = hotkey::is_held(VK_CONTROL);
+        // Ctrl+plus, Ctrl+minus and Ctrl+0 zoom the window, as on the card.
+        let zoom = self.values.config.zoom;
+        let zoom = match key {
+            VK_OEM_PLUS | VK_ADD if ctrl => Some(config::step_zoom(zoom, 1)),
+            VK_OEM_MINUS | VK_SUBTRACT if ctrl => Some(config::step_zoom(zoom, -1)),
+            k if ctrl && (k.0 == b'0' as u16 || k == VK_NUMPAD0) => Some(100),
+            _ => None,
+        };
+        if let Some(zoom) = zoom {
+            return Ok((zoom != self.values.config.zoom).then_some(Change::Zoom(zoom)));
+        }
         let change = match (key, self.focus) {
             (VK_ESCAPE, _) => return Ok(Some(Change::Close)),
             (VK_TAB, _) => {
@@ -1275,30 +1307,79 @@ impl Settings {
     /// The window moved to a monitor with another `dpi`. `suggested` is
     /// where Windows would put it, in screen pixels.
     pub fn rescale(&mut self, dpi: u32, suggested: RECT) -> Result<()> {
-        let s = dpi as f32 / 96.0;
+        let centre = POINT {
+            x: (suggested.left + suggested.right) / 2,
+            y: (suggested.top + suggested.bottom) / 2,
+        };
+        let work = ui::monitor_at(centre).0;
+        let s = zoomed(work, dpi as f32 / 96.0, self.values.config.zoom_factor());
         if (s - self.scale).abs() < 0.01 {
             return Ok(());
         }
+        self.redraw_at(s, work, |_, _| (suggested.left, suggested.top))
+    }
+
+    /// Draws the window `zoom` percent as large as Windows has it, its
+    /// setting showing that. It stays where it is, as far as it fits.
+    pub fn set_zoom(&mut self, zoom: u32) -> Result<()> {
+        // Stepped here, the number has rolled to it already.
+        let (up, changed) = (
+            zoom > self.values.config.zoom,
+            zoom != self.values.config.zoom,
+        );
+        self.values.config.zoom = zoom;
+        let mut r = RECT::default();
+        unsafe { GetWindowRect(self.hwnd, &mut r)? };
+        let centre = POINT {
+            x: (r.left + r.right) / 2,
+            y: (r.top + r.bottom) / 2,
+        };
+        let (work, dpi_scale) = ui::monitor_at(centre);
+        let s = zoomed(work, dpi_scale, self.values.config.zoom_factor());
+        if (s - self.scale).abs() < 0.01 {
+            return match changed {
+                true => self.show_count(Counter::Zoom, Some(up)),
+                false => Ok(()),
+            };
+        }
+        self.redraw_at(s, work, |w, h| {
+            let m = (MARGIN * s).round() as i32;
+            let gap = (SCREEN_GAP * s).round() as i32;
+            let left = (centre.x - w / 2)
+                .min(work.right - gap - w + m)
+                .max(work.left + gap - m);
+            let top = r.top.min(work.bottom - gap - h + m).max(work.top + gap - m);
+            (left, top)
+        })
+    }
+
+    /// Draws the window afresh at `s` pixels per DIP, keeping the place
+    /// scrolled to, in the `work` area, and moves it where `at` says for
+    /// its new width and height.
+    fn redraw_at(
+        &mut self,
+        s: f32,
+        work: RECT,
+        at: impl FnOnce(i32, i32) -> (i32, i32),
+    ) -> Result<()> {
         let scroll = self.scroll / self.scale * s;
         (self.scale, self.scroll) = (s, 0.0);
         self.scroll_anim = None;
         self.frame.apply_theme(&self.renderer, &self.theme, s)?;
         self.replace_view(false)?;
-        let centre = POINT {
-            x: (suggested.left + suggested.right) / 2,
-            y: (suggested.top + suggested.bottom) / 2,
-        };
-        self.fit(ui::monitor_at(centre).0)?;
+        self.fit(work)?;
         self.scroll_to(scroll)?;
         let m = (MARGIN * s).round();
+        let (w, h) = ((self.card.0 + 2.0 * m) as i32, (self.room + 2.0 * m) as i32);
+        let (left, top) = at(w, h);
         unsafe {
             let _ = SetWindowPos(
                 self.hwnd,
                 None,
-                suggested.left,
-                suggested.top,
-                (self.card.0 + 2.0 * m) as i32,
-                (self.room + 2.0 * m) as i32,
+                left,
+                top,
+                w,
+                h,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
         }
@@ -1591,5 +1672,7 @@ mod tests {
         assert_eq!(Counter::Synonyms.text(0), "Off");
         assert_eq!(Counter::Definitions.text(4), "4");
         assert_eq!(Counter::Definitions.text(1), "1");
+        assert_eq!(Counter::Zoom.text(0), "80%");
+        assert_eq!(Counter::Zoom.text(config::zoom_index(100)), "100%");
     }
 }

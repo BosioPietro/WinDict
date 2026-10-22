@@ -2,8 +2,8 @@
 //!
 //! This file holds the state, the hotkey, the timers and the dismissal of the
 //! card; the rest of `impl App` is split by flow into the submodules:
-//! `search`, `lookup`, `translating`, `links`, `pinning`, `tray_menu`,
-//! `prefs` and `updating`.
+//! `search`, `lookup`, `translating`, `links`, `pinning`, `zooming`,
+//! `tray_menu`, `prefs` and `updating`.
 //! `procs` has the window procedures, `edit` and `picking` the pure text and
 //! list logic.
 
@@ -19,6 +19,7 @@ mod search;
 mod translating;
 mod tray_menu;
 mod updating;
+mod zooming;
 
 use std::cell::{Cell, RefCell};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -93,6 +94,9 @@ const WM_APP_RECORD_KEY: u32 = WM_APP + 10;
 const WM_APP_CLOSE_CARD: u32 = WM_APP + 11;
 /// Enter on a card's pin button: the window in `wparam`.
 const WM_APP_PIN: u32 = WM_APP + 12;
+/// Ctrl and the mouse wheel on a card: the wheel's delta in `wparam`, the
+/// window in `lparam`.
+const WM_APP_ZOOM: u32 = WM_APP + 13;
 
 const HOTKEY_LOOKUP: i32 = 1;
 const HOTKEY_ESCAPE: i32 = 2;
@@ -105,6 +109,12 @@ const HOTKEY_TRANSLATE: i32 = 8;
 const HOTKEY_SCROLL_UP: i32 = 9;
 const HOTKEY_SCROLL_DOWN: i32 = 10;
 const HOTKEY_COPY: i32 = 11;
+const HOTKEY_ZOOM_IN: i32 = 12;
+const HOTKEY_ZOOM_IN_PAD: i32 = 13;
+const HOTKEY_ZOOM_OUT: i32 = 14;
+const HOTKEY_ZOOM_OUT_PAD: i32 = 15;
+const HOTKEY_ZOOM_RESET: i32 = 16;
+const HOTKEY_ZOOM_RESET_PAD: i32 = 17;
 
 /// Hotkeys registered only while the card has a use for them, as (id,
 /// modifiers, key).
@@ -165,6 +175,23 @@ const COPY_KEY: Keys = &[(
     HOT_KEY_MODIFIERS(MOD_CONTROL.0 | MOD_NOREPEAT.0),
     VIRTUAL_KEY(b'C' as u16),
 )];
+/// Held down, Ctrl+plus and Ctrl+minus keep zooming.
+const ZOOM_KEYS: Keys = &[
+    (HOTKEY_ZOOM_IN, MOD_CONTROL, VK_OEM_PLUS),
+    (HOTKEY_ZOOM_IN_PAD, MOD_CONTROL, VK_ADD),
+    (HOTKEY_ZOOM_OUT, MOD_CONTROL, VK_OEM_MINUS),
+    (HOTKEY_ZOOM_OUT_PAD, MOD_CONTROL, VK_SUBTRACT),
+    (
+        HOTKEY_ZOOM_RESET,
+        HOT_KEY_MODIFIERS(MOD_CONTROL.0 | MOD_NOREPEAT.0),
+        VIRTUAL_KEY(b'0' as u16),
+    ),
+    (
+        HOTKEY_ZOOM_RESET_PAD,
+        HOT_KEY_MODIFIERS(MOD_CONTROL.0 | MOD_NOREPEAT.0),
+        VK_NUMPAD0,
+    ),
+];
 
 const TIMER_HIDE: usize = 1;
 const TIMER_SETTLE: usize = 2;
@@ -481,6 +508,11 @@ pub struct App {
     scroll_keys: KeySet,
     /// Ctrl+C.
     copy_key: KeySet,
+    /// Ctrl+plus, Ctrl+minus and Ctrl+0.
+    zoom_keys: KeySet,
+    /// How far the wheel has turned with Ctrl held, towards the next step
+    /// of zoom.
+    zoom_wheel: i32,
     /// The dictionaries being downloaded, one at most for each language.
     installing: Vec<Installing>,
     /// A newer version, once one has been found.
@@ -561,6 +593,8 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             open_key: KeySet::new(OPEN_KEY),
             scroll_keys: KeySet::new(SCROLL_KEYS),
             copy_key: KeySet::new(COPY_KEY),
+            zoom_keys: KeySet::new(ZOOM_KEYS),
+            zoom_wheel: 0,
             installing: Vec::new(),
             update: None,
             updating: false,
@@ -729,7 +763,8 @@ impl App {
         if self.card.popup.is_none() {
             let window =
                 Window::create(POPUP_CLASS, w!("WinDict"), FLYOUT_EX_STYLE, WS_POPUP).ok()?;
-            match Popup::new(window, self.compositor.clone(), self.theme()) {
+            let zoom = self.config.zoom_factor();
+            match Popup::new(window, self.compositor.clone(), self.theme(), zoom) {
                 Ok(p) => self.card.popup = Some(p),
                 Err(e) => {
                     self.tray.notify(tr().draw_window_failed, &e.message());
@@ -1004,6 +1039,7 @@ impl App {
         self.scroll_keys.set(self.hwnd, false);
         self.translate_key.set(self.hwnd, false);
         self.copy_key.set(self.hwnd, false);
+        self.zoom_keys.set(self.hwnd, false);
         self.remove_dismiss_hooks();
         self.dismiss_menu();
         self.card.search = None;
@@ -1154,6 +1190,7 @@ impl App {
                     Err(e) => return self.tray.notify(tr().settings_not_reloaded, &e),
                 }
                 self.cache.clear();
+                self.apply_zoom();
                 i18n::set(self.config.ui_language);
                 ui::set_motion(self.config.animated());
                 self.register_hotkey();
@@ -1214,8 +1251,9 @@ fn anchor_or_cursor(anchor: Option<RECT>) -> RECT {
     })
 }
 
-/// `anchor`, or else the middle of the screen `window` is on.
-fn anchor_or_centre(anchor: Option<RECT>, window: HWND) -> RECT {
+/// `anchor`, or else the middle of the screen `window` is on, for a card
+/// zoomed to `zoom`.
+fn anchor_or_centre(anchor: Option<RECT>, window: HWND, zoom: f32) -> RECT {
     usable_anchor(anchor).unwrap_or_else(|| {
         let mut r = RECT::default();
         let near = if unsafe { GetWindowRect(window, &mut r) }.is_ok() {
@@ -1226,7 +1264,7 @@ fn anchor_or_centre(anchor: Option<RECT>, window: HWND) -> RECT {
         } else {
             win::cursor_pos()
         };
-        popup::centred_anchor(near)
+        popup::centred_anchor(near, zoom)
     })
 }
 

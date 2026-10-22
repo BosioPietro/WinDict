@@ -47,6 +47,9 @@ pub struct Config {
     pub max_synonyms: usize,
     /// Show the example sentences under the senses.
     pub show_examples: bool,
+    /// How large the card is drawn, in percent of the size Windows gives
+    /// it: one of [`ZOOMS`].
+    pub zoom: u32,
     /// "automatic", "direct" or "clipboard".
     pub selection: SelectionMode,
     /// What older versions saved instead: false was "clipboard".
@@ -72,11 +75,32 @@ pub struct Config {
     pub check_updates: bool,
 }
 
+/// The sizes the card can be zoomed to, in percent.
+pub const ZOOMS: [u32; 8] = [80, 90, 100, 110, 125, 150, 175, 200];
+
 impl Config {
     /// Whether the windows animate.
     pub fn animated(&self) -> bool {
         self.animations.unwrap_or_else(ui::system_motion)
     }
+
+    /// The card's zoom, as a factor.
+    pub fn zoom_factor(&self) -> f32 {
+        self.zoom as f32 / 100.0
+    }
+}
+
+/// The zoom `by` steps of [`ZOOMS`] from `zoom`, stopping at either end.
+pub fn step_zoom(zoom: u32, by: isize) -> u32 {
+    let at = zoom_index(zoom) as isize + by;
+    ZOOMS[at.clamp(0, ZOOMS.len() as isize - 1) as usize]
+}
+
+/// Where in [`ZOOMS`] `zoom` is, or the nearest to it.
+pub fn zoom_index(zoom: u32) -> usize {
+    (0..ZOOMS.len())
+        .min_by_key(|&i| ZOOMS[i].abs_diff(zoom))
+        .unwrap_or(0)
 }
 
 impl Default for Config {
@@ -88,6 +112,7 @@ impl Default for Config {
             max_definitions: 4,
             max_synonyms: 6,
             show_examples: true,
+            zoom: 100,
             selection: SelectionMode::Automatic,
             use_ui_automation: None,
             online_lookup: true,
@@ -175,6 +200,7 @@ fn parse(bytes: &[u8]) -> Result<Config, String> {
             .unwrap_or_default();
     }
     config.mymemory_email = config.mymemory_email.trim().to_string();
+    config.zoom = ZOOMS[zoom_index(config.zoom)];
     if config.use_ui_automation.take() == Some(false) {
         config.selection = SelectionMode::Clipboard;
     }
@@ -213,10 +239,25 @@ mod tests {
         assert!(config.show_examples);
         assert_eq!(config.selection, SelectionMode::Automatic);
         assert_eq!(config.languages, ["en"]);
+        assert_eq!(config.zoom, 100);
         assert_eq!(
             parse(br#"{"max_definitions": 0}"#).unwrap().max_definitions,
             1
         );
+    }
+
+    #[test]
+    fn reads_and_steps_the_zoom() {
+        let zoom = |json: &str| parse(json.as_bytes()).unwrap().zoom;
+        assert_eq!(zoom(r#"{"zoom": 125}"#), 125);
+        // Between the sizes there are, the nearest.
+        assert_eq!(zoom(r#"{"zoom": 120}"#), 125);
+        assert_eq!(zoom(r#"{"zoom": 5}"#), 80);
+        assert_eq!(zoom(r#"{"zoom": 900}"#), 200);
+        assert_eq!(step_zoom(100, 1), 110);
+        assert_eq!(step_zoom(100, -2), 80);
+        assert_eq!(step_zoom(200, 1), 200);
+        assert_eq!(step_zoom(80, -1), 80);
     }
 
     #[test]

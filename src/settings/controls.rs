@@ -53,6 +53,7 @@ impl Settings {
         match counter {
             Counter::Definitions => config.max_definitions,
             Counter::Synonyms => config.max_synonyms,
+            Counter::Zoom => config::zoom_index(config.zoom),
         }
     }
 
@@ -121,6 +122,10 @@ impl Settings {
             Counter::Synonyms => {
                 self.values.config.max_synonyms = next;
                 Change::MaxSynonyms(next)
+            }
+            Counter::Zoom => {
+                self.values.config.zoom = ZOOMS[next];
+                Change::Zoom(ZOOMS[next])
             }
         };
         self.show_count(counter, Some(up))?;
