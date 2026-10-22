@@ -66,6 +66,7 @@ pub const IT: Strings = Strings {
     // The card: translating.
     back_tip: "Indietro (Backspace)",
     translate_tip: "Traduci (Ctrl+T)",
+    speak_tip: "Ascolta",
     swap_tip: "Inverti le lingue",
     copied: "Copiato",
     translate_ambiguous: "\u{201C}{word}\u{201D} è una parola sia in {from} che in {to}.",

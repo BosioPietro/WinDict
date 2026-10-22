@@ -17,13 +17,20 @@ impl Popup {
 
     /// Whether the card has links, or buttons, to Tab through.
     pub fn has_links(&self) -> bool {
-        self.translate.shown() || self.back.shown() || !self.content.links().is_empty()
+        self.speak.shown()
+            || self.translate.shown()
+            || self.back.shown()
+            || !self.content.links().is_empty()
     }
 
     /// The link, or button, Tab moved to, if any.
     pub fn focused_link(&self) -> Option<&Target> {
+        static SPEAK: Target = Target::Speak;
         static TRANSLATE: Target = Target::Translate;
         static BACK: Target = Target::Back;
+        if self.speak.focused() {
+            return Some(&SPEAK);
+        }
         if self.translate.focused() {
             return Some(&TRANSLATE);
         }
@@ -36,7 +43,9 @@ impl Popup {
 
     /// Where Tab is, if anywhere.
     pub(super) fn current_stop(&self) -> Option<Stop> {
-        if self.translate.focused() {
+        if self.speak.focused() {
+            Some(Stop::Speak)
+        } else if self.translate.focused() {
             Some(Stop::Translate)
         } else if self.back.focused() {
             Some(Stop::Back)
@@ -47,10 +56,13 @@ impl Popup {
 
     /// Moves the keyboard focus to the next stop, or the previous one,
     /// going round from the last to the first, and scrolls it into view.
-    /// The translate button comes first, as it does reading the card, and
+    /// The buttons by the word come first, as they do reading the card, and
     /// the back button last, so Tab doesn't start on it.
     pub fn step_link(&mut self, forward: bool) -> Result<()> {
         let mut stops = Vec::new();
+        if self.speak.shown() {
+            stops.push(Stop::Speak);
+        }
         if self.translate.shown() {
             stops.push(Stop::Translate);
         }
@@ -85,6 +97,7 @@ impl Popup {
         // What the ring lands on shows once the one gliding over has arrived.
         let reveal = if across { FOCUS_MS } else { 0 };
         match to {
+            Stop::Speak => self.focus_speak(reveal)?,
             Stop::Translate => self.focus_translate(reveal)?,
             Stop::Back => self.focus_back(reveal)?,
             Stop::Link(start) => {
@@ -105,14 +118,18 @@ impl Popup {
         let stroke = (ui::FOCUS_STROKE * s).round();
         let grow = stroke / 2.0;
         match stop {
-            Stop::Translate | Stop::Back => {
-                let button = if stop == Stop::Back {
-                    &self.back
-                } else {
-                    &self.translate
+            Stop::Speak | Stop::Translate | Stop::Back => {
+                let button = match stop {
+                    Stop::Speak => &self.speak,
+                    Stop::Back => &self.back,
+                    _ => &self.translate,
                 };
                 let side = BACK_SIZE * s;
-                Some((button.offset(s), v2(side, side), BACK_RADIUS * s + grow))
+                Some((
+                    button.card_offset(s),
+                    v2(side, side),
+                    BACK_RADIUS * s + grow,
+                ))
             }
             Stop::Link(start) => {
                 let l = self.content.rects(start).next()?;
@@ -168,6 +185,12 @@ impl Popup {
         self.focus_link(None, 0)
     }
 
+    /// Rings the button saying the word, `reveal` ms from now.
+    pub(super) fn focus_speak(&mut self, reveal: u64) -> Result<()> {
+        self.focus_link(None, reveal)?;
+        self.speak.reveal(&self.anim, reveal)
+    }
+
     /// Rings the translate button, `reveal` ms from now.
     pub(super) fn focus_translate(&mut self, reveal: u64) -> Result<()> {
         self.focus_link(None, reveal)?;
@@ -184,6 +207,7 @@ impl Popup {
     /// `reveal` ms from now. With a delay, the rings that are showing go at
     /// once, as another is gliding over the card to take their place.
     pub(super) fn focus_link(&mut self, start: Option<usize>, reveal: u64) -> Result<()> {
+        self.speak.set_focused(false)?;
         self.translate.set_focused(false)?;
         self.back.set_focused(false)?;
         self.content

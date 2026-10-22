@@ -194,6 +194,32 @@ pub struct Layout {
     pub caret: Option<Mark>,
 }
 
+/// The card's heading, laid out: the word, and its pronunciation apart from
+/// it, so that it can fade in once it's known.
+pub struct Heading {
+    /// The word, from the heading's top left.
+    pub word: Layout,
+    /// The size the word takes, which tells how it wraps.
+    pub word_size: (f32, f32),
+    /// The pronunciation, and where it goes in the heading.
+    pub phonetic: Option<Placed>,
+    /// Where the button after the pronunciation goes: its left edge, and
+    /// the middle of the line it's on.
+    pub button: Option<(f32, f32)>,
+    /// The whole heading's.
+    pub height: f32,
+}
+
+/// A layout, and where it goes in another, in DIPs.
+pub struct Placed {
+    pub layout: Layout,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// The room between the heading's text and the button after it, in DIPs.
+const HEADING_BUTTON_GAP: f32 = 2.0;
+
 /// A rectangle in a layout, in DIPs.
 #[derive(Clone, Copy)]
 pub struct Mark {
@@ -240,6 +266,8 @@ pub enum Target {
     Word(String),
     /// The card's translate button: turns it into the word's translation.
     Translate,
+    /// The card's speak button: says the word out loud.
+    Speak,
     /// The card's back button.
     Back,
     /// Lists the languages to translate from, or into.

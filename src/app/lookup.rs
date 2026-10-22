@@ -187,17 +187,23 @@ impl App {
             Body::Definition(def) => Some(Translatable::of(def)),
             _ => None,
         };
+        self.speakable = match &body {
+            Body::Definition(def) => self.voice_for(&def.language).map(|v| (def.word.clone(), v)),
+            _ => None,
+        };
         self.translating = None;
         match place {
             Place::New(anchor) => self.show_body(anchor, title, phonetic, body, false),
             Place::Same(transition) => {
                 let back = !self.history.is_empty();
                 let translate = self.can_translate();
+                let speak = self.speakable.is_some();
                 let Some(popup) = self.popup.as_mut() else {
                     return;
                 };
                 let _ = popup.set_back(back);
                 let _ = popup.set_translate(translate);
+                let _ = popup.set_speak(speak);
                 if popup
                     .set_content(title, phonetic, body, transition)
                     .is_err()
@@ -218,6 +224,7 @@ impl App {
         auto_hide: bool,
     ) {
         (self.translatable, self.translating) = (None, None);
+        self.speakable = None;
         let anchor = anchor_or_cursor(anchor);
         self.show_body(
             anchor,
@@ -243,10 +250,12 @@ impl App {
         self.dismiss_menu();
         let theme = self.theme();
         let translate = self.can_translate();
+        let speak = self.speakable.is_some();
         let Some(popup) = self.ensure_popup() else {
             return;
         };
         let _ = popup.set_translate(translate);
+        let _ = popup.set_speak(speak);
         if let Err(e) = popup.show(anchor, theme, title, phonetic, body) {
             self.tray.notify(tr().draw_window_failed, &e.message());
             return;
@@ -278,6 +287,20 @@ impl App {
         };
         CARD_RECT.set(popup.card_rect());
         win::set_timer(self.hwnd, TIMER_SETTLE, SETTLE_MS);
+    }
+
+    /// The id of a voice saying words in `language`, if one is installed.
+    fn voice_for(&mut self, language: &str) -> Option<HSTRING> {
+        let voices = self.voices.get_or_insert_with(Voices::load);
+        voices.for_language(language).cloned()
+    }
+
+    /// Says the word the card shows out loud, in its own language.
+    pub(super) fn speak(&mut self) {
+        let visible = self.popup.as_ref().is_some_and(|p| p.visible);
+        if let Some((word, voice)) = self.speakable.as_ref().filter(|_| visible) {
+            self.speaker.say(word, voice);
+        }
     }
 
     /// Safety net: if Start/Search still covers the card, close it.

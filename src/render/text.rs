@@ -3,59 +3,86 @@
 use super::*;
 
 impl Renderer {
-    /// The word and its pronunciation, `indent` DIPs from the left.
+    /// The word and its pronunciation, `indent` DIPs from the left, with
+    /// room after them for a button `button` DIPs wide, if there's one.
     pub fn layout_header(
         &self,
         word: &str,
         phonetic: Option<&str>,
         width: f32,
         indent: f32,
-    ) -> Result<Layout> {
-        let mut items = Vec::new();
+        button: Option<f32>,
+    ) -> Result<Heading> {
         let room = width - indent;
-        let title = self.text(&capitalize(word), &self.formats.word, room)?;
+        let button_room = button.map_or(0.0, |w| HEADING_BUTTON_GAP + w);
+        // The button follows the pronunciation, or else the word.
+        let word_room = match phonetic {
+            Some(_) => room,
+            None => room - button_room,
+        };
+        let title = self.text(&capitalize(word), &self.formats.word, word_room)?;
         let (title_w, title_h, baseline) = metrics(&title);
+        let title_line = first_line_height(&title);
         let mut height = title_h;
+        // Where what the button follows ends, and the middle of its line.
+        let mut end = (indent + title_w, title_line / 2.0);
+        let mut pronunciation = None;
         if let Some(p) = phonetic {
             let gap = 10.0;
-            let phon = self.text(p, &self.formats.phonetic, room)?;
+            let phon = self.text(p, &self.formats.phonetic, room - button_room)?;
             let (phon_w, phon_h, phon_baseline) = metrics(&phon);
-            if title_w + gap + phon_w <= room {
-                // Same line, sharing the baseline.
-                items.push(Item::Text {
-                    layout: phon,
-                    x: indent + title_w + gap,
-                    y: baseline - phon_baseline,
-                    ink: Ink::Secondary,
-                    accents: Vec::new(),
-                });
-            } else {
-                items.push(Item::Text {
-                    layout: phon,
-                    x: indent,
-                    y: title_h + 2.0,
-                    ink: Ink::Secondary,
-                    accents: Vec::new(),
-                });
+            let wrapped = title_w + gap + phon_w + button_room > room;
+            let (x, y) = if wrapped {
                 height += 2.0 + phon_h;
-            }
+                (indent, title_h + 2.0)
+            } else {
+                // Same line, sharing the baseline.
+                (indent + title_w + gap, baseline - phon_baseline)
+            };
+            let line = if wrapped {
+                first_line_height(&phon)
+            } else {
+                title_line
+            };
+            end = (x + phon_w, if wrapped { y } else { 0.0 } + line / 2.0);
+            pronunciation = Some(Placed {
+                layout: Layout {
+                    items: vec![Item::Text {
+                        layout: phon,
+                        x: 0.0,
+                        y: 0.0,
+                        ink: Ink::Secondary,
+                        accents: Vec::new(),
+                    }],
+                    // A little over, so the last glyph's overhang isn't cut.
+                    width: phon_w.ceil() + 1.0,
+                    height: phon_h,
+                    links: Vec::new(),
+                    caret: None,
+                },
+                x,
+                y,
+            });
         }
-        items.insert(
-            0,
-            Item::Text {
+        let word = Layout {
+            items: vec![Item::Text {
                 layout: title,
                 x: indent,
                 y: 0.0,
                 ink: Ink::Primary,
                 accents: Vec::new(),
-            },
-        );
-        Ok(Layout {
-            items,
+            }],
             width,
-            height,
+            height: title_h,
             links: Vec::new(),
             caret: None,
+        };
+        Ok(Heading {
+            word,
+            word_size: (title_w, title_h),
+            phonetic: pronunciation,
+            button: button.map(|_| (end.0 + HEADING_BUTTON_GAP, end.1)),
+            height,
         })
     }
 

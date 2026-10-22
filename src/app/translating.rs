@@ -164,6 +164,7 @@ impl App {
         popup.hold_region(t.picking.is_some());
         let _ = popup.set_back(true);
         let _ = popup.set_translate(false);
+        let _ = popup.set_speak(false);
         let body = Body::Translation(card);
         if popup
             .set_content(&t.about.word, None, body, transition)

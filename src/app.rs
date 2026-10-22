@@ -47,6 +47,7 @@ use crate::render::{self, Body, Side, Target, TranslationCard, PICKER_ROWS};
 use crate::searchbox::MAX_SUGGESTIONS;
 use crate::selection::{self, Capturer, Selection};
 use crate::settings::{Change, Settings, Values};
+use crate::speech::{Speaker, Voices};
 use crate::theme::Theme;
 use crate::translate::{self, Translation};
 use crate::tray::{self, Tray};
@@ -425,6 +426,12 @@ pub struct App {
     /// The translation the card turned into, if it did.
     translating: Option<Translating>,
     translations: Recent<TranslationKey, Translation>,
+    /// The word the card shows, and the voice that says it, if there's one
+    /// for its language.
+    speakable: Option<(String, HSTRING)>,
+    /// The voices installed, once a card has needed them, until it's gone.
+    voices: Option<Voices>,
+    speaker: Speaker,
     /// Ctrl+T.
     translate_key: KeySet,
     /// Backspace and Alt+Left.
@@ -517,6 +524,9 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             translatable: None,
             translating: None,
             translations: Recent::new(TRANSLATION_CACHE_SIZE),
+            speakable: None,
+            voices: None,
+            speaker: Speaker::default(),
             translate_key: KeySet::new(TRANSLATE_KEY),
             back_keys: KeySet::new(BACK_KEYS),
             link_keys: KeySet::new(LINK_KEYS),
@@ -1007,6 +1017,8 @@ impl App {
             }
             TIMER_TEARDOWN if self.popup.as_ref().is_some_and(|p| !p.visible) => {
                 self.popup = None;
+                // Read afresh next time, so that voices installed meanwhile are found.
+                self.voices = None;
                 trim_working_set();
             }
             _ => {}
@@ -1041,6 +1053,9 @@ impl App {
         }
         if self.popup.as_ref().is_some_and(|p| p.translate_at(x, y)) {
             return self.translate();
+        }
+        if self.popup.as_ref().is_some_and(|p| p.speak_at(x, y)) {
+            return self.speak();
         }
         if let Some(target) = self.popup.as_ref().and_then(|p| p.link_at(x, y)).cloned() {
             self.open_link(target);

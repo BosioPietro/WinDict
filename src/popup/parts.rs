@@ -4,13 +4,18 @@
 use super::*;
 
 /// The word and its pronunciation. `back` holds the previous rendering
-/// while it cross-fades to the new one.
+/// of the word while it cross-fades to the new one; the pronunciation,
+/// inside `visual`, fades in on its own once it's known.
 pub(super) struct Header {
     visual: SpriteVisual,
     brush: CompositionSurfaceBrush,
     back: SpriteVisual,
     back_brush: CompositionSurfaceBrush,
     surface: Option<CompositionDrawingSurface>,
+    phonetic: SpriteVisual,
+    phonetic_brush: CompositionSurfaceBrush,
+    /// What the pronunciation shows.
+    phonetic_key: Option<String>,
 }
 
 /// How the heading comes to its place.
@@ -31,13 +36,75 @@ impl Header {
         card.Children()?.InsertAtTop(&back)?;
         let (visual, brush) = text_sprite(c)?;
         card.Children()?.InsertAtTop(&visual)?;
+        let (phonetic, phonetic_brush) = text_sprite(c)?;
+        phonetic.SetOpacity(0.0)?;
+        visual.Children()?.InsertAtTop(&phonetic)?;
         Ok(Header {
             visual,
             brush,
             back,
             back_brush,
             surface: None,
+            phonetic,
+            phonetic_brush,
+            phonetic_key: None,
         })
+    }
+
+    /// What's in the heading and moves with it, such as the button after
+    /// the pronunciation.
+    pub(super) fn host(&self) -> Result<ContainerVisual> {
+        self.visual.cast()
+    }
+
+    /// Shows the pronunciation `text`, drawn on `surface`, `size` pixels,
+    /// at `at` in the heading. With `fade`, a new one fades in, sliding a
+    /// little into place, and one that moved glides there.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn show_phonetic(
+        &mut self,
+        anim: &Animator,
+        text: &str,
+        surface: &CompositionDrawingSurface,
+        size: Vector2,
+        at: Vector3,
+        fade: bool,
+        s: f32,
+    ) -> Result<()> {
+        let new = self.phonetic_key.as_deref() != Some(text);
+        self.phonetic_key = Some(text.to_owned());
+        self.phonetic_brush.SetSurface(surface)?;
+        self.phonetic.SetSize(size)?;
+        if !new {
+            return self.place_phonetic(anim, at, fade);
+        }
+        Animator::stop(&self.phonetic, &["Opacity", "Offset"]);
+        if !fade {
+            self.phonetic.SetOffset(at)?;
+            return self.phonetic.SetOpacity(1.0);
+        }
+        self.phonetic
+            .SetOffset(v3(at.X - PHONETIC_SLIDE * s, at.Y))?;
+        self.phonetic.SetOpacity(0.0)?;
+        let ease = &anim.decelerate;
+        anim.scalar(&self.phonetic, "Opacity", 1.0, PHONETIC_MS, 0, ease)?;
+        anim.vector3(&self.phonetic, "Offset", at, PHONETIC_MS, 0, ease)
+    }
+
+    /// Moves the pronunciation to `at` in the heading, gliding with `glide`.
+    fn place_phonetic(&self, anim: &Animator, at: Vector3, glide: bool) -> Result<()> {
+        if !glide {
+            Animator::stop(&self.phonetic, &["Offset"]);
+            return self.phonetic.SetOffset(at);
+        }
+        anim.vector3(&self.phonetic, "Offset", at, RESIZE_MS, 0, &anim.decelerate)
+    }
+
+    /// Takes the pronunciation away, for a heading without one.
+    pub(super) fn hide_phonetic(&mut self) -> Result<()> {
+        self.phonetic_key = None;
+        Animator::stop(&self.phonetic, &["Opacity", "Offset"]);
+        self.phonetic.SetOpacity(0.0)
     }
 
     /// What the heading shows now, if anything.
@@ -106,8 +173,9 @@ impl Header {
     }
 
     /// Back at rest, for a new card.
-    pub(super) fn reset(&self) -> Result<()> {
+    pub(super) fn reset(&mut self) -> Result<()> {
         Animator::stop(&self.visual, &["Opacity", "Offset", "Scale"]);
+        self.hide_phonetic()?;
         self.visual.SetScale(scale(1.0))
     }
 
@@ -115,6 +183,8 @@ impl Header {
     pub(super) fn release(&mut self) {
         let _ = self.brush.SetSurface(None::<&ICompositionSurface>);
         let _ = self.back_brush.SetSurface(None::<&ICompositionSurface>);
+        let _ = self.phonetic_brush.SetSurface(None::<&ICompositionSurface>);
+        let _ = self.hide_phonetic();
         self.surface = None;
     }
 }
@@ -142,11 +212,15 @@ pub(super) struct IconButton {
     icon: &'static str,
     face: Face,
     ink: Ink,
-    /// Left edge in the card, in DIPs.
+    /// Left edge in what it's in, in DIPs.
     x: f32,
+    /// Where what it's in is in the card, in DIPs.
+    origin: Vector2,
     /// Where it slides in from, in DIPs right of its place.
     slide_from: f32,
     shown: bool,
+    /// Whether it's been put in its place since it was last shown.
+    placed: bool,
     hovered: bool,
     focused: bool,
     /// Top of the button in the card, physical pixels.
@@ -161,16 +235,19 @@ pub(super) struct IconSpec<'a> {
     pub(super) tip: &'a str,
     /// The tooltip's tool, unique among the card's buttons.
     pub(super) tool: usize,
-    /// Left edge in the card, in DIPs.
+    /// Left edge in what it's in, in DIPs.
     pub(super) x: f32,
+    /// Where what it's in is in the card, in DIPs.
+    pub(super) origin: Vector2,
     /// Where it slides in from, in DIPs right of its place.
     pub(super) slide_from: f32,
 }
 
 impl IconButton {
+    /// A button in `parent`: the card, or a part of it.
     pub(super) fn new(
         c: &Compositor,
-        card: &ContainerVisual,
+        parent: &ContainerVisual,
         hwnd: HWND,
         spec: IconSpec,
     ) -> Result<IconButton> {
@@ -181,11 +258,12 @@ impl IconButton {
             tip,
             tool,
             x,
+            origin,
             slide_from,
         } = spec;
         let visual = c.CreateContainerVisual()?;
         visual.SetOpacity(0.0)?;
-        card.Children()?.InsertAtTop(&visual)?;
+        parent.Children()?.InsertAtTop(&visual)?;
         let slide = c.CreateContainerVisual()?;
         visual.Children()?.InsertAtTop(&slide)?;
         let hover = c.CreateSpriteVisual()?;
@@ -223,8 +301,10 @@ impl IconButton {
             face,
             ink,
             x,
+            origin,
             slide_from,
             shown: false,
+            placed: false,
             hovered: false,
             focused: false,
             top: 0.0,
@@ -264,6 +344,7 @@ impl IconButton {
             return Ok(());
         }
         self.shown = shown;
+        self.placed = false;
         let away = v3(self.slide_from * s, 0.0);
         if shown {
             // Slides in alongside the word making room for it.
@@ -342,9 +423,34 @@ impl IconButton {
         self.visual.SetOffset(self.offset(s))
     }
 
-    /// Where it is in the card, in pixels at `s` per DIP.
-    pub(super) fn offset(&self, s: f32) -> Vector3 {
+    /// Puts it `x` DIPs in and `top` pixels down what it's in. With
+    /// `glide`, one already in its place glides over to the new one.
+    pub(super) fn move_to(
+        &mut self,
+        anim: &Animator,
+        x: f32,
+        top: f32,
+        glide: bool,
+        s: f32,
+    ) -> Result<()> {
+        (self.x, self.top) = (x, top);
+        let at = self.offset(s);
+        if glide && std::mem::replace(&mut self.placed, true) {
+            return anim.vector3(&self.visual, "Offset", at, RESIZE_MS, 0, &anim.decelerate);
+        }
+        Animator::stop(&self.visual, &["Offset"]);
+        self.visual.SetOffset(at)
+    }
+
+    /// Where it is in what it's in, in pixels at `s` per DIP.
+    fn offset(&self, s: f32) -> Vector3 {
         v3((self.x * s).round(), self.top)
+    }
+
+    /// Where it is in the card, in pixels at `s` per DIP.
+    pub(super) fn card_offset(&self, s: f32) -> Vector3 {
+        let at = self.offset(s);
+        v3(at.X + self.origin.X * s, at.Y + self.origin.Y * s)
     }
 
     /// Lets go of the glyph's surface while the card is idle.

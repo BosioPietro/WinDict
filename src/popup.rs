@@ -58,6 +58,16 @@ const TRANSLATE_ROOM: f32 = CARD_W - PAD_X - TRANSLATE_X + 6.0;
 const TRANSLATE_GLYPH: &str = "\u{E8C1}";
 /// The swap button's tooltip's tool, after the back and translate buttons'.
 const SWAP_TOOL: usize = 3;
+/// The speak button's tooltip's tool, after the swap button's.
+const SPEAK_TOOL: usize = 4;
+/// "Volume" in Segoe Fluent Icons and Segoe MDL2 Assets.
+const SPEAK_GLYPH: &str = "\u{E767}";
+/// How far the speak button slides in from the left as it appears.
+const SPEAK_SLIDE: f32 = 6.0;
+/// How long a pronunciation takes to fade in, and how far it slides in
+/// from the left as it does, in DIPs.
+const PHONETIC_MS: u64 = 320;
+const PHONETIC_SLIDE: f32 = 6.0;
 const FOCUS_RADIUS: f32 = 4.0;
 /// How long the ring takes to glide to the next link, and to fade.
 const FOCUS_MS: u64 = 200;
@@ -173,6 +183,8 @@ pub struct Popup {
     scroll_chrome: ScrollChrome,
     back: IconButton,
     translate: IconButton,
+    /// Says the word: after its pronunciation, and moving with the heading.
+    speak: IconButton,
     search: SearchBox,
     glide: SpriteVisual,
     glide_source: CompositionSurfaceBrush,
@@ -195,9 +207,9 @@ pub struct Popup {
     /// The clickable area last set, so an unchanged one isn't set again,
     /// which repaints the whole window.
     region: std::cell::Cell<(i32, i32, i32, i32, i32)>,
-    /// What the heading was last drawn from, to tell a refinement that
-    /// leaves it alone.
-    header_key: (String, Option<String>, u32),
+    /// What the word was last drawn from (the word, its size and its
+    /// indent), to tell a refinement that leaves it alone.
+    header_key: (String, (u32, u32), u32),
     body_h: f32,
     scroll: f32,
     scroll_anim: Option<Glide>,
@@ -212,6 +224,7 @@ pub struct Popup {
 /// Somewhere Tab stops in the card.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Stop {
+    Speak,
     Translate,
     /// The link starting at this index in the body's links.
     Link(usize),
@@ -238,6 +251,22 @@ impl Popup {
         target.SetRoot(&root)?;
         let frame = Frame::new(c, &root, &theme)?;
         let header = Header::new(c, &frame.card)?;
+        // In the heading, so that it moves with it.
+        let speak = IconButton::new(
+            c,
+            &header.host()?,
+            hwnd,
+            IconSpec {
+                icon: SPEAK_GLYPH,
+                face: Face::Button,
+                ink: Ink::Secondary,
+                tip: tr().speak_tip,
+                tool: SPEAK_TOOL,
+                x: 0.0,
+                origin: v2(PAD_X, PAD_TOP),
+                slide_from: -SPEAK_SLIDE,
+            },
+        )?;
         let back = IconButton::new(
             c,
             &frame.card,
@@ -249,6 +278,7 @@ impl Popup {
                 tip: tr().back_tip,
                 tool: 1,
                 x: BACK_X,
+                origin: v2(0.0, 0.0),
                 slide_from: -BACK_SLIDE,
             },
         )?;
@@ -265,6 +295,7 @@ impl Popup {
                 tip: tr().translate_tip,
                 tool: 2,
                 x: TRANSLATE_X,
+                origin: v2(0.0, 0.0),
                 slide_from: 0.0,
             },
         )?;
@@ -300,6 +331,7 @@ impl Popup {
             scroll_chrome,
             back,
             translate,
+            speak,
             search,
             glide,
             glide_source,
@@ -364,6 +396,7 @@ impl Popup {
         self.content.release();
         self.back.release();
         self.translate.release();
+        self.speak.release();
         self.badge.release();
         self.loader.stop();
         self.search.reset();
@@ -394,24 +427,26 @@ impl Popup {
         } else {
             0.0
         };
-        let header_layout =
+        let button = self.speak.shown().then_some(BACK_SIZE);
+        let heading =
             self.renderer
-                .layout_header(word, phonetic, content_w - room, indent)?;
+                .layout_header(word, phonetic, content_w - room, indent, button)?;
         let body_layout = self.renderer.layout_body(&body, content_w, PAD_BOTTOM)?;
+        let (word_w, word_h) = heading.word_size;
         let key = (
             word.to_owned(),
-            phonetic.map(str::to_owned),
-            (content_w - room + indent).to_bits(),
+            (word_w.to_bits(), word_h.to_bits()),
+            indent.to_bits(),
         );
         let header_same = std::mem::replace(&mut self.header_key, key.clone()) == key;
-        // An unchanged heading keeps the surface it has, so it can't flicker.
+        // An unchanged word keeps the surface it has, so it can't flicker.
         let header_surface = match self.header.surface().filter(|_| header_same) {
             Some(surface) => surface,
-            None => self.renderer.draw(&header_layout, s, &self.theme)?,
+            None => self.renderer.draw(&heading.word, s, &self.theme)?,
         };
         let body_surface = self.renderer.draw(&body_layout, s, &self.theme)?;
 
-        let header_h = (PAD_TOP + header_layout.height + HEADER_GAP) * s;
+        let header_h = (PAD_TOP + heading.height + HEADER_GAP) * s;
         let body_h = body_layout.height * s;
         let max_h = MAX_CARD_H * s;
         let card_h = (header_h + body_h.min(max_h - header_h)).ceil();
@@ -430,7 +465,9 @@ impl Popup {
             _ => None,
         };
         self.content.set_links(body_layout.links.clone());
-        if kept == Some(Target::Translate) && self.translate.shown() {
+        if kept == Some(Target::Speak) && self.speak.shown() {
+            self.focus_speak(0)?;
+        } else if kept == Some(Target::Translate) && self.translate.shown() {
             self.focus_translate(0)?;
         } else if kept == Some(Target::Back) && self.back.shown() {
             self.focus_back(0)?;
@@ -440,12 +477,28 @@ impl Popup {
             self.focus_link(focused, 0)?;
         }
 
-        // Header: on a refinement, cross-fade from the old rendering so only
-        // what changed (typically the pronunciation) appears to fade in.
+        // Header: on a refinement, cross-fade from the old rendering of the
+        // word, should it have changed.
         let crossfade = transition == Transition::Refine && !header_same;
-        let size = v2(content_w * s, header_layout.height * s);
+        let size = v2(content_w * s, heading.height * s);
         self.header
             .show(&self.anim, &header_surface, size, crossfade, s)?;
+        // The pronunciation fades in once it's known, whatever else changes.
+        let moving = transition != Transition::Instant;
+        match (phonetic, &heading.phonetic) {
+            (Some(text), Some(placed)) => {
+                let surface = self.renderer.draw(&placed.layout, s, &self.theme)?;
+                let size = v2(placed.layout.width * s, placed.layout.height * s);
+                let at = v3((placed.x * s).round(), (placed.y * s).round());
+                self.header
+                    .show_phonetic(&self.anim, text, &surface, size, at, moving, s)?;
+            }
+            _ => self.header.hide_phonetic()?,
+        }
+        if let Some((x, middle)) = heading.button {
+            let top = ((middle - BACK_SIZE / 2.0) * s).round();
+            self.speak.move_to(&self.anim, x, top, moving, s)?;
+        }
         let arrival = if let Some((from, size)) = rise_from {
             // The typed word grows into the heading from where it was typed.
             Arrival::Rise {
@@ -466,7 +519,7 @@ impl Popup {
         self.header.arrive(&self.anim, arrival, s)?;
 
         // The buttons sit level with the word.
-        let line = header_layout.first_line_bottom();
+        let line = heading.word.first_line_bottom();
         let top = ((PAD_TOP + (line - BACK_SIZE) / 2.0) * s).round();
         for button in [&mut self.back, &mut self.translate] {
             button.place(top, s)?;
@@ -538,6 +591,14 @@ impl Popup {
         Ok(())
     }
 
+    /// Shows or hides the button saying the word. The heading makes room
+    /// for it with the next [`Popup::set_content`].
+    pub fn set_speak(&mut self, shown: bool) -> Result<()> {
+        self.speak.set_shown(&self.anim, shown, self.scale)?;
+        self.sync_tooltip();
+        Ok(())
+    }
+
     /// Shows for a moment, at the bottom of the card, that something was
     /// copied.
     pub fn show_copied(&self) -> Result<()> {
@@ -557,8 +618,10 @@ impl Popup {
         }
         let over_back = point.is_some_and(|(x, y)| self.back_at(x, y));
         let over_translate = point.is_some_and(|(x, y)| self.translate_at(x, y));
+        let over_speak = point.is_some_and(|(x, y)| self.speak_at(x, y));
         self.back.set_hovered(&self.anim, over_back)?;
         self.translate.set_hovered(&self.anim, over_translate)?;
+        self.speak.set_hovered(&self.anim, over_speak)?;
         self.sync_swap()
     }
 
@@ -603,10 +666,15 @@ impl Popup {
         self.translate.shown() && contains(self.button_rect(&self.translate), x, y)
     }
 
+    /// Whether a point in window pixels is on the button saying the word.
+    pub fn speak_at(&self, x: i32, y: i32) -> bool {
+        self.speak.shown() && contains(self.button_rect(&self.speak), x, y)
+    }
+
     /// A button in window pixels.
     fn button_rect(&self, button: &IconButton) -> RECT {
         let s = self.scale;
-        let at = button.offset(s);
+        let at = button.card_offset(s);
         let left = (MARGIN * s + at.X) as i32;
         let top = (self.frame_y() + at.Y) as i32;
         let size = (BACK_SIZE * s).round() as i32;
@@ -620,7 +688,7 @@ impl Popup {
 
     /// Keeps the tooltips over the buttons, and off while they're hidden.
     fn sync_tooltip(&self) {
-        for button in [&self.back, &self.translate] {
+        for button in [&self.back, &self.translate, &self.speak] {
             let rect = if button.shown() {
                 self.button_rect(button)
             } else {
@@ -674,6 +742,7 @@ impl Popup {
         // was said before showing it.
         self.back.hide_at_once()?;
         self.translate.reset()?;
+        self.speak.reset()?;
         self.search.reset();
         self.badge.reset()?;
         // The pointer comes back to the card afresh.
@@ -753,6 +822,7 @@ impl Popup {
         self.content.apply_theme(c, &t, self.scale)?;
         self.back.apply_theme(&self.renderer, &t, self.scale)?;
         self.translate.apply_theme(&self.renderer, &t, self.scale)?;
+        self.speak.apply_theme(&self.renderer, &t, self.scale)?;
         self.badge.apply_theme(&self.renderer, &t, self.scale)?;
         self.scroll_chrome.apply_theme(&t)
     }

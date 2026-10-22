@@ -120,6 +120,7 @@ strings! {
     // The card: translating.
     back_tip: "Back (Backspace)",
     translate_tip: "Translate (Ctrl+T)",
+    speak_tip: "Listen",
     swap_tip: "Swap languages",
     /// Shown for a moment once Ctrl+C has copied a word.
     copied: "Copied",

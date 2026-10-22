@@ -17,6 +17,7 @@
 //!   the colors of `theme`.
 //! - `config`, `hotkey`, `autostart`, `tray`: settings and their storage, the
 //!   shortcut, "Start with Windows", and the notification-area icon.
+//! - `speech`: saying the word out loud, in its language's voice.
 //! - `update`: looking for a new version, and installing it.
 //! - `i18n`: every string the user reads, so a language is a table, not a
 //!   change across the code.
@@ -39,6 +40,7 @@ mod render;
 mod searchbox;
 mod selection;
 mod settings;
+mod speech;
 mod theme;
 mod translate;
 mod tray;

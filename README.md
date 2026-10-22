@@ -34,6 +34,11 @@ mouse's back button.
 From the keyboard, Tab and Shift+Tab move between the words and the source
 links, and Enter opens the one that's highlighted.
 
+The speaker button after the word says it out loud, in the word's own
+language, with a voice Windows has for it. It shows only when there's one:
+voices for more languages can be added in Windows Settings, under Time &
+language → Speech.
+
 When online lookup is on, the translate button at the top right of the card,
 or **Ctrl+T**, shows a translation of the word instead.
 
