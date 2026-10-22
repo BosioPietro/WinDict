@@ -15,6 +15,41 @@ use crate::win;
 /// Not in the windows crate's message set (it lives with the common controls).
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
+/// Posts `msg` to the main window, for the app state to handle once the
+/// procedure that saw it has returned.
+fn post(msg: u32, wparam: WPARAM, lparam: LPARAM) {
+    unsafe {
+        let _ = PostMessageW(Some(MSG_HWND.get()), msg, wparam, lparam);
+    }
+}
+
+/// Answers WM_SETCURSOR over `hwnd` with the cursor `shape_at` picks for
+/// where the pointer is, in client pixels. Returns whether it picked one;
+/// if not, the window's own cursor is for Windows to show.
+fn set_cursor(hwnd: HWND, shape_at: impl FnOnce(&App, POINT) -> Option<PCWSTR>) -> bool {
+    let mut pt = POINT::default();
+    let located =
+        unsafe { GetCursorPos(&mut pt).is_ok() && ScreenToClient(hwnd, &mut pt).as_bool() };
+    let shape = located
+        .then(|| with_app(|app| shape_at(app, pt)).flatten())
+        .flatten();
+    let Some(shape) = shape else {
+        return false;
+    };
+    unsafe {
+        if let Ok(cursor) = LoadCursorW(None, shape) {
+            SetCursor(Some(cursor));
+        }
+    }
+    true
+}
+
+/// Where `vk` is kept in a set of keys like [`SWALLOWED`]: which word, and
+/// the bit in it.
+fn key_bit(vk: u16) -> (usize, u64) {
+    ((vk as usize / 64) % 4, 1u64 << (vk % 64))
+}
+
 pub(super) unsafe extern "system" fn main_proc(
     hwnd: HWND,
     msg: u32,
@@ -128,56 +163,36 @@ pub(super) unsafe extern "system" fn popup_proc(
         }
         WM_MOUSEWHEEL => {
             let delta = (wparam.0 >> 16) & 0xFFFF;
-            unsafe {
-                let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_WHEEL, WPARAM(delta), LPARAM(0));
-            }
+            post(WM_APP_WHEEL, WPARAM(delta), LPARAM(0));
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            unsafe {
-                let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_CLICK, WPARAM(0), lparam);
-            }
+            post(WM_APP_CLICK, WPARAM(0), lparam);
             LRESULT(0)
         }
         // The mouse's back button.
         WM_XBUTTONUP => {
             if (wparam.0 >> 16) as u16 == XBUTTON1 {
-                unsafe {
-                    let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_BACK, WPARAM(0), LPARAM(0));
-                }
+                post(WM_APP_BACK, WPARAM(0), LPARAM(0));
             }
             LRESULT(1)
         }
         // A hand over the links, a text cursor over the search field.
         WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
-            let mut pt = POINT::default();
-            let located =
-                unsafe { GetCursorPos(&mut pt).is_ok() && ScreenToClient(hwnd, &mut pt).as_bool() };
-            let cursor = located
-                .then(|| {
-                    with_app(|app| {
-                        let popup = app.popup.as_ref()?;
-                        if popup.link_at(pt.x, pt.y).is_some() {
-                            Some(IDC_HAND)
-                        } else if popup.search_at(pt.x, pt.y) {
-                            Some(IDC_IBEAM)
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten()
-                })
-                .flatten();
-            match cursor {
-                Some(cursor) => {
-                    unsafe {
-                        if let Ok(cursor) = LoadCursorW(None, cursor) {
-                            SetCursor(Some(cursor));
-                        }
-                    }
-                    LRESULT(1)
+            let shown = set_cursor(hwnd, |app, pt| {
+                let popup = app.popup.as_ref()?;
+                if popup.link_at(pt.x, pt.y).is_some() {
+                    Some(IDC_HAND)
+                } else if popup.search_at(pt.x, pt.y) {
+                    Some(IDC_IBEAM)
+                } else {
+                    None
                 }
-                None => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+            });
+            if shown {
+                LRESULT(1)
+            } else {
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
             }
         }
         // Picking a suggestion, or moving the caret, in the search box.
@@ -193,9 +208,7 @@ pub(super) unsafe extern "system" fn popup_proc(
         // Alt+F4 while the search box has the keyboard: close the card, but
         // keep the window for next time.
         WM_CLOSE => {
-            unsafe {
-                let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_DISMISS, WPARAM(0), LPARAM(0));
-            }
+            post(WM_APP_DISMISS, WPARAM(0), LPARAM(0));
             LRESULT(0)
         }
         // We size ourselves for the target monitor's DPI already.
@@ -302,33 +315,21 @@ pub(super) unsafe extern "system" fn settings_proc(
         }
         // A hand over the link, and an I-beam over the text field.
         WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
-            let mut pt = POINT::default();
-            let located =
-                unsafe { GetCursorPos(&mut pt).is_ok() && ScreenToClient(hwnd, &mut pt).as_bool() };
-            let shape = located
-                .then(|| {
-                    with_app(|app| {
-                        let s = app.settings.as_ref()?;
-                        if s.link_at(pt.x, pt.y) {
-                            Some(IDC_HAND)
-                        } else if s.field_at(pt.x, pt.y) {
-                            Some(IDC_IBEAM)
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten()
-                })
-                .flatten();
-            let Some(shape) = shape else {
-                return default();
-            };
-            unsafe {
-                if let Ok(cursor) = LoadCursorW(None, shape) {
-                    SetCursor(Some(cursor));
+            let shown = set_cursor(hwnd, |app, pt| {
+                let s = app.settings.as_ref()?;
+                if s.link_at(pt.x, pt.y) {
+                    Some(IDC_HAND)
+                } else if s.field_at(pt.x, pt.y) {
+                    Some(IDC_IBEAM)
+                } else {
+                    None
                 }
+            });
+            if shown {
+                LRESULT(1)
+            } else {
+                default()
             }
-            LRESULT(1)
         }
         // While a shortcut is recorded every key is for it, Alt ones too;
         // otherwise Alt+F4 and Alt+Space work as they do everywhere.
@@ -361,14 +362,7 @@ pub(super) unsafe extern "system" fn settings_proc(
         // Alt+F4, or Close on the taskbar: the window fades out, and only
         // then goes.
         WM_CLOSE => {
-            unsafe {
-                let _ = PostMessageW(
-                    Some(MSG_HWND.get()),
-                    WM_APP_CLOSE_SETTINGS,
-                    WPARAM(0),
-                    LPARAM(0),
-                );
-            }
+            post(WM_APP_CLOSE_SETTINGS, WPARAM(0), LPARAM(0));
             LRESULT(0)
         }
         // Dragged to a monitor with another scale: redrawn for it.
@@ -414,10 +408,7 @@ pub(super) unsafe extern "system" fn mouse_hook(
                 && info.pt.y >= r.top
                 && info.pt.y < r.bottom;
             if !inside {
-                unsafe {
-                    let _ =
-                        PostMessageW(Some(MSG_HWND.get()), WM_APP_DISMISS, WPARAM(0), LPARAM(0));
-                }
+                post(WM_APP_DISMISS, WPARAM(0), LPARAM(0));
             }
         }
     }
@@ -443,7 +434,7 @@ pub(super) unsafe extern "system" fn keyboard_hook(
     let target = RECORDING_IN.get();
     let recording = !target.is_invalid() && unsafe { GetForegroundWindow() } == target;
     let mut swallowed = SWALLOWED.get();
-    let (slot, bit) = ((vk as usize / 64) % 4, 1u64 << (vk % 64));
+    let (slot, bit) = key_bit(vk);
     let kept = swallowed[slot] & bit != 0;
     if !recording && !kept {
         return next();
@@ -457,14 +448,7 @@ pub(super) unsafe extern "system" fn keyboard_hook(
     if recording {
         let modifiers = held_after(&swallowed, vk, down);
         let state = modifiers.0 as isize | (down as isize) << 16;
-        unsafe {
-            let _ = PostMessageW(
-                Some(MSG_HWND.get()),
-                WM_APP_RECORD_KEY,
-                WPARAM(vk as usize),
-                LPARAM(state),
-            );
-        }
+        post(WM_APP_RECORD_KEY, WPARAM(vk as usize), LPARAM(state));
     }
     // A key that went down before recording started goes back up as usual.
     if down || kept {
@@ -481,7 +465,7 @@ fn held_after(swallowed: &[u64; 4], vk: u16, down: bool) -> HOT_KEY_MODIFIERS {
         if key.0 == vk {
             return down;
         }
-        let (slot, bit) = ((key.0 as usize / 64) % 4, 1u64 << (key.0 % 64));
+        let (slot, bit) = key_bit(key.0);
         swallowed[slot] & bit != 0 || unsafe { GetAsyncKeyState(key.0 as i32) } < 0
     };
     let mut modifiers = HOT_KEY_MODIFIERS(0);
@@ -517,7 +501,5 @@ pub(super) unsafe extern "system" fn focus_hook(
     if pid == unsafe { GetCurrentProcessId() } {
         return;
     }
-    unsafe {
-        let _ = PostMessageW(Some(MSG_HWND.get()), WM_APP_DISMISS, WPARAM(0), LPARAM(0));
-    }
+    post(WM_APP_DISMISS, WPARAM(0), LPARAM(0));
 }
