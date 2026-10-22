@@ -85,12 +85,12 @@ impl App {
         self.updating = false;
         match result {
             // The new version has started, and waits for this one to go.
-            Ok(()) if !cfg!(feature = "uiaccess") => self.on_command(Command::Quit),
+            Ok(()) if !update::by_task() => self.on_command(Command::Quit),
             // The task closes this one once it's ready to replace it.
             Ok(()) => {}
             Err(e) => {
                 self.tray.notify(tr().update_failed, &e);
-                if cfg!(feature = "uiaccess") {
+                if update::by_task() {
                     win::shell_open(&HSTRING::from(update::RELEASES_PAGE));
                 }
             }

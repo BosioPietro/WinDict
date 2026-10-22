@@ -19,6 +19,8 @@
 //!   shortcut, "Start with Windows", and the notification-area icon.
 //! - `speech`: saying the word out loud, in its language's voice.
 //! - `update`: looking for a new version, and installing it.
+//! - `installed`: the copy the installer put in Program Files, and handing
+//!   over to its UI access build.
 //! - `i18n`: every string the user reads, so a language is a table, not a
 //!   change across the code.
 //! - `win`: safe wrappers for the Win32 calls shared across modules.
@@ -31,6 +33,7 @@ mod dicts;
 mod hotkey;
 mod http;
 mod i18n;
+mod installed;
 mod lang;
 mod menu;
 mod offline;
@@ -60,6 +63,10 @@ use windows::UI::Composition::Compositor;
 
 /// Runs WinDict until it's quit from the tray, unless it's running already.
 pub fn run() -> windows::core::Result<()> {
+    // With UI access on, the installed WinDict.exe runs the build that has it.
+    if installed::hand_over() {
+        return Ok(());
+    }
     // Started by the version this one replaces: it has to be gone first.
     let replacing = update::Replacing::from_args();
     if let Some(replacing) = &replacing {

@@ -2,10 +2,11 @@
 //! newer, the tray icon and menu say so, and "Update app" installs it.
 //!
 //! The portable edition downloads the new executable next to itself, starts
-//! it and quits; the new one waits for it to exit and deletes it. The UI
-//! access edition can't write to Program Files, where it's installed: it
-//! runs the scheduled task its installer registered, which reinstalls it
-//! elevated without asking (see scripts/install-uiaccess-local.ps1).
+//! it and quits; the new one waits for it to exit and deletes it. The
+//! installed edition can't write to Program Files: it runs the scheduled
+//! task its installer registered, which runs the new setup elevated without
+//! asking (see installer/update.ps1). So does the UI access edition that
+//! scripts/install-uiaccess-local.ps1 installed, before there was a setup.
 
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -20,12 +21,13 @@ use windows::Win32::System::Threading::{
 use crate::dicts;
 use crate::http;
 use crate::i18n::{fill, tr};
+use crate::installed;
 
 const API_HOST: &str = "api.github.com";
 const LATEST: &str = "/repos/BosioPietro/WinDict/releases/latest";
-/// Opened when the UI access edition can't update itself.
+/// Opened when the installed edition can't update itself.
 pub const RELEASES_PAGE: &str = "https://github.com/BosioPietro/WinDict/releases/latest";
-/// The scheduled task that reinstalls the UI access edition.
+/// The scheduled task that installs the new version.
 const TASK: &str = "WinDict Update";
 /// What the new executable is started with: `--replace <pid> <path>`.
 const REPLACE: &str = "--replace";
@@ -66,12 +68,50 @@ pub fn check() -> Result<Option<Release>, String> {
     if status != 200 {
         return Err(fill(tr().download_status, &[("status", &status)]));
     }
-    parse(&body, env!("CARGO_PKG_VERSION"), cfg!(feature = "uiaccess"))
+    parse(&body, env!("CARGO_PKG_VERSION"), Edition::current())
+}
+
+/// How this copy of WinDict was installed, which decides what updates it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Edition {
+    /// An executable run from wherever it was downloaded.
+    Portable,
+    /// By the setup, in Program Files.
+    Installed,
+    /// The UI access edition, by the script used before there was a setup.
+    Script,
+}
+
+impl Edition {
+    fn current() -> Edition {
+        if installed::dir().is_some() {
+            Edition::Installed
+        } else if cfg!(feature = "uiaccess") {
+            Edition::Script
+        } else {
+            Edition::Portable
+        }
+    }
+
+    /// The release file that updates it.
+    fn file(self, tag: &str) -> String {
+        match self {
+            Edition::Portable => format!("WinDict-{tag}.exe"),
+            Edition::Installed => format!("WinDict-{tag}-setup.exe"),
+            Edition::Script => format!("WinDict-{tag}-uiaccess.exe"),
+        }
+    }
+}
+
+/// Whether "Update app" runs the update task, rather than replacing this
+/// executable itself.
+pub fn by_task() -> bool {
+    Edition::current() != Edition::Portable
 }
 
 /// The release in the GitHub API's `json`, if it's newer than `current` and
-/// has an executable of the edition this is, with a digest to check it by.
-fn parse(json: &[u8], current: &str, uiaccess: bool) -> Result<Option<Release>, String> {
+/// has the file that updates `edition`, with a digest to check it by.
+fn parse(json: &[u8], current: &str, edition: Edition) -> Result<Option<Release>, String> {
     let latest: Latest =
         serde_json::from_slice(json).map_err(|_| tr().download_damaged.to_string())?;
     let (Some(latest_version), Some(current)) = (version(&latest.tag_name), version(current))
@@ -82,11 +122,7 @@ fn parse(json: &[u8], current: &str, uiaccess: bool) -> Result<Option<Release>, 
         return Ok(None);
     }
     let tag = latest.tag_name;
-    let exe = if uiaccess {
-        format!("WinDict-{tag}-uiaccess.exe")
-    } else {
-        format!("WinDict-{tag}.exe")
-    };
+    let exe = edition.file(&tag);
     let release = latest.assets.into_iter().find_map(|asset| {
         let sha256 = asset.digest?.strip_prefix("sha256:")?.to_ascii_lowercase();
         let hex = sha256.len() == 64 && sha256.bytes().all(|b| b.is_ascii_hexdigit());
@@ -116,10 +152,10 @@ fn version(tag: &str) -> Option<(u32, u32, u32)> {
 }
 
 /// Installs `release`. The portable edition downloads it, starts it and
-/// returns, for this one to quit; the UI access edition starts the task
-/// that reinstalls it, which closes this one.
+/// returns, for this one to quit; the others start the task that installs
+/// it, which closes this one.
 pub fn install(release: &Release) -> Result<(), String> {
-    if cfg!(feature = "uiaccess") {
+    if by_task() {
         return run_task();
     }
     let current = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -219,6 +255,7 @@ mod tests {
             r#"{{"tag_name": "{tag}", "assets": [
                 {{"name": "WinDict-{tag}.exe", "size": 8441344, "digest": "sha256:{DIGEST}"}},
                 {{"name": "WinDict-{tag}-uiaccess.exe", "size": 8441344, "digest": "sha256:{DIGEST}"}},
+                {{"name": "WinDict-{tag}-setup.exe", "size": 8441344, "digest": "sha256:{DIGEST}"}},
                 {{"name": "install-uiaccess.ps1", "size": 2404}}
             ]}}"#
         )
@@ -245,28 +282,51 @@ mod tests {
     #[test]
     fn finds_newer_releases() {
         let json = latest("v0.21.0");
-        let release = parse(json.as_bytes(), "0.20.3", false).unwrap().unwrap();
+        let release = parse(json.as_bytes(), "0.20.3", Edition::Portable)
+            .unwrap()
+            .unwrap();
         assert_eq!(release.tag, "v0.21.0");
         assert_eq!(release.exe, "WinDict-v0.21.0.exe");
         assert_eq!(release.size, 8441344);
         assert_eq!(release.sha256, DIGEST);
-        let release = parse(json.as_bytes(), "0.20.3", true).unwrap().unwrap();
+        let release = parse(json.as_bytes(), "0.20.3", Edition::Script)
+            .unwrap()
+            .unwrap();
         assert_eq!(release.exe, "WinDict-v0.21.0-uiaccess.exe");
+        let release = parse(json.as_bytes(), "0.20.3", Edition::Installed)
+            .unwrap()
+            .unwrap();
+        assert_eq!(release.exe, "WinDict-v0.21.0-setup.exe");
         // Not newer.
-        assert_eq!(parse(json.as_bytes(), "0.21.0", false), Ok(None));
-        assert_eq!(parse(json.as_bytes(), "0.22.0", false), Ok(None));
+        assert_eq!(
+            parse(json.as_bytes(), "0.21.0", Edition::Portable),
+            Ok(None)
+        );
+        assert_eq!(
+            parse(json.as_bytes(), "0.22.0", Edition::Portable),
+            Ok(None)
+        );
     }
 
     #[test]
     fn needs_an_executable_to_check() {
         let without_digest =
             r#"{"tag_name": "v1.0.0", "assets": [{"name": "WinDict-v1.0.0.exe", "size": 5}]}"#;
-        assert_eq!(parse(without_digest.as_bytes(), "0.1.0", false), Ok(None));
+        assert_eq!(
+            parse(without_digest.as_bytes(), "0.1.0", Edition::Portable),
+            Ok(None)
+        );
         let bad_digest = r#"{"tag_name": "v1.0.0", "assets": [
             {"name": "WinDict-v1.0.0.exe", "size": 5, "digest": "md5:abc"}]}"#;
-        assert_eq!(parse(bad_digest.as_bytes(), "0.1.0", false), Ok(None));
+        assert_eq!(
+            parse(bad_digest.as_bytes(), "0.1.0", Edition::Portable),
+            Ok(None)
+        );
         let no_assets = r#"{"tag_name": "v1.0.0"}"#;
-        assert_eq!(parse(no_assets.as_bytes(), "0.1.0", false), Ok(None));
-        assert!(parse(b"not json", "0.1.0", false).is_err());
+        assert_eq!(
+            parse(no_assets.as_bytes(), "0.1.0", Edition::Portable),
+            Ok(None)
+        );
+        assert!(parse(b"not json", "0.1.0", Edition::Portable).is_err());
     }
 }

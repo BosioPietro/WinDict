@@ -3,6 +3,8 @@
 use windows::core::{w, Owned, HSTRING, PCWSTR};
 use windows::Win32::System::Registry::*;
 
+use crate::installed;
+
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const VALUE: PCWSTR = w!("WinDict");
 
@@ -54,7 +56,12 @@ pub fn sync() {
 }
 
 fn command() -> Option<HSTRING> {
-    let exe = std::env::current_exe().ok()?;
+    // The installed copy starts through WinDict.exe, even when it's the UI
+    // access build running: that one may not start once UI access is off.
+    let exe = match installed::dir() {
+        Some(dir) => dir.join(installed::LAUNCHER),
+        None => std::env::current_exe().ok()?,
+    };
     Some(HSTRING::from(format!("\"{}\"", exe.display())))
 }
 

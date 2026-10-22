@@ -180,8 +180,7 @@ pub const IT: Strings = Strings {
     download_damaged: "Il download era corrotto. Riprova.",
     download_status: "Download non riuscito ({status}).",
     save_failed: "Impossibile salvarlo: {reason}",
-    update_task_missing: "Esegui di nuovo install-uiaccess.ps1 da una PowerShell \
-        come amministratore per aggiornare dal menu.",
+    update_task_missing: "Installa di nuovo WinDict con il suo setup per aggiornarlo dal menu.",
 
     // `off` stays as it is: "Off" reads the same, and fits its place.
     ..EN

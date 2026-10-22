@@ -253,8 +253,7 @@ strings! {
     download_damaged: "The download was damaged. Try again.",
     /// `{status}`: an HTTP status.
     download_status: "The download failed ({status}).",
-    update_task_missing: "Run install-uiaccess.ps1 once more, from an administrator \
-        PowerShell, to update from the menu.",
+    update_task_missing: "Install WinDict again with its setup to update it from the menu.",
     /// `{reason}`: why the file couldn't be written.
     save_failed: "Couldn\u{2019}t save it: {reason}",
 }
