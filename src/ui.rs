@@ -25,6 +25,14 @@ use crate::theme::Theme;
 // Geometry, in DIPs.
 /// Room around a card in its window, for the shadow.
 pub const MARGIN: f32 = 32.0;
+/// The stroke of the ring around what Tab, or typing, has focused, as on
+/// Windows 11 controls.
+pub const FOCUS_STROKE: f32 = 2.0;
+/// Room kept above and below what Tab scrolls into view, clear of the fades
+/// at the ends of what scrolls.
+pub const FOCUS_MARGIN: f32 = 20.0;
+/// How many rows a notch of the mouse wheel scrolls a list by.
+pub const WHEEL_ROWS: f32 = 3.0;
 const RADIUS: f32 = 12.0;
 const SHADOW_DY: f32 = 6.0;
 /// How far the shadow extends past the card; it must fit in `MARGIN`.
@@ -50,6 +58,8 @@ const STRETCH_SOFT: f32 = 48.0;
 // Durations, in ms.
 /// How long a window takes to fade out; it's hidden once that's played.
 pub const HIDE_MS: u64 = 120;
+/// How long a card takes to fade in.
+pub const FADE_IN_MS: u64 = 160;
 /// How long a card takes to change size.
 pub const RESIZE_MS: u64 = 300;
 const SHAKE_MS: u64 = 400;

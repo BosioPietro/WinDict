@@ -128,8 +128,6 @@ const SETTLE_MS: u32 = ui::RESIZE_MS as u32 + 60;
 const TRANSLATING_WAIT_MS: u32 = 400;
 const CACHE_SIZE: usize = 64;
 const TRANSLATION_CACHE_SIZE: usize = 32;
-/// How many languages a notch of the mouse wheel scrolls their list by.
-const WHEEL_ROWS: f32 = 3.0;
 /// How many words "back" remembers.
 const HISTORY_SIZE: usize = 50;
 /// Suggestions start with this many letters typed: fewer match too much.
@@ -1566,7 +1564,7 @@ impl App {
     /// else the card.
     fn on_wheel(&mut self, delta: i32) {
         if let Some((picking, _)) = self.picking() {
-            let rows = -(delta as f32 / 120.0 * WHEEL_ROWS).round() as isize;
+            let rows = -(delta as f32 / 120.0 * ui::WHEEL_ROWS).round() as isize;
             if picking.scroll(rows) {
                 self.show_translation(Transition::Refine, None);
             }

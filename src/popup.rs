@@ -50,19 +50,13 @@ const TRANSLATE_ROOM: f32 = CARD_W - PAD_X - TRANSLATE_X + 6.0;
 const TRANSLATE_GLYPH: &str = "\u{E8C1}";
 /// The swap button's tooltip's tool, after the back and translate buttons'.
 const SWAP_TOOL: usize = 3;
-/// The ring around the link Tab moved to, as on Windows 11 controls.
-const FOCUS_STROKE: f32 = 2.0;
 const FOCUS_RADIUS: f32 = 4.0;
 /// How long the ring takes to glide to the next link, and to fade.
 const FOCUS_MS: u64 = 200;
 const FOCUS_FADE_MS: u64 = 100;
-/// Room kept above and below a link Tab scrolls into view, clear of the
-/// body's fades.
-const FOCUS_MARGIN: f32 = 20.0;
 
 // Durations, in ms.
 pub const SHOW_MS: u64 = 340;
-const FADE_IN_MS: u64 = 160;
 const SCROLL_MS: u64 = 140;
 /// How long what the card showed takes to fade out as the search box comes in.
 const MAKE_WAY_MS: u64 = 120;
@@ -470,7 +464,7 @@ impl IconButton {
         self.hover_clip
             .SetCornerRadius(v2(BACK_RADIUS * s, BACK_RADIUS * s))?;
         // Inside the button, the stroke centred on the ring's edge.
-        let stroke = (FOCUS_STROKE * s).round();
+        let stroke = (ui::FOCUS_STROKE * s).round();
         self.ring_brush.SetColor(t.focus())?;
         self.ring.SetSize(size)?;
         self.ring_shape.SetStrokeThickness(stroke)?;
@@ -1464,7 +1458,7 @@ impl Popup {
     /// radius, with the body scrolled to `scroll`.
     fn ring_rect(&self, stop: Stop, scroll: f32) -> Option<(Vector3, Vector2, f32)> {
         let s = self.scale;
-        let stroke = (FOCUS_STROKE * s).round();
+        let stroke = (ui::FOCUS_STROKE * s).round();
         let grow = stroke / 2.0;
         match stop {
             Stop::Translate | Stop::Back => {
@@ -1501,7 +1495,7 @@ impl Popup {
         ) else {
             return Ok(());
         };
-        let stroke = (FOCUS_STROKE * self.scale).round();
+        let stroke = (ui::FOCUS_STROKE * self.scale).round();
         let side = (2.0 * radius).ceil() + 1.0;
         let mask = self
             .renderer
@@ -1569,7 +1563,7 @@ impl Popup {
         // Drawn pixel for pixel and shown through a mask, as shapes are
         // jagged in what scrolls. The stroke is inside the mask, so each
         // ring is its link grown by half of it, centred on the link's edge.
-        let stroke = (FOCUS_STROKE * s).round();
+        let stroke = (ui::FOCUS_STROKE * s).round();
         let grow = stroke / 2.0;
         let radius = FOCUS_RADIUS * s + grow;
         let side = (2.0 * radius).ceil() + 1.0;
@@ -1644,7 +1638,10 @@ impl Popup {
             bottom = bottom.max(l.y + l.height);
         }
         let s = self.scale;
-        let (top, bottom) = ((top - FOCUS_MARGIN) * s, (bottom + FOCUS_MARGIN) * s);
+        let (top, bottom) = (
+            (top - ui::FOCUS_MARGIN) * s,
+            (bottom + ui::FOCUS_MARGIN) * s,
+        );
         let view = self.card_h - self.header_h;
         let to = if top < self.scroll {
             top
@@ -1739,7 +1736,7 @@ impl Popup {
         }
         self.visible = true;
 
-        self.anim.fade_in(&self.root, FADE_IN_MS, SHOW_MS)
+        self.anim.fade_in(&self.root, ui::FADE_IN_MS, SHOW_MS)
     }
 
     /// Turns the card into the search box. `in_place` fades out what it

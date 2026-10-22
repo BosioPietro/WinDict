@@ -330,8 +330,6 @@ const ROW_H: f32 = 32.0;
 /// Room for a flag or a code's cap, so the names line up.
 const BADGE_W: f32 = 24.0;
 const CARET_W: f32 = 1.5;
-/// The outline of a box being typed in.
-const FOCUS_STROKE: f32 = 2.0;
 /// The Windows logo on a shortcut's cap, in DIPs: four panes, a gap apart.
 const LOGO_SIZE: f32 = 11.0;
 const LOGO_GAP: f32 = 1.0;
@@ -1824,7 +1822,7 @@ impl Renderer {
                         };
                         // Inset by half the stroke, so it lands on whole pixels.
                         let stroke_w = match stroke {
-                            Some(Paint::Focus) => (FOCUS_STROKE * scale).round() / scale,
+                            Some(Paint::Focus) => (crate::ui::FOCUS_STROKE * scale).round() / scale,
                             _ => 1.0 / scale,
                         };
                         let half = stroke_w / 2.0;

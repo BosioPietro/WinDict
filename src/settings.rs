@@ -113,8 +113,6 @@ const TRANSLATE_FOOT: f32 = 16.0;
 /// Corner radii of the rings round the boxes and the swap button.
 const SELECT_RING_RADIUS: f32 = 8.0;
 const SWAP_RING_RADIUS: f32 = 6.0;
-/// How many languages a notch of the mouse wheel scrolls their list by.
-const WHEEL_ROWS: f32 = 3.0;
 /// A language in the list under the languages row.
 const LANGUAGE_H: f32 = 40.0;
 const CHECK_SIZE: f32 = 20.0;
@@ -129,10 +127,6 @@ const SHORTCUT_W: f32 = 150.0;
 const EDIT_W: f32 = 16.0;
 const CAPS_GAP: f32 = 8.0;
 const FOCUS_OUTSET: f32 = 3.0;
-const FOCUS_STROKE: f32 = 2.0;
-/// Room kept above and below a control Tab scrolls into view, clear of the
-/// fades at the ends of what scrolls.
-const FOCUS_MARGIN: f32 = 20.0;
 /// The ring round the shortcut while it's being recorded.
 const RECORD_INSET: f32 = 3.0;
 const RECORD_RADIUS: f32 = 6.0;
@@ -145,7 +139,6 @@ const WHEEL_STEP: f32 = 48.0;
 
 // Durations, in ms.
 const SHOW_MS: u64 = 360;
-const FADE_IN_MS: u64 = 160;
 const REVEAL_MS: u64 = 340;
 const REVEAL_DELAY_MS: u64 = 40;
 const REVEAL_STAGGER_MS: u64 = 30;
@@ -988,7 +981,7 @@ impl Settings {
         self.set_region(self.card.1);
         self.visible = true;
 
-        self.anim.fade_in(root, FADE_IN_MS, SHOW_MS)?;
+        self.anim.fade_in(root, ui::FADE_IN_MS, SHOW_MS)?;
         self.reveal()
     }
 
@@ -1242,7 +1235,7 @@ impl Settings {
     pub fn wheel(&mut self, delta: i32) -> Result<()> {
         // The list of languages goes first, until it can't go any further.
         if let Some(picking) = self.picking.as_mut() {
-            let rows = -(delta as f32 / 120.0 * WHEEL_ROWS).round() as isize;
+            let rows = -(delta as f32 / 120.0 * ui::WHEEL_ROWS).round() as isize;
             if picking.scroll(rows) {
                 return self.relayout();
             }
@@ -2077,7 +2070,7 @@ impl Settings {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let margin = FOCUS_MARGIN * self.scale;
+        let margin = ui::FOCUS_MARGIN * self.scale;
         let view_h = self.card.1 - view.header_h;
         let (top, bottom) = (rect.y - margin, rect.y + rect.h + margin);
         if top < self.scroll {
@@ -2685,7 +2678,7 @@ impl Settings {
         };
         // The stroke is drawn inside the mask, so the ring is the stop grown
         // by half of it, to be centred on its edge.
-        let stroke = (self.scale * FOCUS_STROKE).max(1.0);
+        let stroke = (self.scale * ui::FOCUS_STROKE).max(1.0);
         let rect = rect.outset(stroke / 2.0);
         let radius = radius + stroke / 2.0;
         if view.ring_radius.get() != radius {
