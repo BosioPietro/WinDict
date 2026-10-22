@@ -1,9 +1,10 @@
 //! The window and hook procedures: they turn Windows messages into calls
 //! on the app state, and keep to what can't wait for it.
 
-use windows::core::PCWSTR;
+use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Accessibility::HWINEVENTHOOK;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -42,6 +43,35 @@ fn set_cursor(hwnd: HWND, shape_at: impl FnOnce(&App, POINT) -> Option<PCWSTR>) 
         }
     }
     true
+}
+
+/// Opens Snipping Tool for Print Screen released in one of our windows, as
+/// Windows would have, if it's set to. Windows watches for the key from a
+/// process without UI access, which doesn't hear keys meant for windows of
+/// one with it (the signed install). Returns whether it did.
+fn snip(wparam: WPARAM) -> bool {
+    let snips = VIRTUAL_KEY(wparam.0 as u16) == VK_SNAPSHOT
+        && selection::has_ui_access()
+        && print_screen_snips();
+    snips && win::shell_open(&HSTRING::from("ms-screenclip:"))
+}
+
+/// Whether Print Screen opens Snipping Tool, as it does unless turned off.
+fn print_screen_snips() -> bool {
+    let mut value = 1u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    unsafe {
+        let _ = RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!("Control Panel\\Keyboard"),
+            w!("PrintScreenKeyForSnippingEnabled"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut value as *mut u32 as *mut _),
+            Some(&mut size),
+        );
+    }
+    value != 0
 }
 
 /// Where `vk` is kept in a set of keys like [`SWALLOWED`]: which word, and
@@ -273,6 +303,7 @@ pub(super) unsafe extern "system" fn popup_proc(
                 default()
             }
         }
+        WM_KEYUP if snip(wparam) => LRESULT(0),
         // Picking a suggestion, or moving the caret, in the search box; or
         // any of a pinned card's keys.
         WM_KEYDOWN => {
@@ -458,6 +489,7 @@ pub(super) unsafe extern "system" fn settings_proc(
             with_app(|app| app.in_settings(|s| s.key(key)));
             LRESULT(0)
         }
+        WM_KEYUP if !recording() && snip(wparam) => LRESULT(0),
         WM_KEYUP | WM_SYSKEYUP if recording() => {
             let key = VIRTUAL_KEY(wparam.0 as u16);
             with_app(|app| app.in_settings(|s| s.key_up(key).map(|_| None)));
