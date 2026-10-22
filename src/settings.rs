@@ -19,6 +19,7 @@ mod picker;
 mod scroll;
 mod show;
 mod view;
+mod widgets;
 
 use std::cell::Cell;
 
