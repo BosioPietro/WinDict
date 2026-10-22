@@ -578,6 +578,86 @@ impl Settings {
         Ok((thumb, thumb_clip))
     }
 
+    /// The shortcut row's edit symbol and keys, and the ring that breathes
+    /// around the row while a new shortcut is awaited. `row` is in `group`,
+    /// and its control ends at `right`, centred on `middle`.
+    fn build_shortcut(
+        &self,
+        group: &ContainerVisual,
+        row: Rect,
+        right: f32,
+        middle: f32,
+        hover: Option<SpriteVisual>,
+    ) -> Result<ShortcutView> {
+        let (c, r, t, s) = (
+            &self.anim.compositor,
+            &self.renderer,
+            &self.theme,
+            self.scale,
+        );
+        let px = |dip: f32| (dip * s).round();
+        let edit = Text::new(c, group)?;
+        let pen = r.layout_line(EDIT_GLYPH, Face::Icon, Ink::Secondary, EDIT_W)?;
+        let size = edit.show(r, &pen, s, t)?;
+        let x = right - px(EDIT_W);
+        edit.visual
+            .SetOffset(v3(x, (middle - size.Y / 2.0).round()))?;
+        let old_caps = Text::new(c, group)?;
+        let caps = Text::new(c, group)?;
+        // Rings the row, breathing, while a new shortcut is awaited.
+        let ring = c.CreateShapeVisual()?;
+        ring.SetOffset(row.at())?;
+        ring.SetSize(row.size())?;
+        ring.SetOpacity(0.0)?;
+        let inset = px(RECORD_INSET);
+        let geometry = c.CreateRoundedRectangleGeometry()?;
+        geometry.SetOffset(v2(inset, inset))?;
+        geometry.SetSize(v2(row.w - 2.0 * inset, row.h - 2.0 * inset))?;
+        geometry.SetCornerRadius(v2(px(RECORD_RADIUS), px(RECORD_RADIUS)))?;
+        let shape = c.CreateSpriteShapeWithGeometry(&geometry)?;
+        shape.SetStrokeBrush(&c.CreateColorBrushWithColor(t.accent)?)?;
+        shape.SetStrokeThickness((RECORD_STROKE * s).max(1.0))?;
+        ring.Shapes()?.Append(&shape)?;
+        group.Children()?.InsertAtTop(&ring)?;
+
+        Ok(ShortcutView {
+            hover: hover.ok_or_else(|| windows::core::Error::from(E_UNEXPECTED))?,
+            caps,
+            old_caps,
+            caps_right: x - px(CAPS_GAP),
+            caps_middle: middle,
+            caps_rest: v3(0.0, 0.0),
+            ring,
+        })
+    }
+
+    /// The chevron at the right of the languages row, which turns as the
+    /// list opens.
+    fn build_chevron(
+        &self,
+        group: &ContainerVisual,
+        right: f32,
+        middle: f32,
+    ) -> Result<SpriteVisual> {
+        let (c, r, t, s) = (
+            &self.anim.compositor,
+            &self.renderer,
+            &self.theme,
+            self.scale,
+        );
+        let chevron = Text::new(c, group)?;
+        let line = r.layout_line(CHEVRON_GLYPH, Face::Icon, Ink::Secondary, CHEVRON_W)?;
+        let size = chevron.show(r, &line, s, t)?;
+        let at = v3(right - size.X, (middle - size.Y / 2.0).round());
+        chevron.visual.SetOffset(at)?;
+        chevron.visual.SetCenterPoint(Vector3 {
+            X: size.X / 2.0,
+            Y: size.Y / 2.0,
+            Z: 0.0,
+        })?;
+        Ok(chevron.visual)
+    }
+
     /// The list of languages, each with a box to tick, `top` down `group`
     /// (which is `w` wide, at `group_at` in the scroller). Returns it and
     /// its languages.
@@ -777,44 +857,14 @@ impl Settings {
         let outset = px(FOCUS_OUTSET);
         match spec.control {
             Control::Shortcut => {
-                let edit = Text::new(c, group)?;
-                let pen = r.layout_line(EDIT_GLYPH, Face::Icon, Ink::Secondary, EDIT_W)?;
-                let size = edit.show(r, &pen, s, t)?;
-                let x = right - px(EDIT_W);
-                edit.visual
-                    .SetOffset(v3(x, (middle - size.Y / 2.0).round()))?;
-                let old_caps = Text::new(c, group)?;
-                let caps = Text::new(c, group)?;
-                // Rings the row, breathing, while a new shortcut is awaited.
-                let ring = c.CreateShapeVisual()?;
-                ring.SetOffset(row.at())?;
-                ring.SetSize(row.size())?;
-                ring.SetOpacity(0.0)?;
+                let view = self.build_shortcut(group, row, right, middle, hover)?;
                 let inset = px(RECORD_INSET);
-                let geometry = c.CreateRoundedRectangleGeometry()?;
-                geometry.SetOffset(v2(inset, inset))?;
-                geometry.SetSize(v2(row.w - 2.0 * inset, row.h - 2.0 * inset))?;
-                geometry.SetCornerRadius(v2(px(RECORD_RADIUS), px(RECORD_RADIUS)))?;
-                let shape = c.CreateSpriteShapeWithGeometry(&geometry)?;
-                shape.SetStrokeBrush(&c.CreateColorBrushWithColor(t.accent)?)?;
-                shape.SetStrokeThickness((RECORD_STROKE * s).max(1.0))?;
-                ring.Shapes()?.Append(&shape)?;
-                group.Children()?.InsertAtTop(&ring)?;
-
                 parts.hits.push((Hit::Shortcut, place(row)));
                 let ring_at = place(row).outset(-inset);
                 parts
                     .stops
                     .push((Stop::Shortcut, ring_at, px(RECORD_RADIUS)));
-                parts.shortcut = Some(ShortcutView {
-                    hover: hover.ok_or_else(|| windows::core::Error::from(E_UNEXPECTED))?,
-                    caps,
-                    old_caps,
-                    caps_right: x - px(CAPS_GAP),
-                    caps_middle: middle,
-                    caps_rest: v3(0.0, 0.0),
-                    ring,
-                });
+                parts.shortcut = Some(view);
             }
             Control::Switch(sw) => {
                 let (view, track) = self.build_switch(group, right, middle)?;
@@ -864,23 +914,14 @@ impl Settings {
             }
             Control::Translate => {}
             Control::Languages => {
-                let chevron = Text::new(c, group)?;
-                let line = r.layout_line(CHEVRON_GLYPH, Face::Icon, Ink::Secondary, CHEVRON_W)?;
-                let size = chevron.show(r, &line, s, t)?;
-                let at = v3(right - size.X, (middle - size.Y / 2.0).round());
-                chevron.visual.SetOffset(at)?;
-                chevron.visual.SetCenterPoint(Vector3 {
-                    X: size.X / 2.0,
-                    Y: size.Y / 2.0,
-                    Z: 0.0,
-                })?;
+                let chevron = self.build_chevron(group, right, middle)?;
                 parts.hits.push((Hit::Languages, place(row)));
                 let ring_at = place(row).outset(-px(RECORD_INSET));
                 parts
                     .stops
                     .push((Stop::Languages, ring_at, px(RECORD_RADIUS)));
                 let hover = hover.ok_or_else(|| windows::core::Error::from(E_UNEXPECTED))?;
-                parts.languages = Some((hover, chevron.visual));
+                parts.languages = Some((hover, chevron));
             }
         }
         Ok(())
