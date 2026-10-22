@@ -374,17 +374,8 @@ impl Settings {
                     h: heights[j],
                 };
                 row_y += heights[j];
-                let divided = j > 0;
                 let host = tail.as_ref().unwrap_or(&group);
-                self.build_row(
-                    &mut parts,
-                    host,
-                    group_at,
-                    spec,
-                    row,
-                    divided,
-                    &languages_layout,
-                )?;
+                self.build_row(&mut parts, host, group_at, spec, row, &languages_layout)?;
                 if matches!(spec.control, Control::Translate) {
                     slack_y = group_at.Y + row.y + row.h;
                     tail = Some(container(c, &group, v3(0.0, 0.0))?);
@@ -650,8 +641,8 @@ impl Settings {
     }
 
     /// One setting: its name and description on the left, its control on
-    /// the right, and a line above unless it comes first. `row` is its place
-    /// in the `group`, which sits at `group_at` in the scroller.
+    /// the right, and a line above unless it comes first (`row.y` is 0). `row`
+    /// is its place in the `group`, which sits at `group_at` in the scroller.
     fn build_row(
         &self,
         parts: &mut Parts,
@@ -659,7 +650,6 @@ impl Settings {
         group_at: Vector3,
         spec: &Row,
         row: Rect,
-        divided: bool,
         languages: &Layout,
     ) -> Result<()> {
         let (c, r, t, s) = (
@@ -669,7 +659,7 @@ impl Settings {
             self.scale,
         );
         let px = |dip: f32| (dip * s).round();
-        if divided {
+        if row.y > 0.0 {
             let line = Rect {
                 h: s.round().max(1.0),
                 ..row
