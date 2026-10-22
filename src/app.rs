@@ -36,6 +36,7 @@ use crate::dictionary::{self, Definition, Detail, Lookup, NormalizeError};
 use crate::dicts;
 use crate::hotkey;
 use crate::i18n::{self, fill, tr};
+use crate::lang::LangCode;
 use crate::menu::{Command, Menu};
 use crate::offline;
 use crate::online;
@@ -205,7 +206,7 @@ struct Looked {
 #[derive(Clone, PartialEq)]
 struct Query {
     word: String,
-    language: Option<String>,
+    language: Option<LangCode>,
 }
 
 impl Query {
@@ -229,7 +230,7 @@ struct Corrected {
 }
 
 /// A word, from one language into another.
-type TranslationKey = (String, String, String);
+type TranslationKey = (String, LangCode, LangCode);
 
 /// A translation, or why there's none, for the request it was asked with.
 struct Translated {
@@ -244,7 +245,7 @@ struct Translatable {
     word: String,
     /// The languages it's in, each with the first thing the word means in
     /// it: context for a translation, should it need any.
-    senses: Vec<(String, Option<String>)>,
+    senses: Vec<(LangCode, Option<String>)>,
 }
 
 impl Translatable {
@@ -266,8 +267,8 @@ impl Translatable {
 /// The card turned into a translation of its word.
 struct Translating {
     about: Translatable,
-    from: String,
-    to: String,
+    from: LangCode,
+    to: LangCode,
     /// The word is in both languages: which way waits on the user.
     asking: bool,
     /// The list a language is being picked from, when it's open.

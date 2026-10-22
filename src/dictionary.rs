@@ -2,13 +2,15 @@
 //! they come from: the bundled dictionary (`offline.rs`) and the online
 //! ones (`online.rs`).
 
+use crate::lang::LangCode;
+
 /// A word in one language, followed by what it is in the others looked up
 /// in, which the card shows under it, each under a heading of its own.
 #[derive(Clone, Debug)]
 pub struct Definition {
     pub word: String,
     /// The code of the language it's in ("en").
-    pub language: String,
+    pub language: LangCode,
     pub phonetic: Option<String>,
     pub meanings: Vec<Meaning>,
     /// Shown above the senses, e.g. when an inflection was resolved.
@@ -38,7 +40,7 @@ impl Definition {
     pub fn only(self, language: &str) -> Option<Definition> {
         self.into_sections()
             .into_iter()
-            .find(|s| s.language == language)
+            .find(|s| *s.language == *language)
     }
 
     fn into_sections(mut self) -> Vec<Definition> {
@@ -63,7 +65,7 @@ impl Definition {
 
 /// One definition of the word in each of the languages it was found in,
 /// the first of `order` (the languages, by preference) leading.
-pub fn combine(mut sections: Vec<Definition>, order: &[String]) -> Option<Definition> {
+pub fn combine(mut sections: Vec<Definition>, order: &[LangCode]) -> Option<Definition> {
     let rank = |d: &Definition| {
         order
             .iter()
@@ -157,7 +159,7 @@ pub fn normalize(raw: &str) -> Result<String, NormalizeError> {
 /// Fills what the offline entry lacks (pronunciation, parts of speech the
 /// dictionary doesn't cover, languages it hasn't the word in) from an
 /// online entry. `order` is the languages, by preference.
-pub fn merge(local: Definition, online: Option<&Lookup>, order: &[String]) -> Definition {
+pub fn merge(local: Definition, online: Option<&Lookup>, order: &[LangCode]) -> Definition {
     let Some(Lookup::Found(online)) = online else {
         return local;
     };
@@ -280,7 +282,7 @@ mod tests {
         }
     }
 
-    fn order() -> Vec<String> {
+    fn order() -> Vec<LangCode> {
         vec!["en".into(), "it".into()]
     }
 

@@ -107,7 +107,7 @@ impl Settings {
             let Target::Pick(code) = &link.target else {
                 continue;
             };
-            let found = matches.and_then(|m| m.iter().position(|c| c == code));
+            let found = matches.and_then(|m| m.iter().position(|c| code == c));
             if let Some(i) = found {
                 let rect = Rect {
                     x: at.X + link.x * s,
@@ -1023,7 +1023,7 @@ impl Settings {
                 }
                 Target::Pick(code) => {
                     let matches = self.picking.as_ref().map(|p| &p.matches);
-                    let found = matches.and_then(|m| m.iter().position(|c| c == code));
+                    let found = matches.and_then(|m| m.iter().position(|c| code == c));
                     if let Some(i) = found {
                         parts.hits.push((Hit::Pick(i), rect));
                     }

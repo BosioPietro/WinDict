@@ -29,6 +29,7 @@ mod dicts;
 mod hotkey;
 mod http;
 mod i18n;
+mod lang;
 mod menu;
 mod offline;
 mod online;

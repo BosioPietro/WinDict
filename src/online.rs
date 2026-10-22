@@ -13,6 +13,7 @@ use crate::dictionary::{
 };
 use crate::http;
 use crate::i18n::{fill, tr};
+use crate::lang::LangCode;
 use crate::wikizionario;
 
 /// How long the first source for a language gets to answer alone before
@@ -26,8 +27,8 @@ const FALLBACK_DELAY: Duration = Duration::from_millis(500);
 /// the word isn't waited on any longer. Italian is the same with
 /// Wikizionario's extract and its pages. The other `languages` are only
 /// looked for in English Wiktionary, all at once, while those two are.
-pub fn lookup(word: &str, detail: Detail, languages: &[String]) -> Lookup {
-    let others: Vec<String> = languages
+pub fn lookup(word: &str, detail: Detail, languages: &[LangCode]) -> Lookup {
+    let others: Vec<LangCode> = languages
         .iter()
         .filter(|l| *l != "en" && *l != "it")
         .cloned()
@@ -38,7 +39,7 @@ pub fn lookup(word: &str, detail: Detail, languages: &[String]) -> Lookup {
         thread::spawn(move || {
             race(
                 move || lookup_free_dictionary(&w1, detail.senses, detail.synonyms),
-                move || lookup_wiktionary(&w2, detail.senses, &["en".to_string()]),
+                move || lookup_wiktionary(&w2, detail.senses, &[LangCode::new("en")]),
                 FALLBACK_DELAY,
             )
         })
@@ -71,7 +72,7 @@ pub fn lookup(word: &str, detail: Detail, languages: &[String]) -> Lookup {
 
 /// One answer from the answers for each language: what was found, if
 /// anything was; else "not found", if it was definite somewhere.
-fn together(results: Vec<Lookup>, languages: &[String]) -> Lookup {
+fn together(results: Vec<Lookup>, languages: &[LangCode]) -> Lookup {
     let mut found = Vec::new();
     let mut not_found = false;
     let mut failure = None;
@@ -160,7 +161,7 @@ fn lookup_free_dictionary(word: &str, max_senses: usize, max_synonyms: usize) ->
 /// English Wiktionary's entries for `word` in `languages`, which one
 /// response holds: its definitions are in English, whatever the word's
 /// language.
-fn lookup_wiktionary(word: &str, max_senses: usize, languages: &[String]) -> Lookup {
+fn lookup_wiktionary(word: &str, max_senses: usize, languages: &[LangCode]) -> Lookup {
     let path = format!(
         "/api/rest_v1/page/definition/{}",
         percent_encode(&word.replace(' ', "_"))
@@ -267,7 +268,7 @@ fn parse_wiktionary(
     }
     Some(Definition {
         word: word.to_string(),
-        language: language.to_string(),
+        language: language.into(),
         phonetic: None,
         meanings,
         note: None,
@@ -488,7 +489,7 @@ mod tests {
 
     #[test]
     fn puts_languages_together() {
-        let languages = ["en".to_string(), "it".to_string()];
+        let languages = [LangCode::new("en"), LangCode::new("it")];
         let italian = Lookup::Found(Definition {
             language: "it".into(),
             ..match found("casa") {

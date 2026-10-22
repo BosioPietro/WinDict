@@ -3,6 +3,8 @@
 
 use std::sync::Arc;
 
+use crate::lang::LangCode;
+
 use super::format::{Dict, Entry};
 use super::{active, Dictionary};
 
@@ -17,7 +19,7 @@ pub struct Suggestion {
     /// puts a typo right.
     pub typed: usize,
     /// The code of the language it's a word of ("en").
-    pub language: String,
+    pub language: LangCode,
 }
 
 /// Every word the dictionaries define, to suggest from as the search box is
@@ -113,7 +115,7 @@ impl Words {
         &self.text[start..start + word.key_len as usize]
     }
 
-    fn language(&self, word: &Word) -> &str {
+    fn language(&self, word: &Word) -> &LangCode {
         self.dictionaries[word.dictionary as usize].language()
     }
 
@@ -184,14 +186,17 @@ impl Words {
             let language = self.language(&self.words[i]);
             // Once in each language, though it's there with and without its
             // accents.
-            if out.iter().any(|s| s.word == word && s.language == language) {
+            if out
+                .iter()
+                .any(|s| s.word == word && s.language == *language)
+            {
                 continue;
             }
             out.push(Suggestion {
                 word: word.to_string(),
                 base: None,
                 typed: if typos == 0 { typed_chars.len() } else { 0 },
-                language: language.to_string(),
+                language: language.clone(),
             });
         }
         // An inflected form ("geese", "walked") is offered, as what it's a
@@ -203,7 +208,7 @@ impl Words {
             .count();
         for dictionary in &self.dictionaries {
             let language = dictionary.language();
-            if out[..at].iter().any(|s| s.language == language) {
+            if out[..at].iter().any(|s| s.language == *language) {
                 continue;
             }
             if let Some(base) = dictionary.dict().and_then(|d| d.base_of(typed)) {
@@ -213,7 +218,7 @@ impl Words {
                         word: typed.to_string(),
                         base: Some(base),
                         typed: typed_chars.len(),
-                        language: language.to_string(),
+                        language: language.clone(),
                     },
                 );
                 at += 1;

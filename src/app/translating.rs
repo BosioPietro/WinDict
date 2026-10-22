@@ -205,7 +205,7 @@ impl App {
             Input::Edited => {}
             Input::Enter => {
                 if let Some(code) = picking.highlighted() {
-                    self.steer_translation(Target::Pick(code.to_string()));
+                    self.steer_translation(Target::Pick(code.into()));
                 }
                 return;
             }

@@ -20,6 +20,7 @@ use windows::Win32::System::Memory::{
 
 use crate::dictionary::{self, percent_encode, Definition, Detail};
 use crate::i18n::{fill, tr};
+use crate::lang::LangCode;
 
 mod format;
 mod words;
@@ -52,14 +53,14 @@ pub fn active() -> Vec<Arc<Dictionary>> {
 }
 
 /// The languages of the dictionaries in use, in order of preference.
-pub fn languages() -> Vec<String> {
-    active().iter().map(|d| d.language().to_string()).collect()
+pub fn languages() -> Vec<LangCode> {
+    active().iter().map(|d| d.language().clone()).collect()
 }
 
 /// Looks words up in `languages` ("en", "it"), in that order of preference:
 /// English is built in, others are read from their file. Those that can't
 /// be are left out, and the error says why; English is used if none can.
-pub fn set_languages(languages: &[String]) -> Result<(), String> {
+pub fn set_languages(languages: &[LangCode]) -> Result<(), String> {
     let mut dictionaries = Vec::new();
     let mut errors = Vec::new();
     for language in languages {
@@ -139,7 +140,7 @@ enum Data {
 /// What a dictionary says about itself.
 #[derive(Default)]
 struct Info {
-    language: String,
+    language: LangCode,
     /// Credited on the card, which keeps it for as long as the app runs.
     name: &'static str,
     /// Its page for a word, with "{}" for the word.
@@ -166,7 +167,7 @@ impl Dictionary {
         Dict::open(data)
     }
 
-    pub fn language(&self) -> &str {
+    pub fn language(&self) -> &LangCode {
         &self.info.language
     }
 
@@ -184,7 +185,7 @@ impl Info {
         let mut info = Info::default();
         for line in text.lines() {
             match line.split_once('=') {
-                Some(("language", v)) => info.language = v.to_string(),
+                Some(("language", v)) => info.language = v.into(),
                 // Leaked, once per dictionary opened: the card's sources are
                 // `&'static str`, and a dictionary's name is a few bytes.
                 Some(("name", v)) => info.name = Box::leak(v.into()),
@@ -425,7 +426,7 @@ mod tests {
             assert!(open(code).is_err(), "{code}");
         }
         let set = |languages: &[&str]| {
-            set_languages(&languages.iter().map(|l| l.to_string()).collect::<Vec<_>>())
+            set_languages(&languages.iter().map(|&l| l.into()).collect::<Vec<_>>())
         };
         assert!(set(&["../evil"]).is_err());
         assert_eq!(languages(), ["en"]);

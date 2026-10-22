@@ -290,7 +290,7 @@ impl Dict<'_> {
         }
         Some(Definition {
             word: entry.display.clone().unwrap_or_else(|| key.to_string()),
-            language: String::new(),
+            language: Default::default(),
             phonetic: None,
             meanings,
             note,

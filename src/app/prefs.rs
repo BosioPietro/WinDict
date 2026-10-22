@@ -13,7 +13,7 @@ impl App {
         for installing in self.installing.iter().filter(|i| i.wanted && !i.quiet) {
             let language = installing.download.language;
             if !config.languages.iter().any(|l| l == language) {
-                config.languages.push(language.to_owned());
+                config.languages.push(language.into());
             }
         }
         config.languages.sort_by_key(|l| dicts::rank(l));
@@ -183,7 +183,7 @@ impl App {
     /// Looks words up in `language` too from now on, or no longer: English
     /// at once, another once its dictionary is downloaded, if it isn't
     /// already. The last language left stays.
-    pub(super) fn tick_language(&mut self, language: String, on: bool) {
+    pub(super) fn tick_language(&mut self, language: LangCode, on: bool) {
         if on {
             if let Some(download) = dicts::find(&language) {
                 return self.install(download, false);
@@ -193,7 +193,7 @@ impl App {
             }
         } else {
             for installing in self.installing.iter_mut() {
-                if installing.download.language == language {
+                if language == installing.download.language {
                     installing.wanted = false;
                 }
             }
@@ -263,7 +263,7 @@ impl App {
                 self.show_download(language, None);
                 let used = offline::languages().iter().any(|l| l == language);
                 if !self.config.languages.iter().any(|l| l == language) {
-                    self.config.languages.push(language.to_owned());
+                    self.config.languages.push(language.into());
                 } else if used {
                     // Already in use, as it was at start.
                     return;

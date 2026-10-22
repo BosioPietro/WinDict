@@ -588,7 +588,7 @@ impl Renderer {
                 y,
                 width: row_w,
                 height: ROW_H,
-                target: Target::Pick(code.to_string()),
+                target: Target::Pick(LangCode::new(*code)),
             });
         }
         if scrolls {

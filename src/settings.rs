@@ -37,6 +37,7 @@ use crate::config::{Config, ThemeMode};
 use crate::dicts;
 use crate::hotkey::{self, held_modifiers, is_modifier, Hotkey};
 use crate::i18n::{tr, Language, Strings};
+use crate::lang::LangCode;
 use crate::render::{Align, Face, Ink, Layout, Picker, Renderer, Side, Target, PICKER_ROWS};
 use crate::selection;
 use crate::theme::Theme;
@@ -68,7 +69,7 @@ pub enum Change {
     /// The language WinDict is shown in.
     Interface(Language),
     /// A language's code, like "en", turned on or off.
-    Language(String, bool),
+    Language(LangCode, bool),
     MaxDefinitions(usize),
     MaxSynonyms(usize),
     ShowExamples(bool),
@@ -78,7 +79,7 @@ pub enum Change {
     Autostart(bool),
     /// The languages translated from and into when the card can't tell,
     /// as codes.
-    TranslateLanguages(String, String),
+    TranslateLanguages(LangCode, LangCode),
     MyMemoryEmail(String),
     OpenConfig,
     Close,
@@ -158,7 +159,7 @@ impl Choice {
 
 /// The names of `languages`, as the languages row sums them up: "English,
 /// Italiano".
-fn summary(languages: &[String]) -> String {
+fn summary(languages: &[LangCode]) -> String {
     let names: Vec<_> = dicts::languages()
         .filter(|(code, _)| languages.iter().any(|l| l == code))
         .map(|(_, name)| name)
@@ -1138,7 +1139,7 @@ impl Settings {
     }
 
     /// Ticks `languages` (codes, like "en"), and only them.
-    pub fn show_languages(&mut self, languages: &[String]) -> Result<()> {
+    pub fn show_languages(&mut self, languages: &[LangCode]) -> Result<()> {
         self.values.config.languages = languages.to_vec();
         self.show_checks(true)?;
         let text = summary(languages);
@@ -1502,7 +1503,7 @@ mod tests {
             .filter(|row| matches!(row.control, Control::Languages))
             .count();
         assert_eq!(count, 1);
-        let names = |l: &[&str]| summary(&l.iter().map(|l| l.to_string()).collect::<Vec<_>>());
+        let names = |l: &[&str]| summary(&l.iter().map(|&l| l.into()).collect::<Vec<_>>());
         assert_eq!(names(&["it", "en"]), "English, Italiano");
         assert_eq!(names(&["it", "xx"]), "Italiano");
     }

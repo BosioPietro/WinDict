@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::i18n::Language;
+use crate::lang::LangCode;
 use crate::{translate, ui};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -40,11 +41,11 @@ pub struct Config {
     /// "en" is built in, another is read from
     /// `%LOCALAPPDATA%\WinDict\dicts\<code>.wdict`.
     #[serde(alias = "language", deserialize_with = "one_or_more")]
-    pub languages: Vec<String>,
+    pub languages: Vec<LangCode>,
     /// The languages words are translated from and into, as codes, when the
     /// card can't tell (see `translate::pick`).
-    pub translate_from: String,
-    pub translate_to: String,
+    pub translate_from: LangCode,
+    pub translate_to: LangCode,
     /// Sent to MyMemory, and only to it, for its larger daily allowance.
     pub mymemory_email: String,
     /// Move things into place instead of jumping them there; unset, as
@@ -130,9 +131,9 @@ fn parse(bytes: &[u8]) -> Result<Config, String> {
     // At least one definition per part of speech, or the card would be empty.
     config.max_definitions = config.max_definitions.max(1);
     // Each language once, and at least one, or nothing could be looked up.
-    let mut languages: Vec<String> = Vec::new();
+    let mut languages: Vec<LangCode> = Vec::new();
     for language in config.languages.drain(..) {
-        let language = language.trim().to_ascii_lowercase();
+        let language = LangCode::new(language.trim().to_ascii_lowercase());
         if !language.is_empty() && !languages.contains(&language) {
             languages.push(language);
         }
@@ -157,12 +158,14 @@ fn parse(bytes: &[u8]) -> Result<Config, String> {
 }
 
 /// Reads a list of languages, or the single one older versions saved.
-fn one_or_more<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+fn one_or_more<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<LangCode>, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Languages {
-        One(String),
-        More(Vec<String>),
+        One(LangCode),
+        More(Vec<LangCode>),
     }
     Ok(match Languages::deserialize(deserializer)? {
         Languages::One(language) => vec![language],

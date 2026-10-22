@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::dictionary::percent_encode;
 use crate::http;
 use crate::i18n::{fill, tr};
+use crate::lang::LangCode;
 
 const GOOGLE_HOST: &str = "translate.googleapis.com";
 const GOOGLE_WEB_HOST: &str = "translate-pa.googleapis.com";
@@ -175,8 +176,8 @@ pub struct Term {
 /// Which way to translate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Direction {
-    pub from: String,
-    pub to: String,
+    pub from: LangCode,
+    pub to: LangCode,
     /// Whether it's surely the way wanted: not so when the word is in both
     /// languages, and the user is asked.
     pub sure: bool,
@@ -187,10 +188,10 @@ pub struct Direction {
 /// word is in to the other; unless it's in both, when that's only a guess.
 /// Otherwise it's from the word's language to `default.1`, or `default.0`
 /// should that be the word's.
-pub fn pick(found: &[&str], enabled: &[String], default: (&str, &str)) -> Direction {
+pub fn pick(found: &[&str], enabled: &[LangCode], default: (&str, &str)) -> Direction {
     let direction = |from: &str, to: &str, sure| Direction {
-        from: from.to_string(),
-        to: to.to_string(),
+        from: from.into(),
+        to: to.into(),
         sure,
     };
     if let [a, b] = enabled {
@@ -227,8 +228,8 @@ pub fn pick(found: &[&str], enabled: &[String], default: (&str, &str)) -> Direct
 /// definition), and `email`, if given, for its larger allowance.
 pub fn translate(
     word: &str,
-    from: &str,
-    to: &str,
+    from: &LangCode,
+    to: &LangCode,
     context: Option<&str>,
     email: &str,
 ) -> Result<Translation, String> {
@@ -246,7 +247,7 @@ fn get(host: &str, path: &str) -> Result<Vec<u8>, String> {
     }
 }
 
-fn google(word: &str, from: &str, to: &str) -> Result<Translation, String> {
+fn google(word: &str, from: &LangCode, to: &LangCode) -> Result<Translation, String> {
     let path = format!(
         "/translate_a/single?client=gtx&sl={}&tl={}&dt=t&dt=bd&q={}",
         percent_encode(from),
@@ -259,7 +260,7 @@ fn google(word: &str, from: &str, to: &str) -> Result<Translation, String> {
 
 /// The endpoint translate.google.com asks, with its dictionary. Its model
 /// knows rarer words ("crateful") that gtx's leaves as they are.
-fn google_web(word: &str, from: &str, to: &str) -> Result<Translation, String> {
+fn google_web(word: &str, from: &LangCode, to: &LangCode) -> Result<Translation, String> {
     let path = format!(
         "/v1/translate?params.client=gtx&query.source_language={}&query.target_language={}\
          &query.display_language=en-US&query.text={}&key={GOOGLE_WEB_KEY}\
@@ -398,8 +399,8 @@ struct MyMemoryMatch {
 /// with the other translations it knows.
 fn mymemory(
     word: &str,
-    from: &str,
-    to: &str,
+    from: &LangCode,
+    to: &LangCode,
     context: Option<&str>,
     email: &str,
 ) -> Result<Translation, String> {
@@ -440,7 +441,7 @@ fn mymemory(
     })
 }
 
-fn mymemory_path(query: &str, from: &str, to: &str, email: &str) -> String {
+fn mymemory_path(query: &str, from: &LangCode, to: &LangCode, email: &str) -> String {
     let mut path = format!(
         "/get?q={}&langpair={}%7C{}",
         percent_encode(query),
@@ -586,11 +587,11 @@ mod tests {
     #[test]
     fn asks_mymemory_with_the_email() {
         assert_eq!(
-            mymemory_path("a dog", "en", "it", " me@example.com "),
+            mymemory_path("a dog", &"en".into(), &"it".into(), " me@example.com "),
             "/get?q=a%20dog&langpair=en%7Cit&de=me%40example.com"
         );
         assert_eq!(
-            mymemory_path("dog", "en", "it", ""),
+            mymemory_path("dog", &"en".into(), &"it".into(), ""),
             "/get?q=dog&langpair=en%7Cit"
         );
     }
@@ -615,9 +616,9 @@ mod tests {
 
     #[test]
     fn picks_the_direction() {
-        let both = ["en".to_string(), "it".to_string()];
+        let both = [LangCode::new("en"), LangCode::new("it")];
         let default = ("en", "fr");
-        let pick = |found: &[&str], enabled: &[String]| pick(found, enabled, default);
+        let pick = |found: &[&str], enabled: &[LangCode]| pick(found, enabled, default);
         // From the language the word is in, to the other one.
         assert_eq!(
             pick(&["it"], &both),
@@ -653,7 +654,7 @@ mod tests {
             }
         );
         // One language: into the default.
-        let english = ["en".to_string()];
+        let english = [LangCode::new("en")];
         assert_eq!(
             pick(&["en"], &english),
             Direction {

@@ -101,7 +101,7 @@ impl Settings {
         if code == other.as_str() {
             std::mem::swap(picked, other);
         } else {
-            *picked = code.to_owned();
+            *picked = code.into();
         }
         self.relayout()?;
         Ok(changed.then(|| self.languages_changed()))

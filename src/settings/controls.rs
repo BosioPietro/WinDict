@@ -20,7 +20,7 @@ impl Settings {
         let languages = &mut self.values.config.languages;
         if on {
             // In the order of the list, which is the order of preference.
-            languages.push(code.to_owned());
+            languages.push(code.into());
             languages.sort_by_key(|l| dicts::rank(l));
         } else if languages.len() > 1 {
             languages.retain(|l| l != code);
@@ -35,7 +35,7 @@ impl Settings {
         self.show_checks(true)?;
         let text = summary(&self.values.config.languages);
         self.set_note(Note::Language, &text, false)?;
-        Ok(Some(Change::Language(code.to_owned(), on)))
+        Ok(Some(Change::Language(code.into(), on)))
     }
 
     pub(super) fn switch(&self, sw: Switch) -> bool {

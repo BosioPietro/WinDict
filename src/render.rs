@@ -26,6 +26,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 use crate::dictionary::{self, percent_encode, Definition};
 use crate::dicts;
 use crate::i18n::{fill, tr};
+use crate::lang::LangCode;
 use crate::theme::{to_d2d, Theme};
 use crate::translate::{self, Translation};
 
@@ -246,7 +247,7 @@ pub enum Target {
     /// Translates the other way.
     Swap,
     /// Translates from, or into, the language with this code.
-    Pick(String),
+    Pick(LangCode),
     /// Translates the way the card offers.
     Confirm,
 }
