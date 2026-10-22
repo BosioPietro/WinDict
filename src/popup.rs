@@ -17,7 +17,9 @@ use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
 use crate::i18n::tr;
-use crate::render::{self, Body, Face, Ink, Link, Mark, Renderer, Target, WORD_SIZE};
+use crate::render::{
+    self, Body, Face, Ink, Link, Mark, Renderer, Target, LANGUAGES_TOP, WORD_SIZE,
+};
 use crate::searchbox::SearchBox;
 use crate::theme::Theme;
 use crate::ui::{
@@ -281,6 +283,10 @@ pub struct Popup {
     /// indent), to tell a refinement that leaves it alone.
     header_key: (String, (u32, u32), u32),
     body_h: f32,
+    /// The next body glides over from where the last one is, rather than
+    /// coming in afresh: the languages under the search box's field, on
+    /// their way to the same under a translation's heading, or back.
+    body_glides: bool,
     scroll: f32,
     scroll_anim: Option<Glide>,
     wheel_bursts: Bursts,
@@ -390,7 +396,9 @@ impl Popup {
         let content = Content::new(c, &frame.card, hwnd)?;
         let loader = Loader::new(c, content.host(), &theme)?;
         let scroll_chrome = ScrollChrome::new(c, &frame.card)?;
-        let search = SearchBox::new(c, &frame.card)?;
+        // Under the heading, which moves over it to and from the field.
+        let [_, lowest] = header.visuals()?;
+        let search = SearchBox::new(c, &frame.card, &lowest)?;
         // A ring gliding between a button and a link, over everything: they
         // aren't in the same space, nor does one scroll and the other not.
         let glide = c.CreateSpriteVisual()?;
@@ -439,6 +447,7 @@ impl Popup {
             region: Default::default(),
             header_key: Default::default(),
             body_h: 0.0,
+            body_glides: false,
             scroll: 0.0,
             scroll_anim: None,
             wheel_bursts: Bursts::default(),
@@ -512,6 +521,8 @@ impl Popup {
             }
             (true, _) => Some(self.search.leave(&self.anim)?),
         };
+        // The languages under the field stay, and glide up under the heading.
+        self.body_glides = rise_from.is_some() && self.search.room() > 0.0;
         let content_w = CARD_W - 2.0 * PAD_X;
         let indent = if self.back.shown() { BACK_INDENT } else { 0.0 };
         // The pin button's there whenever the search box isn't.
@@ -675,6 +686,16 @@ impl Popup {
                 self.content.appear(self.header_h, s)?;
                 self.resize(card_h, false)?;
             }
+            Transition::Replace if std::mem::take(&mut self.body_glides) => {
+                // What's the same at the top of both glides to its new place,
+                // from where it was: a translation has its languages lower.
+                self.scroll = 0.0;
+                self.scroll_anim = None;
+                self.content.keep_place(0.0, s)?;
+                self.content.shift_host(-LANGUAGES_TOP * s)?;
+                self.move_content_host(previous_header_h)?;
+                self.resize(card_h, true)?;
+            }
             Transition::Replace => {
                 // New body slides up a touch and fades in while the card resizes.
                 self.scroll = 0.0;
@@ -830,8 +851,10 @@ impl Popup {
         // On the scrollbar, or dragging its thumb, nothing else is hovered.
         let point = if self.hover_bar(point)? { None } else { point };
         if self.search.active {
-            let point = point.map(|(x, y)| self.card_point(x, y));
-            return self.search.hover(&self.anim, point);
+            let card_point = point.map(|(x, y)| self.card_point(x, y));
+            self.search.hover(&self.anim, card_point)?;
+            // The languages under the field have a swap button to lighten.
+            return self.sync_swap();
         }
         let over_back = point.is_some_and(|(x, y)| self.back_at(x, y));
         let over_translate = point.is_some_and(|(x, y)| self.translate_at(x, y));

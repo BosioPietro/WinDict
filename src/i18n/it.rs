@@ -36,13 +36,15 @@ pub const IT: Strings = Strings {
     did_you_mean: "Intendevi {word}?",
 
     // The card: the search box.
-    search_placeholder: "Cerca una parola",
-    search_title: "Nessun testo selezionato",
-    search_again_title: "Cerca un\u{2019}altra parola",
+    search_placeholder: "Scrivi una parola da cercare",
+    search_title: "Cerca una parola",
     search_too_long: "Prova con una sola parola o una frase breve",
+    translate_title: "Traduci frasi",
+    translate_placeholder: "Scrivi un testo da tradurre",
     no_suggestions: "Nessun risultato nel dizionario offline",
     no_suggestions_online: "Nessun risultato offline \u{2014} Invio cerca online",
     key_look_up: "Cerca",
+    key_translate: "Traduci",
     key_close: "Chiudi",
 
     // The card: a definition.
@@ -102,7 +104,7 @@ pub const IT: Strings = Strings {
         Viene inviato solo a MyMemory, insieme alle parole tradotte.",
 
     // Settings: recording a shortcut.
-    shortcut_detail: "Per cercare la parola selezionata",
+    shortcut_detail: "Per cercare definizioni",
     recording_detail: "Premi la nuova scorciatoia, o Esc per annullare",
     recording_hint: "Premi i tasti",
     needs_modifier: "Tieni premuto Ctrl, Alt o Win insieme al tasto",
@@ -112,7 +114,9 @@ pub const IT: Strings = Strings {
 
     // Settings: sections and rows, each with its description under it.
     general: "Generali",
-    shortcut: "Scorciatoia",
+    shortcuts: "Scorciatoie",
+    shortcuts_summary: "{lookup} per cercare, {translate} per tradurre",
+    lookup_shortcut: "Cerca",
     start_with_windows: "Avvia con Windows",
     start_with_windows_detail: "Avvia WinDict insieme al PC",
     check_updates: "Cerca aggiornamenti",
@@ -131,8 +135,8 @@ pub const IT: Strings = Strings {
     animations: "Animazioni",
     animations_detail: "Usa le animazioni nell\u{2019}app",
     translation: "Traduzione",
-    translate_shortcut: "Scorciatoia di traduzione",
-    translate_shortcut_detail: "Per tradurre direttamente",
+    translate_shortcut: "Traduci",
+    translate_shortcut_detail: "Per tradurre testo",
     default_languages: "Lingue predefinite",
     default_languages_detail: "Da e verso cui si traduce quando non si può determinare",
     mymemory_email: "Email di MyMemory",

@@ -181,6 +181,12 @@ impl Dict<'_> {
         })
     }
 
+    /// Whether `key` is a word of the dictionary's language: one it defines,
+    /// a form of one, or one spelt without its accents.
+    pub(super) fn has(&self, key: &str) -> bool {
+        self.entry(key).is_some()
+    }
+
     pub(super) fn defined(&self, key: &str) -> Option<Entry> {
         self.entry(key).filter(|e| !e.senses.is_empty())
     }

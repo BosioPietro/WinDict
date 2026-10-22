@@ -11,7 +11,7 @@ impl Settings {
             return 0.0;
         };
         ui::max_scroll(
-            view.height(self.open),
+            view.height(&self.open),
             self.card.1 - view.header_h,
             self.scale,
         )
@@ -81,7 +81,7 @@ impl Settings {
             return thumb.SetOpacity(0.0);
         }
         let viewport = self.card.1 - view.header_h;
-        let content_h = view.height(self.open);
+        let content_h = view.height(&self.open);
         let (top, h) = ui::thumb_span(viewport, content_h, self.scroll, max, s);
         let x = view.bar.size(self.card.0, h, s)?;
         let to = v3(x, view.header_h + top);
@@ -107,7 +107,7 @@ impl Settings {
         let view = self.view.as_ref()?;
         Some(Track {
             viewport: self.card.1 - view.header_h,
-            content_h: view.height(self.open),
+            content_h: view.height(&self.open),
             max: self.max_scroll(),
             s: self.scale,
         })

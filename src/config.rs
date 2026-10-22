@@ -32,9 +32,10 @@ pub enum SelectionMode {
 }
 
 /// What a global shortcut does.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Shortcut {
     /// Looks the selection up.
+    #[default]
     Lookup,
     /// Translates the selection, a word or a whole passage, straight away.
     Translate,

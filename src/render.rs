@@ -338,6 +338,10 @@ pub enum Translated<'a> {
     Failed(&'a str),
 }
 
+/// How far down a translation's body its languages start, in DIPs: room
+/// for their rings, which reach above them.
+pub const LANGUAGES_TOP: f32 = 4.0;
+
 /// The word's size in the heading, and the search box's text size, in DIPs.
 pub const WORD_SIZE: f32 = 26.0;
 pub const QUERY_SIZE: f32 = 17.0;

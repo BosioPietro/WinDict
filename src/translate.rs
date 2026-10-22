@@ -267,6 +267,42 @@ pub fn pick(found: &[&str], enabled: &[LangCode], default: (&str, &str)) -> Dire
     direction(from, to, true)
 }
 
+/// Which way to translate text typed `from` a language, if that could be
+/// told. With two languages looked up in, and it in one of them, it's into
+/// the other; otherwise it's into whichever of the `default` languages it
+/// isn't in, or `default.1`. Typed in a language that can't be told, it's
+/// the default way, and not `sure`.
+pub fn typed(from: Option<&str>, enabled: &[LangCode], default: (&str, &str)) -> Direction {
+    let Some(from) = from.filter(|l| supported(l)) else {
+        return Direction {
+            from: default.0.into(),
+            to: default.1.into(),
+            sure: false,
+        };
+    };
+    let direction = |from: &str, to: &str| Direction {
+        from: from.into(),
+        to: to.into(),
+        sure: true,
+    };
+    if let [a, b] = enabled {
+        if supported(a) && supported(b) {
+            if from == a.as_str() {
+                return direction(a, b);
+            }
+            if from == b.as_str() {
+                return direction(b, a);
+            }
+        }
+    }
+    let to = [default.1, default.0]
+        .into_iter()
+        .chain(LANGUAGES.iter().map(|(code, _)| *code))
+        .find(|&l| l != from)
+        .unwrap_or("en");
+    direction(from, to)
+}
+
 /// Translates `word` between the languages of `direction`: Google first,
 /// the website's endpoint and then gtx, then MyMemory, told what the word means by `context` (its first
 /// definition), and `email`, if given, for its larger allowance.
@@ -569,6 +605,28 @@ fn split_context(translated: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn picks_the_way_typed_text_goes() {
+        // "from>to", with a "?" when the language wasn't told.
+        let way = |from, enabled: &str, default| {
+            let enabled: Vec<LangCode> = enabled.split(' ').map(LangCode::from).collect();
+            let d = typed(from, &enabled, default);
+            format!("{}>{}{}", d.from, d.to, if d.sure { "" } else { "?" })
+        };
+        // Two languages: into the other one, whatever the defaults.
+        assert_eq!(way(Some("it"), "en it", ("fr", "de")), "it>en");
+        assert_eq!(way(Some("en"), "en it", ("fr", "de")), "en>it");
+        // One, or three: into the default it isn't.
+        assert_eq!(way(Some("en"), "en", ("en", "fr")), "en>fr");
+        assert_eq!(way(Some("en"), "en", ("fr", "en")), "en>fr");
+        assert_eq!(way(Some("fr"), "en it fr", ("it", "fr")), "fr>it");
+        // In neither default: into the second.
+        assert_eq!(way(Some("fr"), "en it fr", ("en", "it")), "fr>it");
+        // Not told: the default way.
+        assert_eq!(way(None, "en it", ("en", "it")), "en>it?");
+        assert_eq!(way(Some("xx"), "en it", ("it", "en")), "it>en?");
+    }
 
     #[test]
     fn reads_passages() {

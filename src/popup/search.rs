@@ -1,24 +1,34 @@
 //! The card's search box: opening it and its suggestions.
 
 use super::*;
+use crate::config::Shortcut;
+use crate::render::{Picker, LANGUAGES_TOP, QUERY_SIZE};
 
 impl Popup {
-    /// Shows the search box under `title`. An open card turns into it in
-    /// place; otherwise a new one appears next to `anchor`.
+    /// Shows the search box under `title`, for what the `purpose` shortcut
+    /// does. An open card turns into it in place; otherwise a new one
+    /// appears next to `anchor`.
     pub fn show_search(
         &mut self,
         anchor: RECT,
         theme: Theme,
         title: &str,
-        placeholder: &str,
+        purpose: Shortcut,
     ) -> Result<()> {
         if self.visible {
-            return self.enter_search(title, placeholder, true);
+            return self.enter_search(title, purpose, true, false);
         }
         // Its top stays put, so the field doesn't move as suggestions come and go.
         self.prepare(anchor, theme, true)?;
-        self.enter_search(title, placeholder, false)?;
+        self.enter_search(title, purpose, false, false)?;
         self.appear()
+    }
+
+    /// Turns the card back into the search box what it shows was typed in,
+    /// under `title`: the heading sinks back into the field as what's
+    /// typed, and the languages under it glide back under the field.
+    pub fn return_to_search(&mut self, title: &str, purpose: Shortcut) -> Result<()> {
+        self.enter_search(title, purpose, true, true)
     }
 
     /// Shows `text` in the search box, the caret `at` UTF-16 units in.
@@ -64,6 +74,51 @@ impl Popup {
         Ok(())
     }
 
+    /// Shows the languages what's typed is to be translated between, in
+    /// boxes under the field like the translation card's, with `picker`
+    /// open under one of them. The card grows or shrinks to fit them.
+    pub fn set_search_languages(
+        &mut self,
+        from: &str,
+        to: &str,
+        picker: Option<&Picker>,
+    ) -> Result<()> {
+        let s = self.scale;
+        let content_w = CARD_W - 2.0 * PAD_X;
+        let layout = self
+            .renderer
+            .layout_languages(from, to, picker, content_w)?;
+        let surface = self.renderer.draw(&layout, s, &self.theme)?;
+        let first = self.search.room() == 0.0;
+        let glide = std::mem::take(&mut self.body_glides);
+        let size = v2(content_w * s, layout.height * s);
+        let c = &self.anim.compositor;
+        self.content.show(c, &surface, size, layout.caret, s)?;
+        self.content.set_links(layout.links);
+        self.focus_link(None, 0)?;
+        // They're the body, under the box's field, and never scroll.
+        let top = self.search.below_field();
+        (self.header_h, self.body_h) = (top, size.Y);
+        (self.scroll, self.scroll_anim) = (0.0, None);
+        self.content.keep_place(0.0, s)?;
+        if glide {
+            // From where they were on the translation, a little lower.
+            self.content.shift_host(LANGUAGES_TOP * s)?;
+        }
+        self.content.move_host(&self.anim, top, glide)?;
+        if first && !glide {
+            // They come in after the field.
+            let anim = &self.anim;
+            let visual = self.content.visual()?;
+            visual.SetOpacity(0.0)?;
+            anim.scalar(&visual, "Opacity", 1.0, 220, MAKE_WAY_MS, &anim.decelerate)?;
+        }
+        let h = self.search.make_room(&self.anim, size.Y.ceil())?;
+        self.resize(h, true)?;
+        self.update_scroll_chrome(false)?;
+        self.sync_swap()
+    }
+
     /// Picks the next suggestion down, or up.
     pub fn step_suggestion(&mut self, down: bool) -> Result<()> {
         self.search.step(&self.anim, down)
@@ -87,11 +142,14 @@ impl Popup {
 
     /// Turns the card into the search box. `in_place` fades out what it
     /// showed first and resizes it smoothly; otherwise it's about to appear.
+    /// `returning` to it from what was typed in it, the heading sinks back
+    /// into the field, and the body stays for the languages to glide from.
     pub(super) fn enter_search(
         &mut self,
         title: &str,
-        placeholder: &str,
+        purpose: Shortcut,
         in_place: bool,
+        returning: bool,
     ) -> Result<()> {
         self.set_back(false)?;
         self.set_translate(false)?;
@@ -101,12 +159,11 @@ impl Popup {
         self.header_indent = 0.0;
         let anim = &self.anim;
         let [word, old_word] = self.header.visuals()?;
-        let shown: [Visual; 4] = [
-            word,
-            old_word,
-            self.content.visual()?,
-            self.loader.visual().cast()?,
-        ];
+        let mut shown: Vec<Visual> = vec![old_word, self.loader.visual().cast()?];
+        // Returning, the heading and the body move rather than fade.
+        if !returning {
+            shown.extend([word, self.content.visual()?]);
+        }
         for v in &shown {
             if in_place {
                 anim.scalar(v, "Opacity", 0.0, MAKE_WAY_MS, 0, &anim.accelerate)?;
@@ -122,7 +179,15 @@ impl Popup {
         let (renderer, theme, s) = (&self.renderer, &self.theme, self.scale);
         let h = self
             .search
-            .open(renderer, anim, theme, s, title, placeholder, delay)?;
+            .open(renderer, anim, theme, s, title, purpose, delay)?;
+        if returning {
+            let to = self.search.query_at()?;
+            self.header.sink(anim, to, QUERY_SIZE / WORD_SIZE)?;
+            // What's typed takes over from the heading once it's there.
+            let fade = parts::SINK_FADE_MS;
+            self.search.await_heading(anim, RESIZE_MS - fade, fade)?;
+            self.body_glides = true;
+        }
         // Nothing below the box: no body to scroll or click.
         (self.header_h, self.body_h) = (h, 0.0);
         (self.scroll, self.scroll_anim) = (0.0, None);

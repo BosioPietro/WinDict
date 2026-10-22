@@ -27,7 +27,7 @@ impl Settings {
         } else {
             // Words have to be looked up in something.
             if let Some(view) = &self.view {
-                let item = &view.languages.items[i].on;
+                let item = &view.languages[i].on;
                 self.anim.shake(item, item.Offset()?, self.scale * 0.5)?;
             }
             return Ok(None);
@@ -146,8 +146,10 @@ impl Settings {
             return Ok(());
         };
         self.show_caps(shortcut, true)?;
-        let note = Note::of(shortcut);
-        self.set_note(note, &note.usual(&self.values), false)?;
+        // The shortcuts row sums up the one just recorded, if one was.
+        for note in [Note::of(shortcut), Note::Shortcuts] {
+            self.set_note(note, &note.usual(&self.values), false)?;
+        }
         self.show_recording()
     }
 

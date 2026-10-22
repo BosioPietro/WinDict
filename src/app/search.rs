@@ -1,12 +1,23 @@
-//! The typed-word box: opening it, typing into it, and submitting what's in it.
+//! The typed-word box: opening it, typing into it, and submitting what's in
+//! it, to look it up or, opened by the translation shortcut, to translate it.
 
 use super::*;
 
 impl App {
-    /// Nothing was selected: opens the card as a search box, for text that
-    /// can't be selected (in an image, a protected PDF, a game). It opens at
-    /// `anchor`, the text caret, when there is one.
-    pub(super) fn open_search(&mut self, title: &'static str, anchor: Option<RECT>) {
+    /// Nothing was selected: opens the card as a box to type in, for text
+    /// that can't be selected (in an image, a protected PDF, a game), to
+    /// do with it what the `purpose` shortcut does. It opens at `anchor`,
+    /// the text caret, when there is one.
+    pub(super) fn open_search(&mut self, purpose: Shortcut, anchor: Option<RECT>) {
+        // Translations come from the internet, like the online answers.
+        if purpose == Shortcut::Translate && !self.config.online_lookup {
+            let (title, detail) = (tr().translate_offline, tr().translate_offline_detail);
+            return self.show_message(anchor, title, detail, true);
+        }
+        let title = match purpose {
+            Shortcut::Lookup => tr().search_title,
+            Shortcut::Translate => tr().translate_title,
+        };
         self.card.current = None;
         self.card.history.clear();
         (self.card.translatable, self.card.translating) = (None, None);
@@ -20,7 +31,9 @@ impl App {
         // With no caret to open at (an image, a game), the middle of the
         // screen the app is on.
         let anchor = anchor_or_centre(anchor, previous, zoom);
-        if let Err(e) = popup.show_search(anchor, theme, title, tr().search_placeholder) {
+        // A list of languages the card had open is gone.
+        popup.hold_region(false);
+        if let Err(e) = popup.show_search(anchor, theme, title, purpose) {
             self.tray.notify(tr().draw_window_failed, &e.message());
             return;
         }
@@ -29,7 +42,7 @@ impl App {
         if !selection::take_foreground(hwnd) {
             let detail = fill(
                 tr().nothing_selected_detail,
-                &[("hotkey", &self.config.hotkey)],
+                &[("hotkey", &self.config.hotkey(purpose))],
             );
             return self.show_message(None, tr().nothing_selected, &detail, true);
         }
@@ -37,11 +50,34 @@ impl App {
         if previous != hwnd {
             self.card.return_focus = Some(previous);
         }
+        // A passage can be translated, where only a word or two is looked
+        // up; and it's translated the way the languages under it say.
+        let (edit, languages) = match purpose {
+            Shortcut::Lookup => (LineEdit::default(), None),
+            Shortcut::Translate => {
+                let way = typed_direction("", &self.config);
+                let languages = Languages {
+                    from: way.from,
+                    to: way.to,
+                    picking: None,
+                    picked: false,
+                };
+                let edit = LineEdit::new("", translate::MAX_PASSAGE_CHARS);
+                (edit, Some(languages))
+            }
+        };
         self.card.search = Some(Search {
+            purpose,
+            edit,
             title,
+            languages,
             ..Search::default()
         });
         self.sync_link_keys();
+        // The languages it'll be translated between show from the start.
+        if purpose == Shortcut::Translate {
+            self.show_typed_languages();
+        }
     }
 
     /// A character typed into the card (WM_CHAR).
@@ -139,6 +175,20 @@ impl App {
             let _ = popup.set_search_title(search.title);
         }
         let _ = popup.set_query(search.edit.text(), search.edit.caret_utf16());
+        // What's to be translated shows, instead of words, the languages
+        // it'll go between, following what it's typed in until one's picked.
+        // They're drawn again only when that changes them.
+        if let Some(l) = search.languages.as_mut() {
+            if l.picked {
+                return;
+            }
+            let way = typed_direction(search.edit.text(), &self.config);
+            if (&way.from, &way.to) == (&l.from, &l.to) {
+                return;
+            }
+            (l.from, l.to) = (way.from, way.to);
+            return self.show_typed_languages();
+        }
         let typed = search.edit.text().trim_start().to_lowercase();
         let typed_chars = typed.chars().count();
         let suggest = typed_chars >= SUGGEST_AFTER;
@@ -178,6 +228,9 @@ impl App {
         let Some(search) = self.card.search.as_mut() else {
             return;
         };
+        if search.languages.is_some() {
+            return self.submit_translation();
+        }
         let picked_row = picked.filter(|&i| i < search.suggestions.len());
         let picked = picked_row.map(|i| &search.suggestions[i]);
         let text = picked.map_or(search.edit.text(), |s| s.word.as_str());
@@ -207,4 +260,62 @@ impl App {
             }
         }
     }
+
+    /// Enter in the box opened to translate: the card turns into the
+    /// translation of what's typed, between the languages under it.
+    fn submit_translation(&mut self) {
+        let Some(search) = self.card.search.as_ref() else {
+            return;
+        };
+        let Some(l) = search.languages.as_ref() else {
+            return;
+        };
+        let way = (l.from.clone(), l.to.clone());
+        // The box takes no more than can be translated.
+        let Ok(text) = translate::passage(search.edit.text()) else {
+            if let Some(popup) = self.card.popup.as_ref() {
+                let _ = popup.shake_search();
+            }
+            return;
+        };
+        let typed = self.card.search.take();
+        (self.card.current, self.card.speakable) = (None, None);
+        let about = Translatable {
+            word: text,
+            senses: Vec::new(),
+        };
+        self.card.translatable = Some(about.clone());
+        if let Some(popup) = self.card.popup.as_mut() {
+            popup.hold_region(false);
+        }
+        self.begin_translation(about, way, false, typed);
+    }
+
+    /// Back from the translation of what was typed: the box it was typed
+    /// in comes back as it was, its text and languages and all.
+    pub(super) fn reopen_search(&mut self, search: Search) {
+        let Some(popup) = self.card.popup.as_mut().filter(|p| p.visible) else {
+            return;
+        };
+        popup.hold_region(false);
+        if let Err(e) = popup.return_to_search(search.title, search.purpose) {
+            return self.tray.notify(tr().draw_window_failed, &e.message());
+        }
+        (self.card.translatable, self.card.translating) = (None, None);
+        // Answers still on their way are for the translation.
+        self.new_request();
+        self.card.search = Some(search);
+        self.refresh_search();
+        self.show_typed_languages();
+        self.sync_link_keys();
+        self.sync_back_keys();
+    }
+}
+
+/// Which way `text`, typed to be translated, goes: from the language its
+/// words are in, among the dictionaries', as the `config` says.
+fn typed_direction(text: &str, config: &Config) -> translate::Direction {
+    let defaults = (config.translate_from.as_str(), config.translate_to.as_str());
+    let from = offline::detect(text);
+    translate::typed(from.as_deref(), &config.languages, defaults)
 }

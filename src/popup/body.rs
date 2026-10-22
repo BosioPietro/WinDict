@@ -191,6 +191,12 @@ impl Content {
         }
     }
 
+    /// Moves the body `dy` pixels down from where it is, at once.
+    pub(super) fn shift_host(&self, dy: f32) -> Result<()> {
+        let at = self.host.Offset()?;
+        self.host.SetOffset(v3(at.X, at.Y + dy))
+    }
+
     /// Sizes the viewport, along with the card's resize with `animate`.
     pub(super) fn size_host(&self, anim: &Animator, size: Vector2, animate: bool) -> Result<()> {
         if animate {

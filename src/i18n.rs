@@ -86,14 +86,16 @@ strings! {
 
     // The card: the search box.
     search_placeholder: "Type a word to look it up",
-    search_title: "No text selected",
-    /// Opened again from the card itself, where nothing was meant to be selected.
-    search_again_title: "Look up another word",
+    search_title: "Look up a word",
     search_too_long: "Try a single word or a short phrase",
+    /// The search box for the translation shortcut.
+    translate_title: "Translate sentences",
+    translate_placeholder: "Type text to translate",
     no_suggestions: "No matches in the offline dictionary",
     no_suggestions_online: "No offline matches \u{2014} Enter searches online",
     /// Beside the Enter key.
     key_look_up: "Look up",
+    key_translate: "Translate",
     /// Beside the Esc key.
     key_close: "Close",
 
@@ -164,7 +166,7 @@ strings! {
         It\u{2019}s sent only to MyMemory, with the words translated.",
 
     // Settings: recording a shortcut.
-    shortcut_detail: "Looks up the selected word",
+    shortcut_detail: "To look up words",
     recording_detail: "Press the new shortcut, or Esc to cancel",
     recording_hint: "Press keys",
     needs_modifier: "Hold Ctrl, Alt or Win with the key",
@@ -174,7 +176,11 @@ strings! {
 
     // Settings: sections and rows, each with its description under it.
     general: "General",
-    shortcut: "Shortcut",
+    shortcuts: "Shortcuts",
+    /// What the shortcuts row says, under it. `{lookup}` and `{translate}`:
+    /// their keys.
+    shortcuts_summary: "{lookup} to look up, {translate} to translate",
+    lookup_shortcut: "Look up",
     start_with_windows: "Start with Windows",
     start_with_windows_detail: "Runs WinDict when you sign in",
     check_updates: "Check for updates",
@@ -193,8 +199,8 @@ strings! {
     animations: "Animations",
     animations_detail: "Starts as Windows has them; turn on to override",
     translation: "Translation",
-    translate_shortcut: "Translation shortcut",
-    translate_shortcut_detail: "To translate straight away",
+    translate_shortcut: "Translate",
+    translate_shortcut_detail: "To translate text",
     default_languages: "Default languages",
     default_languages_detail: "Translated from and into when it can\u{2019}t be inferred",
     mymemory_email: "MyMemory email",

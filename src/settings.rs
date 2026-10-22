@@ -3,9 +3,9 @@
 //! card it's a composition visual tree, so all its motion runs on the system
 //! compositor: the card rises in with its parts a beat after one another,
 //! switches slide, the chosen theme's pill glides over, numbers roll, a new
-//! shortcut's keys rise into place, the list of languages opens out of its
-//! row as the card grows to fit it, and the focus ring follows Tab from
-//! control to control. Changing the theme cross-fades the whole window.
+//! shortcut's keys rise into place, the shortcuts and the list of languages
+//! open out of their rows as the card grows to fit them, and the focus ring
+//! follows Tab from control to control. Changing the theme cross-fades the whole window.
 //! The one text field, for the MyMemory email, is drawn the same way, its
 //! caret and all.
 //!
@@ -36,7 +36,7 @@ use crate::app::picking::Picking;
 use crate::config::{self, Config, SelectionMode, Shortcut, ThemeMode, SHORTCUTS, ZOOMS};
 use crate::dicts;
 use crate::hotkey::{self, held_modifiers, is_modifier, Hotkey};
-use crate::i18n::{tr, Language, Strings};
+use crate::i18n::{self, tr, Language, Strings};
 use crate::lang::LangCode;
 use crate::render::{Align, Face, Ink, Layout, Picker, Renderer, Side, Target, PICKER_ROWS};
 use crate::selection;
@@ -214,16 +214,58 @@ fn summary(languages: &[LangCode]) -> String {
     names.join(", ")
 }
 
+/// What the shortcuts row sums up: each shortcut's keys.
+fn shortcuts_summary(config: &Config) -> String {
+    let keys = |shortcut| key_names(config.hotkey(shortcut)).join("+");
+    i18n::fill(
+        tr().shortcuts_summary,
+        &[
+            ("lookup", &keys(Shortcut::Lookup)),
+            ("translate", &keys(Shortcut::Translate)),
+        ],
+    )
+}
+
+/// A row that opens out into a list of more under it, and shuts again.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Fold {
+    /// The shortcuts, each a row like the other settings.
+    Shortcuts,
+    /// The languages words are looked up in, each with a box to tick.
+    Languages,
+}
+
+/// In the order they're in on the card.
+const FOLDS: [Fold; 2] = [Fold::Shortcuts, Fold::Languages];
+
+/// The rows in the shortcuts' list.
+const SHORTCUT_ROWS: [Row; SHORTCUTS.len()] = [
+    row(
+        "\u{E721}",
+        |s| s.lookup_shortcut,
+        |s| s.shortcut_detail,
+        Control::Shortcut(Shortcut::Lookup),
+    ),
+    row(
+        "\u{E8C1}",
+        |s| s.translate_shortcut,
+        |s| s.translate_shortcut_detail,
+        Control::Shortcut(Shortcut::Translate),
+    ),
+];
+
 /// A setting's description that can change to say what's going on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Note {
+    Shortcuts,
     Shortcut,
     TranslateShortcut,
     Language,
     Selection,
 }
 
-const NOTES: [Note; 4] = [
+const NOTES: [Note; 5] = [
+    Note::Shortcuts,
     Note::Shortcut,
     Note::TranslateShortcut,
     Note::Language,
@@ -241,6 +283,7 @@ impl Note {
 
     fn usual(self, values: &Values) -> String {
         match self {
+            Note::Shortcuts => shortcuts_summary(&values.config),
             Note::Shortcut => tr().shortcut_detail.into(),
             Note::TranslateShortcut => tr().translate_shortcut_detail.into(),
             Note::Language => summary(&values.config.languages),
@@ -259,8 +302,8 @@ enum Hit {
     Choice(Choice, usize),
     /// A counter's down (false) or up (true) button.
     Step(Counter, bool),
-    /// The languages row, which opens and shuts the list under it.
-    Languages,
+    /// A row that opens and shuts the list under it.
+    Fold(Fold),
     /// A language in that list, by its place in [`dicts::languages`].
     Language(usize),
     /// The email field.
@@ -286,7 +329,7 @@ enum Stop {
     Email,
     Select(Side),
     Swap,
-    Languages,
+    Fold(Fold),
     Language(usize),
     Config,
 }
@@ -299,13 +342,29 @@ impl Hit {
             Hit::Switch(sw) => Some(Stop::Switch(sw)),
             Hit::Choice(choice, _) => Some(Stop::Choice(choice)),
             Hit::Step(counter, _) => Some(Stop::Counter(counter)),
-            Hit::Languages => Some(Stop::Languages),
+            Hit::Fold(fold) => Some(Stop::Fold(fold)),
             Hit::Language(i) => Some(Stop::Language(i)),
             Hit::Email => Some(Stop::Email),
             Hit::Info | Hit::Pick(_) => None,
             Hit::Select(side) => Some(Stop::Select(side)),
             Hit::Swap => Some(Stop::Swap),
             Hit::Config => Some(Stop::Config),
+        }
+    }
+
+    /// The fold whose list it's in, if it's in one.
+    fn folded(self) -> Option<Fold> {
+        self.stop().and_then(Stop::folded)
+    }
+}
+
+impl Stop {
+    /// The fold whose list it's in, if it's in one.
+    fn folded(self) -> Option<Fold> {
+        match self {
+            Stop::Shortcut(_) => Some(Fold::Shortcuts),
+            Stop::Language(_) => Some(Fold::Languages),
+            _ => None,
         }
     }
 }
@@ -316,9 +375,9 @@ enum Control {
     Switch(Switch),
     Choice(Choice),
     Counter(Counter),
-    /// Opens the list of languages under it. It's the last row of its
-    /// group, so that only what's below the group moves as the list opens.
-    Languages,
+    /// Opens the list under it. It's the last row of its group, so that
+    /// only what's below the group moves as the list opens.
+    Fold(Fold),
     /// The field for the MyMemory email, with an info symbol after the
     /// setting's name.
     Email,
@@ -338,7 +397,7 @@ impl Control {
             Control::Switch(_) => SWITCH_W,
             Control::Choice(choice) => choice.names().len() as f32 * choice.segment_w(),
             Control::Counter(counter) => counter.width(),
-            Control::Languages => CHEVRON_W,
+            Control::Fold(_) => CHEVRON_W,
             Control::Email => FIELD_W,
             Control::Translate | Control::Selection => 0.0,
         }
@@ -381,18 +440,6 @@ const SECTIONS: &[(Label, &[Row])] = &[
         |s| s.general,
         &[
             row(
-                "\u{E765}",
-                |s| s.shortcut,
-                |s| s.shortcut_detail,
-                Control::Shortcut(Shortcut::Lookup),
-            ),
-            row(
-                "\u{E765}",
-                |s| s.translate_shortcut,
-                |s| s.translate_shortcut_detail,
-                Control::Shortcut(Shortcut::Translate),
-            ),
-            row(
                 "\u{E7E8}",
                 |s| s.start_with_windows,
                 |s| s.start_with_windows_detail,
@@ -409,6 +456,13 @@ const SECTIONS: &[(Label, &[Row])] = &[
                 |s| s.language,
                 |s| s.language_detail,
                 Control::Choice(Choice::Language),
+            ),
+            // Its description sums up the shortcuts' keys.
+            row(
+                "\u{E765}",
+                |s| s.shortcuts,
+                |_| "",
+                Control::Fold(Fold::Shortcuts),
             ),
         ],
     ),
@@ -469,7 +523,7 @@ const SECTIONS: &[(Label, &[Row])] = &[
                 "\u{E774}",
                 |s| s.languages,
                 |_| "English",
-                Control::Languages,
+                Control::Fold(Fold::Languages),
             ),
         ],
     ),
@@ -640,8 +694,8 @@ struct FieldView {
     at: Rect,
 }
 
-/// The languages row, and the list that opens under it, in its group.
-struct LanguagesView {
+/// A row that folds, and the list that opens under it, in its group.
+struct FoldView {
     hover: SpriteVisual,
     /// Turns over as the list opens.
     chevron: SpriteVisual,
@@ -654,38 +708,17 @@ struct LanguagesView {
     group_h: f32,
     /// The list, at the bottom of the group.
     list: ContainerVisual,
-    /// Where the list starts in the scroller, and how tall it is.
+    /// Where the list starts in the scroller with every list shut, and
+    /// how tall it is.
     list_y: f32,
     list_h: f32,
-    /// In the order of [`dicts::languages`].
-    items: Vec<LanguageView>,
     /// What comes after, which moves down as the list opens: the groups
     /// below and the footer. It rests at the top with the list shut.
     after: ContainerVisual,
-    /// How much shorter the languages row is than with the list full, and
-    /// where, with it full, what it moves up starts.
-    slack: f32,
-    slack_y: f32,
 }
 
-impl LanguagesView {
-    /// Where `rect`, in the scroller with the list shut, is with it as
-    /// `open` says, or nothing if it's in the `listed` and that's shut.
-    /// What's in the list is where it is with the list open.
-    fn place(&self, rect: Rect, listed: bool, open: bool) -> Option<Rect> {
-        if listed && !open {
-            return None;
-        }
-        let mut y = rect.y;
-        if !listed && open && rect.y >= self.list_y {
-            y += self.list_h;
-        }
-        if rect.y >= self.slack_y {
-            y -= self.slack;
-        }
-        Some(Rect { y, ..rect })
-    }
-}
+/// Which folds have their list open, in the order of [`FOLDS`].
+type Open = [bool; FOLDS.len()];
 
 struct View {
     /// Everything; fades as one when the theme changes.
@@ -728,28 +761,60 @@ struct View {
     ring_source: CompositionSurfaceBrush,
     ring_grid: CompositionNineGridBrush,
     ring_radius: Cell<f32>,
-    languages: LanguagesView,
+    /// In the order of [`FOLDS`].
+    folds: Vec<FoldView>,
+    /// In the order of [`dicts::languages`].
+    languages: Vec<LanguageView>,
+    /// How much shorter the default languages' row is than with the list
+    /// of matches full, and where, with it full, what it moves up starts.
+    slack: f32,
+    slack_y: f32,
 }
 
 impl View {
-    /// The height of everything below the header with the list as `open` says.
-    fn height(&self, open: bool) -> f32 {
-        self.content_h + if open { self.languages.list_h } else { 0.0 } - self.languages.slack
+    /// The height of everything below the header with the lists as `open` says.
+    fn height(&self, open: &Open) -> f32 {
+        let lists: f32 = self
+            .folds
+            .iter()
+            .zip(open)
+            .filter(|(_, &open)| open)
+            .map(|(fold, _)| fold.list_h)
+            .sum();
+        self.content_h + lists - self.slack
     }
 
-    /// Where things can be clicked, with the list as `open` says.
-    fn hits(&self, open: bool) -> impl Iterator<Item = (Hit, Rect)> + '_ {
-        self.hits.iter().filter_map(move |&(hit, rect)| {
-            let listed = matches!(hit, Hit::Language(_));
-            Some((hit, self.languages.place(rect, listed, open)?))
-        })
+    /// Where `rect`, in the scroller with every list shut, is with them as
+    /// `open` says, or nothing if it's in the list of `folded` and that's
+    /// shut. What's in a list is where it is with that list open.
+    fn place(&self, rect: Rect, folded: Option<Fold>, open: &Open) -> Option<Rect> {
+        let mut y = rect.y;
+        for ((fold, view), &open) in FOLDS.iter().zip(&self.folds).zip(open) {
+            let listed = folded == Some(*fold);
+            if listed && !open {
+                return None;
+            }
+            if !listed && open && rect.y >= view.list_y {
+                y += view.list_h;
+            }
+        }
+        if rect.y >= self.slack_y {
+            y -= self.slack;
+        }
+        Some(Rect { y, ..rect })
     }
 
-    /// Where Tab stops, with the list as `open` says.
-    fn stops(&self, open: bool) -> impl Iterator<Item = (Stop, Rect, f32)> + '_ {
+    /// Where things can be clicked, with the lists as `open` says.
+    fn hits<'a>(&'a self, open: &'a Open) -> impl Iterator<Item = (Hit, Rect)> + 'a {
+        self.hits
+            .iter()
+            .filter_map(move |&(hit, rect)| Some((hit, self.place(rect, hit.folded(), open)?)))
+    }
+
+    /// Where Tab stops, with the lists as `open` says.
+    fn stops<'a>(&'a self, open: &'a Open) -> impl Iterator<Item = (Stop, Rect, f32)> + 'a {
         self.stops.iter().filter_map(move |&(stop, rect, radius)| {
-            let listed = matches!(stop, Stop::Language(_));
-            Some((stop, self.languages.place(rect, listed, open)?, radius))
+            Some((stop, self.place(rect, stop.folded(), open)?, radius))
         })
     }
 }
@@ -807,8 +872,8 @@ pub struct Settings {
     /// What the descriptions that change say, and whether it's that
     /// something went wrong, in the order of [`NOTES`].
     notes: [(String, bool); NOTES.len()],
-    /// Whether the list of languages is open.
-    open: bool,
+    /// Which folds have their list open.
+    open: Open,
     /// How each language's download is going, and whether that's that it
     /// failed, in the order of [`dicts::languages`].
     downloads: Vec<Option<(String, bool)>>,
@@ -870,7 +935,7 @@ impl Settings {
             recording: None,
             preview: HOT_KEY_MODIFIERS(0),
             notes,
-            open: false,
+            open: [false; FOLDS.len()],
             downloads: dicts::languages().map(|_| None).collect(),
             pill_from: None,
             picking: None,
@@ -900,7 +965,7 @@ impl Settings {
         self.scroll_anim = None;
         self.notes = NOTES.map(|note| (note.usual(&self.values), false));
         self.retitle();
-        (self.open, self.picking) = (false, None);
+        (self.open, self.picking) = ([false; FOLDS.len()], None);
         self.downloads.fill(None);
         self.email = LineEdit::new(&self.values.config.mymemory_email, MAX_EMAIL_CHARS);
         (self.email_shift, self.active) = (0.0, true);
@@ -1106,14 +1171,21 @@ impl Settings {
             (VK_SPACE | VK_RETURN, Some(Stop::Config)) => self.activate(Hit::Config)?,
             (VK_SPACE | VK_RETURN, Some(Stop::Select(side))) => self.activate(Hit::Select(side))?,
             (VK_SPACE | VK_RETURN, Some(Stop::Swap)) => self.activate(Hit::Swap)?,
-            (VK_SPACE | VK_RETURN, Some(Stop::Languages)) => self.activate(Hit::Languages)?,
-            (VK_RIGHT, Some(Stop::Languages)) => {
-                self.set_open(true)?;
+            (VK_SPACE | VK_RETURN, Some(Stop::Fold(fold))) => self.activate(Hit::Fold(fold))?,
+            (VK_RIGHT, Some(Stop::Fold(fold))) => {
+                self.set_open(fold, true)?;
                 None
             }
-            (VK_LEFT, Some(Stop::Languages | Stop::Language(_))) => {
-                self.focus = Some(Stop::Languages);
-                self.set_open(false)?;
+            (VK_LEFT, Some(Stop::Fold(fold))) => {
+                self.set_open(fold, false)?;
+                None
+            }
+            // From what's in a list back to the row it folds into, shutting it.
+            (VK_LEFT, Some(stop @ (Stop::Language(_) | Stop::Shortcut(_)))) => {
+                if let Some(fold) = stop.folded() {
+                    self.focus = Some(Stop::Fold(fold));
+                    self.set_open(fold, false)?;
+                }
                 None
             }
             (VK_SPACE | VK_RETURN, Some(Stop::Language(i))) => self.activate(Hit::Language(i))?,
@@ -1249,6 +1321,8 @@ impl Settings {
         *self.values.config.hotkey_mut(shortcut) = hotkey.to_owned();
         self.show_caps(shortcut, true)?;
         self.shake_caps(shortcut)?;
+        let summary = shortcuts_summary(&self.values.config);
+        self.set_note(Note::Shortcuts, &summary, false)?;
         self.set_note(Note::of(shortcut), why, true)
     }
 
@@ -1465,8 +1539,8 @@ impl Settings {
             }
             Hit::Choice(choice, i) => self.choose(choice, i)?,
             Hit::Step(counter, up) => self.step(counter, up)?,
-            Hit::Languages => {
-                self.set_open(!self.open)?;
+            Hit::Fold(fold) => {
+                self.set_open(fold, !self.open[fold as usize])?;
                 None
             }
             Hit::Language(i) => self.tick(i)?,
@@ -1489,31 +1563,33 @@ impl Settings {
         })
     }
 
-    /// Opens or shuts the list of languages, the card growing or shrinking
-    /// with it.
-    fn set_open(&mut self, open: bool) -> Result<()> {
-        if open == self.open {
+    /// Opens or shuts `fold`'s list, the card growing or shrinking with it.
+    fn set_open(&mut self, fold: Fold, open: bool) -> Result<()> {
+        if open == self.open[fold as usize] {
             return Ok(());
         }
-        self.open = open;
-        if !open && matches!(self.focus, Some(Stop::Language(_))) {
-            self.focus = Some(Stop::Languages);
+        self.open[fold as usize] = open;
+        if !open && self.focus.and_then(Stop::folded) == Some(fold) {
+            self.focus = Some(Stop::Fold(fold));
         }
-        if !open && matches!(self.hovered, Some(Hit::Language(_))) {
+        if !open && self.hovered.and_then(Hit::folded) == Some(fold) {
             self.set_hovered(None)?;
         }
         self.show_open(true)?;
         self.refit()?;
         if open {
             if let Some(view) = &self.view {
-                let v = &view.languages;
+                let v = &view.folds[fold as usize];
+                let row_h = (ROW_H * self.scale).round();
                 let all = Rect {
                     x: 0.0,
-                    y: v.list_y - (ROW_H * self.scale).round(),
+                    y: v.list_y - row_h,
                     w: self.card.0,
-                    h: v.list_h + (ROW_H * self.scale).round(),
+                    h: v.list_h + row_h,
                 };
-                self.scroll_into_view(all)?;
+                if let Some(all) = view.place(all, Some(fold), &self.open) {
+                    self.scroll_into_view(all)?;
+                }
             }
         }
         self.show_focus(true)
@@ -1541,7 +1617,7 @@ impl Settings {
             return Ok(());
         };
         let s = self.scale;
-        let h = (view.header_h + view.height(self.open))
+        let h = (view.header_h + view.height(&self.open))
             .min(self.room)
             .ceil();
         let old = self.card.1;
@@ -1591,7 +1667,7 @@ impl Settings {
             return None;
         }
         let y = y - view.header_h + self.scroll;
-        view.hits(self.open)
+        view.hits(&self.open)
             .find(|(_, r)| r.contains(x, y))
             .map(|(hit, _)| hit)
     }
@@ -1633,7 +1709,7 @@ impl Settings {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let stops: Vec<(Stop, Rect)> = view.stops(self.open).map(|(s, r, _)| (s, r)).collect();
+        let stops: Vec<(Stop, Rect)> = view.stops(&self.open).map(|(s, r, _)| (s, r)).collect();
         let n = stops.len();
         let at = self
             .focus
@@ -1658,17 +1734,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn languages_row_comes_last() {
-        // Only what's below its group moves as the list of languages opens.
-        let listed = |rows: &[Row]| rows.iter().any(|r| matches!(r.control, Control::Languages));
-        let (_, rows) = SECTIONS.iter().find(|(_, rows)| listed(rows)).unwrap();
-        assert!(matches!(rows.last().unwrap().control, Control::Languages));
-        let count = SECTIONS
+    fn folds_come_last() {
+        // Only what's below its group moves as a fold's list opens.
+        let folds: Vec<Fold> = SECTIONS
             .iter()
             .flat_map(|(_, rows)| rows.iter())
-            .filter(|row| matches!(row.control, Control::Languages))
-            .count();
-        assert_eq!(count, 1);
+            .filter_map(|row| match row.control {
+                Control::Fold(fold) => Some(fold),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(folds, FOLDS);
+        for (_, rows) in SECTIONS {
+            let last = rows.len() - 1;
+            assert!(rows[..last]
+                .iter()
+                .all(|row| !matches!(row.control, Control::Fold(_))));
+        }
         let names = |l: &[&str]| summary(&l.iter().map(|&l| l.into()).collect::<Vec<_>>());
         assert_eq!(names(&["it", "en"]), "English, Italiano");
         assert_eq!(names(&["it", "xx"]), "Italiano");
@@ -1676,12 +1758,11 @@ mod tests {
 
     #[test]
     fn rows_fit_the_card() {
-        for (_, rows) in SECTIONS {
-            for row in *rows {
-                // Room for the name and description beside each control.
-                let room = GROUP_W - ROW_PAD - TEXT_X - row.control.width() - CONTROL_GAP;
-                assert!(room >= 120.0, "{}", row.title());
-            }
+        let rows = SECTIONS.iter().flat_map(|(_, rows)| rows.iter());
+        for row in rows.chain(&SHORTCUT_ROWS) {
+            // Room for the name and description beside each control.
+            let room = GROUP_W - ROW_PAD - TEXT_X - row.control.width() - CONTROL_GAP;
+            assert!(room >= 120.0, "{}", row.title());
         }
     }
 

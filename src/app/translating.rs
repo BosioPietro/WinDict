@@ -27,12 +27,9 @@ impl App {
     pub(super) fn translate_selection(&mut self, text: &str, anchor: Option<RECT>, in_place: bool) {
         let text = match translate::passage(text) {
             Ok(text) => text,
+            // Nothing selected: what's to be translated can be typed.
             Err(NormalizeError::Empty) => {
-                let detail = fill(
-                    tr().nothing_selected_detail,
-                    &[("hotkey", &self.config.translate_hotkey)],
-                );
-                return self.show_message(anchor, tr().nothing_selected, &detail, true);
+                return self.open_search(Shortcut::Translate, anchor);
             }
             Err(NormalizeError::TooLong) => {
                 return self.show_message(anchor, tr().too_long, tr().translate_too_long, true);
@@ -98,16 +95,30 @@ impl App {
         );
         let direction = translate::pick(&found, &self.config.languages, defaults);
         let asking = !direction.sure;
+        self.begin_translation(about, (direction.from, direction.to), asking, None);
+    }
+
+    /// Turns the card into a translation of `about`, from a language to
+    /// another, fetching it unless which way is still `asking`. It was
+    /// `typed` in that box, if it was typed.
+    pub(super) fn begin_translation(
+        &mut self,
+        about: Translatable,
+        (from, to): (LangCode, LangCode),
+        asking: bool,
+        typed: Option<Search>,
+    ) {
         self.card.translating = Some(Translating {
             about,
-            from: direction.from,
-            to: direction.to,
+            from,
+            to,
             asking,
             picking: None,
             result: None,
             waiting: false,
             focus: None,
             shown: false,
+            typed,
         });
         // Answers still on their way are for the definition.
         self.new_request();
@@ -191,11 +202,13 @@ impl App {
     /// Shows the translation as it stands, the focus on `focus`, or where
     /// it was.
     pub(super) fn show_translation(&mut self, transition: Transition, focus: Option<Target>) {
-        // Back goes to the definition, when there's one to go to.
-        let back = self.card.current.is_some();
+        let current = self.card.current.is_some();
         let Some(t) = self.card.translating.as_mut() else {
             return;
         };
+        // Back goes to the definition, or the box it was typed in, when
+        // there's one to go to.
+        let back = current || t.typed.is_some();
         if t.waiting && !t.shown {
             // The definition stays a moment longer.
             t.focus = focus.or(t.focus.take());
@@ -252,15 +265,112 @@ impl App {
     }
 
     /// The list a language is being picked from, if it's open, and the
-    /// language that side has now.
+    /// language that side has now: on the translation card, or under the
+    /// box what's to be translated is typed in.
     pub(super) fn picking(&mut self) -> Option<(&mut Picking, &str)> {
-        let t = self.card.translating.as_mut()?;
-        let picking = t.picking.as_mut()?;
+        let typed = self.card.search.as_mut().and_then(|s| s.languages.as_mut());
+        let (picking, from, to) = match typed {
+            Some(l) => (l.picking.as_mut()?, &l.from, &l.to),
+            None => {
+                let t = self.card.translating.as_mut()?;
+                (t.picking.as_mut()?, &t.from, &t.to)
+            }
+        };
         let current = match picking.side {
-            Side::From => &t.from,
-            Side::To => &t.to,
+            Side::From => from,
+            Side::To => to,
         };
         Some((picking, current))
+    }
+
+    /// Shows the list of languages as it now is, the focus on `focus`,
+    /// wherever it's open.
+    pub(super) fn show_picking(&mut self, focus: Option<Target>) {
+        if self.card.search.is_some() {
+            self.show_typed_languages();
+        } else {
+            self.show_translation(Transition::Refine, focus);
+        }
+    }
+
+    /// Shuts the list of languages, if one's open. Returns the side it was
+    /// open on.
+    pub(super) fn shut_picker(&mut self) -> Option<Side> {
+        let typed = self.card.search.as_mut().and_then(|s| s.languages.as_mut());
+        let picking = match typed {
+            Some(l) => l.picking.take(),
+            None => self.card.translating.as_mut()?.picking.take(),
+        };
+        let side = picking?.side;
+        self.show_picking(Some(Target::Language(side)));
+        Some(side)
+    }
+
+    /// Shows the languages under the box what's to be translated is typed
+    /// in, with the list open under one, if it is.
+    pub(super) fn show_typed_languages(&mut self) {
+        let (Some(search), Some(popup)) = (self.card.search.as_ref(), self.card.popup.as_mut())
+        else {
+            return;
+        };
+        let Some(l) = search.languages.as_ref() else {
+            return;
+        };
+        let picker = l.picking.as_ref().map(|p| render::Picker {
+            side: p.side,
+            query: p.query.text(),
+            caret: p.query.caret_utf16(),
+            matches: &p.matches,
+            first: p.first,
+            highlight: p.highlight,
+        });
+        popup.hold_region(picker.is_some());
+        let _ = popup.set_search_languages(&l.from, &l.to, picker.as_ref());
+        self.on_resized();
+    }
+
+    /// A click on the languages under the box what's to be translated is
+    /// typed in: they're the user's to choose from then on.
+    fn steer_typed(&mut self, target: Target) {
+        let Some(l) = self.card.search.as_mut().and_then(|s| s.languages.as_mut()) else {
+            return;
+        };
+        match target {
+            // Open the list, or close it again.
+            Target::Language(side) => {
+                let open = l.picking.take().map(|p| p.side);
+                if open != Some(side) {
+                    let current = match side {
+                        Side::From => &l.from,
+                        Side::To => &l.to,
+                    };
+                    l.picking = Some(Picking::new(side, current));
+                }
+            }
+            Target::Swap => {
+                l.picking = None;
+                std::mem::swap(&mut l.from, &mut l.to);
+                l.picked = true;
+            }
+            // The other side's language swaps them round.
+            Target::Pick(language) => {
+                let Some(side) = l.picking.take().map(|p| p.side) else {
+                    return;
+                };
+                let (picked, other) = match side {
+                    Side::From => (&mut l.from, &mut l.to),
+                    Side::To => (&mut l.to, &mut l.from),
+                };
+                if language == *other {
+                    std::mem::swap(picked, other);
+                } else {
+                    *picked = language;
+                }
+                l.picked = true;
+            }
+            _ => return,
+        }
+        self.show_typed_languages();
     }
 
     /// A character typed while the list of languages is open: narrows it
@@ -286,7 +396,7 @@ impl App {
         }
         let current = current.to_string();
         picking.refilter(&current);
-        self.show_translation(Transition::Refine, None);
+        self.show_picking(None);
     }
 
     /// A key pressed while the list of languages is open: Up, Down, Tab,
@@ -309,7 +419,7 @@ impl App {
         };
         if let Some(by) = step {
             picking.step(by);
-            return self.show_translation(Transition::Refine, None);
+            return self.show_picking(None);
         }
         let edit = &mut picking.query;
         let changed = match key {
@@ -334,12 +444,16 @@ impl App {
             _ => false,
         };
         if changed {
-            self.show_translation(Transition::Refine, None);
+            self.show_picking(None);
         }
     }
 
-    /// A click, or Enter, on the translation card.
+    /// A click, or Enter, on the translation card, or on the languages
+    /// under the box to type what's to be translated in.
     pub(super) fn steer_translation(&mut self, target: Target) {
+        if self.card.search.is_some() {
+            return self.steer_typed(target);
+        }
         let Some(t) = self.card.translating.as_mut() else {
             return;
         };

@@ -30,6 +30,9 @@ pub use words::{Suggestion, Words};
 
 static ENGLISH: &[u8] = include_bytes!("../data/english.wdict");
 
+/// How many of a text's words are enough to tell its language.
+const DETECT_WORDS: usize = 12;
+
 /// The dictionaries lookups use, in order of preference, which the
 /// `languages` setting picks.
 static ACTIVE: RwLock<Vec<Arc<Dictionary>>> = RwLock::new(Vec::new());
@@ -41,6 +44,32 @@ pub fn lookup(word: &str, detail: Detail) -> Option<Definition> {
         .filter_map(|d| d.lookup(word, detail))
         .collect();
     dictionary::combine(found, &languages())
+}
+
+/// The language of the dictionaries in use `text` is likeliest written
+/// in: the one with the most of its first few words, if just one has the
+/// most. Nothing when none has any, or when it's a tie.
+pub fn detect(text: &str) -> Option<LangCode> {
+    let words: Vec<String> = text
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().any(char::is_alphabetic))
+        .take(DETECT_WORDS)
+        .map(str::to_lowercase)
+        .collect();
+    let counts: Vec<(usize, LangCode)> = active()
+        .iter()
+        .map(|d| {
+            let dict = d.dict();
+            let known = dict.map_or(0, |dict| words.iter().filter(|w| dict.has(w)).count());
+            (known, d.language().clone())
+        })
+        .collect();
+    let most = counts.iter().map(|&(n, _)| n).max().filter(|&n| n > 0)?;
+    let mut likeliest = counts.into_iter().filter(|&(n, _)| n == most);
+    match (likeliest.next(), likeliest.next()) {
+        (Some((_, language)), None) => Some(language),
+        _ => None,
+    }
 }
 
 /// The dictionaries lookups use, in order of preference: English until
@@ -299,6 +328,14 @@ mod tests {
         assert_eq!(find("run").meanings[0].part_of_speech, "verb");
         assert_eq!(find("ice cream").word, "ice cream");
         assert_eq!(find("paris").word, "Paris");
+    }
+
+    #[test]
+    fn tells_the_language_of_text() {
+        // Forms of words count, and so do capitals and punctuation.
+        assert_eq!(detect("The dogs ran home.").as_deref(), Some("en"));
+        assert_eq!(detect("zxqv brrk"), None);
+        assert_eq!(detect("  ... "), None);
     }
 
     #[test]

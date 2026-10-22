@@ -345,7 +345,7 @@ impl Settings {
         let (anim, s) = (&self.anim, self.scale);
         Animator::stop(&tip.root, &["Opacity", "Offset"]);
         let info = view
-            .hits(self.open)
+            .hits(&self.open)
             .find(|(hit, _)| *hit == over)
             .map(|(_, rect)| rect)
             // Not while it's under the header.
@@ -395,7 +395,7 @@ impl Settings {
             return Ok(());
         };
         let anim = &self.anim;
-        for (i, item) in view.languages.items.iter().enumerate() {
+        for (i, item) in view.languages.iter().enumerate() {
             let fill = if self.ticked(i) { 1.0 } else { 0.0 };
             if animate {
                 let ms = SWITCH_FILL_MS;
@@ -424,7 +424,7 @@ impl Settings {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let item = &view.languages.items[i];
+        let item = &view.languages[i];
         let Some((text, error)) = &self.downloads[i] else {
             item.status.clear();
             return Ok(());
@@ -443,19 +443,26 @@ impl Settings {
         item.status.visual.SetOffset(at)
     }
 
-    /// Opens the list under the languages row, or shuts it: the group grows
-    /// or shrinks with it, what's below moving down or up, and the chevron
-    /// turns over.
+    /// Opens the list under each row that folds, or shuts it: the group
+    /// grows or shrinks with it, what's below moving down or up, and the
+    /// chevron turns over.
     pub(super) fn show_open(&self, animate: bool) -> Result<()> {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let (v, anim) = (&view.languages, &self.anim);
-        let grow = if self.open { v.list_h } else { 0.0 };
+        for (v, &open) in view.folds.iter().zip(&self.open) {
+            self.show_fold(v, open, animate)?;
+        }
+        Ok(())
+    }
+
+    fn show_fold(&self, v: &FoldView, open: bool, animate: bool) -> Result<()> {
+        let anim = &self.anim;
+        let grow = if open { v.list_h } else { 0.0 };
         let h = v.group_h + grow;
         let (clip, outline) = (v2(v.group_w, h), v2(v.group_w - 1.0, h - 1.0));
         let after = v3(0.0, grow);
-        let (opacity, angle) = if self.open { (1.0, 180.0) } else { (0.0, 0.0) };
+        let (opacity, angle) = if open { (1.0, 180.0) } else { (0.0, 0.0) };
         if animate {
             let ease = &anim.decelerate;
             anim.vector2(&v.clip, "Size", clip, EXPAND_MS)?;
@@ -537,8 +544,8 @@ impl Settings {
             Some(Hit::Step(counter, up)) => {
                 fade(&view.counters[counter as usize].buttons[up as usize].hover)
             }
-            Some(Hit::Languages) => fade(&view.languages.hover),
-            Some(Hit::Language(i)) => fade(&view.languages.items[i].hover),
+            Some(Hit::Fold(fold)) => fade(&view.folds[fold as usize].hover),
+            Some(Hit::Language(i)) => fade(&view.languages[i].hover),
             Some(Hit::Email) => fade(&view.field.hover),
             Some(Hit::Swap) => fade(&view.boxes.swap_hover),
             Some(Hit::Info | Hit::Select(_) | Hit::Pick(_) | Hit::Config) | None => Ok(()),
@@ -576,7 +583,7 @@ impl Settings {
         };
         let anim = &self.anim;
         let stop = self.focus.filter(|_| self.ring).and_then(|focus| {
-            view.stops(self.open)
+            view.stops(&self.open)
                 .find(|(stop, _, _)| *stop == focus)
                 .map(|(_, rect, radius)| (rect, radius))
         });

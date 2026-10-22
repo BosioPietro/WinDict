@@ -347,6 +347,8 @@ struct Translating {
     /// Whether the card shows the translation yet, rather than the
     /// definition it was asked from.
     shown: bool,
+    /// The box what's translated was typed in, which Back goes back to.
+    typed: Option<Search>,
 }
 
 impl Translating {
@@ -414,6 +416,8 @@ impl Events {
 /// What's typed in the search box.
 #[derive(Default)]
 struct Search {
+    /// What the box is for: looking up what's typed, or translating it.
+    purpose: Shortcut,
     edit: LineEdit,
     title: &'static str,
     /// Whether the heading says why the last Enter did nothing.
@@ -422,6 +426,19 @@ struct Search {
     suggestions: Vec<offline::Suggestion>,
     /// What they're picked from, read once something's typed.
     words: Option<offline::Words>,
+    /// Opened to translate: the languages it's translated between.
+    languages: Option<Languages>,
+}
+
+/// The languages what's typed in the box is translated between, shown in
+/// boxes under the field.
+struct Languages {
+    from: LangCode,
+    to: LangCode,
+    /// The list a language is being picked from, when it's open.
+    picking: Option<Picking>,
+    /// Picked by hand: what's typed no longer changes them.
+    picked: bool,
 }
 
 /// Where a lookup's answer goes.
@@ -853,7 +870,8 @@ impl App {
         self.card.copying = false;
         self.card.to_translate = false;
         // The card has the keyboard (a search): there's no selection to
-        // read, so open a fresh search box, or close the one that's open.
+        // read, so open a fresh search box, or close the one that's open
+        // for the same shortcut.
         let foreground = unsafe { GetForegroundWindow() };
         let focused = self
             .card
@@ -861,15 +879,16 @@ impl App {
             .as_ref()
             .is_some_and(|p| p.visible && foreground == p.hwnd);
         if focused {
-            return if self.card.search.is_some() {
+            let purpose = self.card.search.as_ref().map(|s| s.purpose);
+            return if purpose == Some(shortcut) {
                 self.dismiss()
             } else {
-                self.open_search(tr().search_again_title, None)
+                self.open_search(shortcut, None)
             };
         }
         // Nor is there in a pinned card.
         if self.is_pinned(foreground) {
-            return self.open_search(tr().search_title, None);
+            return self.open_search(shortcut, None);
         }
         self.card.to_translate = shortcut == Shortcut::Translate;
         // The capture may press Ctrl+C itself, which is the app's to read.
@@ -956,7 +975,7 @@ impl App {
             Err(NormalizeError::TooLong) => {
                 return self.show_message(anchor, tr().too_long, tr().too_long_detail, true);
             }
-            Err(NormalizeError::Empty) => return self.open_search(tr().search_title, anchor),
+            Err(NormalizeError::Empty) => return self.open_search(Shortcut::Lookup, anchor),
         };
         let query = Query {
             word,
@@ -985,7 +1004,7 @@ impl App {
             .picking()
             .is_some_and(|(picking, _)| picking.highlight(&code))
         {
-            self.show_translation(Transition::Refine, None);
+            self.show_picking(None);
         }
     }
 
@@ -1013,7 +1032,7 @@ impl App {
         if let Some((picking, _)) = self.picking() {
             let rows = -(delta as f32 / 120.0 * ui::WHEEL_ROWS).round() as isize;
             if picking.scroll(rows) {
-                self.show_translation(Transition::Refine, None);
+                self.show_picking(None);
             }
             return;
         }
@@ -1032,17 +1051,8 @@ impl App {
     /// Esc: closes the list of languages, if it's open, or else the card,
     /// unless it's pinned.
     fn escape(&mut self) {
-        let closed = self
-            .card
-            .translating
-            .as_mut()
-            .and_then(|t| t.picking.take());
-        match closed {
-            Some(picking) => {
-                let focus = Some(Target::Language(picking.side));
-                self.show_translation(Transition::Refine, focus);
-            }
-            None => self.dismiss(),
+        if self.shut_picker().is_none() {
+            self.dismiss();
         }
     }
 
@@ -1207,10 +1217,7 @@ impl App {
             self.open_link(target);
         } else if self.picking().is_some() {
             // A click away from the list shuts it.
-            if let Some(t) = self.card.translating.as_mut() {
-                t.picking = None;
-            }
-            self.show_translation(Transition::Refine, None);
+            self.shut_picker();
         }
     }
 

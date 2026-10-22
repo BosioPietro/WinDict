@@ -239,8 +239,7 @@ impl Renderer {
         card: &TranslationCard,
         width: f32,
     ) -> Result<()> {
-        // Room for the languages' rings, which reach above them.
-        out.y += 4.0;
+        out.y += LANGUAGES_TOP;
         self.layout_direction(out, (card.from, card.to), card.picker.as_ref(), width)?;
         if let Some(picker) = &card.picker {
             let current = match picker.side {

@@ -18,6 +18,11 @@ pub(super) struct Header {
     phonetic_key: Option<String>,
 }
 
+/// How long the heading takes to fade as it sinks into the search box's
+/// field, as what's typed shows in its place: most of the way there, so
+/// that the one turns into the other on the way rather than once there.
+pub(super) const SINK_FADE_MS: u64 = 240;
+
 /// How the heading comes to its place.
 pub(super) enum Arrival {
     /// Growing from the word typed in the search box, at `from` and
@@ -164,6 +169,19 @@ impl Header {
             }
             Arrival::Still => self.visual.SetOffset(rest),
         }
+    }
+
+    /// Shrinks the heading back into the search box's field, to `to` and
+    /// `scale` times its size, fading as it gets there: Rise, backwards.
+    pub(super) fn sink(&self, anim: &Animator, to: Vector3, k: f32) -> Result<()> {
+        Animator::stop(&self.visual, &["Opacity", "Offset", "Scale"]);
+        let ease = &anim.decelerate;
+        let fade_ms = SINK_FADE_MS;
+        anim.vector3(&self.visual, "Offset", to, RESIZE_MS, 0, ease)?;
+        let small = Vector3 { X: k, Y: k, Z: 1.0 };
+        anim.vector3(&self.visual, "Scale", small, RESIZE_MS, 0, ease)?;
+        let delay = RESIZE_MS - fade_ms;
+        anim.scalar(&self.visual, "Opacity", 0.0, fade_ms, delay, &anim.fade)
     }
 
     /// What shows the heading, and the one it's fading from, to fade with

@@ -43,6 +43,20 @@ To translate straight away, select a word, a phrase or a whole passage (up to
 500 characters) and press **Alt+T**: the card opens on the translation.
 For a single word the dictionary has, Back shows its definition.
 
+With nothing selected, **Alt+T** opens a box to type the text to translate
+into, with the languages under it, as on the translation card. As you type,
+WinDict tells the language from its words, using the dictionaries you've
+chosen, and picks the languages:
+
+- with two dictionary languages, from the one you're typing in into the other;
+- otherwise, between the default languages in the settings, into the one
+  you're not typing in;
+- when the language can't be told, the default way.
+
+Click a language to pick another one, or the arrows to swap them; from then
+on they stay as you set them. Press Enter to translate; Back on the
+translation brings the box back as you left it.
+
 The card follows the system's light or dark theme and accent color.
 
 To make the card's text larger or smaller, press **Ctrl+plus** or
@@ -68,8 +82,9 @@ open. It's written in Rust against the native Windows APIs.
 ## Settings
 
 Open the tray menu and choose **Settings…**. Changes apply right away. To
-change a shortcut (the lookup one or the translation one, both under
-**General**), click it and press the new one; Esc keeps the old one.
+change a shortcut (the lookup one or the translation one), open **Shortcuts**
+under **General**, click the one to change and press the new keys; Esc keeps
+the old ones.
 
 The settings are stored in `%APPDATA%\WinDict\config.json`. To edit the file
 by hand, use **Open config.json** at the bottom of the settings window, then

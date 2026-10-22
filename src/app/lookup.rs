@@ -355,6 +355,10 @@ impl App {
         if !self.card.popup.as_ref().is_some_and(|p| p.visible) {
             return;
         }
+        // From the translation of what was typed, back to the box.
+        if let Some(typed) = self.card.translating.as_mut().and_then(|t| t.typed.take()) {
+            return self.reopen_search(typed);
+        }
         // A passage translated straight away has no definition to go to.
         if self.card.translating.is_some() && self.card.current.is_none() {
             return;
@@ -371,10 +375,14 @@ impl App {
         self.sync_back_keys();
     }
 
-    /// Whether the card shows a translation of a definition, which Back and
-    /// Ctrl+T go back to.
+    /// Whether the card shows a translation of a definition, or of what
+    /// was typed in the box, which Back and Ctrl+T go back to.
     pub(super) fn has_definition_behind(&self) -> bool {
-        self.card.translating.is_some() && self.card.current.is_some()
+        let current = self.card.current.is_some();
+        self.card
+            .translating
+            .as_ref()
+            .is_some_and(|t| current || t.typed.is_some())
     }
 
     /// Backspace and Alt+Left go back, but only while there's somewhere to

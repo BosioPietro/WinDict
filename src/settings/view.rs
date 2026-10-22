@@ -119,8 +119,8 @@ impl Settings {
                 view.hits.push((Hit::Pick(i), rect));
             }
         }
-        let moved = view.languages.slack != slack;
-        view.languages.slack = slack;
+        let moved = view.slack != slack;
+        view.slack = slack;
         if moved {
             self.show_slack(true)?;
         }
@@ -133,7 +133,7 @@ impl Settings {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let (spare, slack) = (&view.spare, view.languages.slack);
+        let (spare, slack) = (&view.spare, view.slack);
         let shift = v3(0.0, -slack);
         let size = v2(spare.size.X, spare.size.Y - slack);
         let edge = v2(size.X - 1.0, size.Y - 1.0);
@@ -169,7 +169,7 @@ impl Settings {
         let room = ((work.bottom - work.top) as f32 - 2.0 * (SCREEN_GAP * s).round())
             .min((MAX_CARD_H * s).round());
         let w = (CARD_W * s).round();
-        let h = (view.header_h + view.height(self.open)).min(room).ceil();
+        let h = (view.header_h + view.height(&self.open)).min(room).ceil();
         self.card = (w, h);
         self.room = room;
         let m = (MARGIN * s).round();
@@ -275,13 +275,14 @@ impl Settings {
         let (languages_layout, slack) = self.layout_languages()?;
         let translate_h =
             px(TRANSLATE_HEAD) + (languages_layout.height * s).ceil() + slack + px(TRANSLATE_FOOT);
+        let missing = || windows::core::Error::from(E_UNEXPECTED);
         let mut parts = Parts::default();
-        let mut list = None;
+        let mut folds: [Option<FoldView>; FOLDS.len()] = Default::default();
+        let mut languages = None;
         let mut y = 0.0;
-        // What the groups go in: after the languages list, what slides down
-        // as it opens; after the default languages' row, what slides up.
+        // What the groups go in: after a fold's list, what slides down as it
+        // opens; after the default languages' row, what slides up.
         let mut parent = scroller.clone();
-        let mut after_list = None;
         let mut spare = None;
         let mut slack_y = 0.0;
         for (i, (name, rows)) in SECTIONS.iter().enumerate() {
@@ -305,15 +306,16 @@ impl Settings {
                 })
                 .collect();
             let group_h: f32 = heights.iter().sum();
-            // The group with the languages row has room for the list under
+            // The group with a row that folds has room for the list under
             // it, which the clip and outline show as it opens.
-            let listed = rows
-                .iter()
-                .any(|row| matches!(row.control, Control::Languages));
-            let list_h = if listed {
-                dicts::languages().count() as f32 * px(LANGUAGE_H)
-            } else {
-                0.0
+            let fold = rows.iter().find_map(|row| match row.control {
+                Control::Fold(fold) => Some(fold),
+                _ => None,
+            });
+            let list_h = match fold {
+                Some(Fold::Shortcuts) => SHORTCUT_ROWS.len() as f32 * row_h,
+                Some(Fold::Languages) => dicts::languages().count() as f32 * px(LANGUAGE_H),
+                None => 0.0,
             };
             let group = container(c, &parent, group_at)?;
             let bounds = Rect {
@@ -348,9 +350,21 @@ impl Settings {
                     tail = Some(container(c, &group, v3(0.0, 0.0))?);
                 }
             }
-            let built = match listed {
-                true => Some(self.build_list(&mut parts, &group, group_at, group_h, group_w)?),
-                false => None,
+            let list = match fold {
+                Some(Fold::Shortcuts) => Some(self.build_shortcuts(
+                    &mut parts,
+                    &group,
+                    group_at,
+                    group_h,
+                    &languages_layout,
+                )?),
+                Some(Fold::Languages) => {
+                    let (list, items) =
+                        self.build_list(&mut parts, &group, group_at, group_h, group_w)?;
+                    languages = Some(items);
+                    Some(list)
+                }
+                None => None,
             };
             let (_, border) =
                 resizable_outline(c, &group, open, px(GROUP_RADIUS), t.group_stroke())?;
@@ -367,20 +381,22 @@ impl Settings {
                     size: bounds.size(),
                 });
             }
-            if let Some((visual, items)) = built {
+            if let (Some(fold), Some(list)) = (fold, list) {
                 let after = container(c, &parent, v3(0.0, 0.0))?;
                 parent = after.clone();
-                after_list = Some(after);
-                let list_y = group_at.Y + group_h;
-                list = Some((
-                    visual,
-                    items,
-                    (clip, border),
+                let (hover, chevron) = parts.folds[fold as usize].take().ok_or_else(missing)?;
+                folds[fold as usize] = Some(FoldView {
+                    hover,
+                    chevron,
+                    clip,
+                    outline: border,
                     group_w,
                     group_h,
-                    list_y,
+                    list,
+                    list_y: group_at.Y + group_h,
                     list_h,
-                ));
+                    after,
+                });
             }
             reveal.push((group.cast()?, group_at));
             y += group_h;
@@ -407,26 +423,6 @@ impl Settings {
         reveal.push((footer.cast()?, footer_at));
         y += link_size.Y + px(PAD_BOTTOM);
         let content_h = y;
-
-        let missing = || windows::core::Error::from(E_UNEXPECTED);
-        let (list, items, (clip, outline), group_w, group_h, list_y, list_h) =
-            list.ok_or_else(missing)?;
-        let (hover, chevron) = parts.languages.take().ok_or_else(missing)?;
-        let languages = LanguagesView {
-            hover,
-            chevron,
-            clip,
-            outline,
-            group_w,
-            group_h,
-            list,
-            list_y,
-            list_h,
-            items,
-            after: after_list.ok_or_else(missing)?,
-            slack,
-            slack_y,
-        };
 
         let (ring, ring_source, ring_grid) = self.build_ring(&scroller)?;
 
@@ -488,7 +484,13 @@ impl Settings {
             ring_source,
             ring_grid,
             ring_radius: Cell::new(-1.0),
-            languages,
+            folds: folds
+                .into_iter()
+                .collect::<Option<_>>()
+                .ok_or_else(missing)?,
+            languages: languages.ok_or_else(missing)?,
+            slack,
+            slack_y,
         })
     }
 
@@ -630,7 +632,7 @@ impl Settings {
         })
     }
 
-    /// The chevron at the right of the languages row, which turns as the
+    /// The chevron at the right of a row that folds, which turns as the
     /// list opens.
     fn build_chevron(
         &self,
@@ -655,6 +657,45 @@ impl Settings {
             Z: 0.0,
         })?;
         Ok(chevron.visual)
+    }
+
+    /// The shortcuts, each a row like the others, in the list `top` down
+    /// `group` (at `group_at` in the scroller). Returns the list.
+    fn build_shortcuts(
+        &self,
+        parts: &mut Parts,
+        group: &ContainerVisual,
+        group_at: Vector3,
+        top: f32,
+        languages: &Layout,
+    ) -> Result<ContainerVisual> {
+        let (c, r, t, s) = (
+            &self.anim.compositor,
+            &self.renderer,
+            &self.theme,
+            self.scale,
+        );
+        let list = container(c, group, v3(0.0, top))?;
+        list.SetOpacity(0.0)?;
+        let at = v3(group_at.X, group_at.Y + top);
+        let (w, h) = (group.Size()?.X, (ROW_H * s).round());
+        // The line over the first, under the row the list opens out of.
+        let line = Rect {
+            w,
+            h: s.round().max(1.0),
+            ..Rect::default()
+        };
+        rounded(c, r, &list, line, 0.0, t.separator())?;
+        for (i, spec) in SHORTCUT_ROWS.iter().enumerate() {
+            let row = Rect {
+                x: 0.0,
+                y: i as f32 * h,
+                w,
+                h,
+            };
+            self.build_row(parts, &list, at, spec, row, languages)?;
+        }
+        Ok(list)
     }
 
     /// The list of languages, each with a box to tick, `top` down `group`
@@ -797,7 +838,7 @@ impl Settings {
         }
         // Rows that are clicked as a whole light up under the pointer.
         let hover = match spec.control {
-            Control::Shortcut(_) | Control::Switch(_) | Control::Languages => {
+            Control::Shortcut(_) | Control::Switch(_) | Control::Fold(_) => {
                 let (hover, _) = rounded(c, r, group, row, 0.0, t.highlight())?;
                 hover.SetOpacity(0.0)?;
                 Some(hover)
@@ -846,7 +887,8 @@ impl Settings {
         // A description that changes cross-fades from the one before.
         let note = match spec.control {
             Control::Shortcut(shortcut) => Some(Note::of(shortcut)),
-            Control::Languages => Some(Note::Language),
+            Control::Fold(Fold::Shortcuts) => Some(Note::Shortcuts),
+            Control::Fold(Fold::Languages) => Some(Note::Language),
             _ => None,
         };
         if let Some(note) = note {
@@ -920,15 +962,15 @@ impl Settings {
                 parts.counters[counter as usize] = Some(view);
             }
             Control::Translate | Control::Selection => {}
-            Control::Languages => {
+            Control::Fold(fold) => {
                 let chevron = self.build_chevron(group, right, middle)?;
-                parts.hits.push((Hit::Languages, place(row)));
+                parts.hits.push((Hit::Fold(fold), place(row)));
                 let ring_at = place(row).outset(-px(RECORD_INSET));
                 parts
                     .stops
-                    .push((Stop::Languages, ring_at, px(RECORD_RADIUS)));
+                    .push((Stop::Fold(fold), ring_at, px(RECORD_RADIUS)));
                 let hover = hover.ok_or_else(|| windows::core::Error::from(E_UNEXPECTED))?;
-                parts.languages = Some((hover, chevron));
+                parts.folds[fold as usize] = Some((hover, chevron));
             }
         }
         Ok(())
@@ -1112,8 +1154,8 @@ struct Parts {
     notes: [Option<NoteView>; NOTES.len()],
     counters: [Option<CounterView>; COUNTERS.len()],
     field: Option<FieldView>,
-    /// The languages row's hover and chevron.
-    languages: Option<(SpriteVisual, SpriteVisual)>,
+    /// The hover and chevron of each row that folds, in the order of [`FOLDS`].
+    folds: [Option<(SpriteVisual, SpriteVisual)>; FOLDS.len()],
     boxes: Option<BoxesView>,
     hits: Vec<(Hit, Rect)>,
     stops: Vec<(Stop, Rect, f32)>,

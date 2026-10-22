@@ -8,6 +8,7 @@ use windows::core::{Interface, Result, HSTRING};
 use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
+use crate::config::Shortcut;
 use crate::i18n::tr;
 use crate::popup::{CARD_W, PAD_TOP, PAD_X};
 use crate::render::{Face, Ink, Renderer, QUERY_SIZE, SUGGESTION_SIZE};
@@ -31,6 +32,8 @@ const CARET_W: f32 = 1.5;
 const DRIFT: f32 = 6.0;
 /// "Search" in Segoe Fluent Icons and Segoe MDL2 Assets.
 const SEARCH_GLYPH: &str = "\u{E721}";
+/// "Translate", likewise.
+const TRANSLATE_GLYPH: &str = "\u{E8C1}";
 /// How many suggestions fit under the field.
 pub(crate) const MAX_SUGGESTIONS: usize = 5;
 const LIST_GAP: f32 = 6.0;
@@ -86,6 +89,9 @@ pub(crate) struct SearchBox {
     selected: Option<usize>,
     /// Where each row's text rests in the list, physical pixels.
     row_rest: Vec<Vector3>,
+    /// The room under the field the card shows something else in, in
+    /// place of suggestions, physical pixels.
+    room: f32,
     footer: Text,
     footer_h: f32,
     /// Whether the card shows the box.
@@ -100,13 +106,17 @@ pub(crate) struct SearchBox {
     /// How far the text has scrolled left, physical pixels.
     shift: f32,
     empty: bool,
+    /// How long the caret waits to show, next time what's typed is shown.
+    caret_hold: u64,
 }
 
 impl SearchBox {
-    pub(crate) fn new(c: &Compositor, card: &ContainerVisual) -> Result<SearchBox> {
+    /// The box, in the `card`, under `above`: the heading, which rises
+    /// out of the field and sinks back into it over the box.
+    pub(crate) fn new(c: &Compositor, card: &ContainerVisual, above: &Visual) -> Result<SearchBox> {
         let visual = c.CreateContainerVisual()?;
         visual.SetOpacity(0.0)?;
-        card.Children()?.InsertAtTop(&visual)?;
+        card.Children()?.InsertBelow(&visual, above)?;
         let old_title = Text::new(c, &visual)?;
         let title = Text::new(c, &visual)?;
 
@@ -189,6 +199,7 @@ impl SearchBox {
             count: 0,
             selected: None,
             row_rest: vec![v3(0.0, 0.0); MAX_SUGGESTIONS],
+            room: 0.0,
             footer,
             footer_h: 0.0,
             active: false,
@@ -199,11 +210,13 @@ impl SearchBox {
             caret_y: 0.0,
             shift: 0.0,
             empty: true,
+            caret_hold: 0,
         })
     }
 
-    /// Lays the box out, empty, under `title`, and reveals it starting
-    /// `delay` ms from now. Returns its height in pixels.
+    /// Lays the box out, empty, under `title`, for what the `purpose`
+    /// shortcut does, and reveals it starting `delay` ms from now. Returns
+    /// its height in pixels.
     // The drawing context (renderer, animator, theme, scale) comes from the
     // card that owns the box, like for its other methods, plus what to show.
     #[allow(clippy::too_many_arguments)]
@@ -214,10 +227,19 @@ impl SearchBox {
         theme: &Theme,
         s: f32,
         title: &str,
-        placeholder: &str,
+        purpose: Shortcut,
         delay: u64,
     ) -> Result<f32> {
+        let (glyph, placeholder, enter) = match purpose {
+            Shortcut::Lookup => (SEARCH_GLYPH, tr().search_placeholder, tr().key_look_up),
+            Shortcut::Translate => (
+                TRANSLATE_GLYPH,
+                tr().translate_placeholder,
+                tr().key_translate,
+            ),
+        };
         (self.active, self.scale, self.shift, self.empty) = (true, s, 0.0, true);
+        (self.room, self.caret_hold) = (0.0, 0);
         let width = CARD_W - 2.0 * PAD_X;
         self.fill.SetColor(theme.field())?;
         self.stroke_brush.SetColor(theme.border())?;
@@ -254,8 +276,7 @@ impl SearchBox {
             Z: 0.0,
         })?;
 
-        let magnifier =
-            renderer.layout_line(SEARCH_GLYPH, Face::Button, Ink::Secondary, GLYPH_W)?;
+        let magnifier = renderer.layout_line(glyph, Face::Button, Ink::Secondary, GLYPH_W)?;
         let size = self.glyph.show(renderer, &magnifier, s, theme)?;
         self.glyph.visual.SetOffset(v3(
             (GLYPH_X * s).round(),
@@ -274,8 +295,9 @@ impl SearchBox {
         self.placeholder.visual.SetOpacity(1.0)?;
         self.placeholder.visual.SetOffset(v3(0.0, self.query_y))?;
         self.query.clear();
-        Animator::stop(&self.query.visual, &["Offset"]);
+        Animator::stop(&self.query.visual, &["Offset", "Opacity"]);
         self.query.visual.SetOffset(v3(0.0, self.query_y))?;
+        self.query.visual.SetOpacity(1.0)?;
         let (_, _, caret) = renderer.layout_query("", 0, width)?;
         self.caret_y = self.query_y + (caret.top * s).round();
         self.caret.SetSize(v2(
@@ -308,7 +330,7 @@ impl SearchBox {
         Animator::stop(&self.highlight, &["Opacity", "Offset"]);
         self.highlight.SetOpacity(0.0)?;
 
-        let keys = renderer.layout_keys(&[("Enter", tr().key_look_up), ("Esc", tr().key_close)])?;
+        let keys = renderer.layout_keys(&[("Enter", enter), ("Esc", tr().key_close)])?;
         self.footer_h = self.footer.show(renderer, &keys, s, theme)?.Y;
         let footer_at = v3(title_at.X, self.footer_y(0));
         let height = self.height(0);
@@ -395,7 +417,9 @@ impl SearchBox {
             0,
             &anim.decelerate,
         )?;
-        self.blink(anim, 0)?;
+        // Held back while the heading's on its way into the field.
+        let hold = std::mem::take(&mut self.caret_hold);
+        self.blink(anim, hold)?;
 
         let empty = text.is_empty();
         if empty != self.empty {
@@ -530,6 +554,20 @@ impl SearchBox {
         (self.active && inside && row < self.count).then_some(row)
     }
 
+    /// The card's heading is sinking into the field, as what's typed: the
+    /// field waits for it where it rests, rather than rising into place,
+    /// and what's typed shows `delay` ms from now, fading in over `ms` as
+    /// the heading fades out. The caret follows once it has.
+    pub(crate) fn await_heading(&mut self, anim: &Animator, delay: u64, ms: u64) -> Result<()> {
+        self.caret_hold = delay + ms;
+        Animator::stop(&self.field, &["Offset"]);
+        self.field.SetOffset(self.field_at)?;
+        let query = &self.query.visual;
+        Animator::stop(query, &["Opacity"]);
+        query.SetOpacity(0.0)?;
+        anim.scalar(query, "Opacity", 1.0, ms, delay, &anim.fade)
+    }
+
     /// Cross-fades the heading to `title`, the new one rising into place.
     pub(crate) fn set_title(
         &mut self,
@@ -579,11 +617,16 @@ impl SearchBox {
             let (list, rest) = (self.list.Offset()?, self.row_rest[row]);
             return Ok((v3(rest.X, list.Y + rest.Y), SUGGESTION_SIZE));
         }
-        let from = v3(
+        Ok((self.query_at()?, QUERY_SIZE))
+    }
+
+    /// Where what's typed starts in the card, in pixels, at its size of
+    /// [`QUERY_SIZE`] DIPs.
+    pub(crate) fn query_at(&self) -> Result<Vector3> {
+        Ok(v3(
             self.field_at.X + self.text_host.Offset()?.X - self.shift,
             self.field_at.Y + self.query_y,
-        );
-        Ok((from, QUERY_SIZE))
+        ))
     }
 
     /// Picks suggestion `row` (or none), as the one to look up.
@@ -611,6 +654,30 @@ impl SearchBox {
             text.clear();
         }
         (self.count, self.selected, self.noted) = (0, None, false);
+        self.room = 0.0;
+    }
+
+    /// Where what the card shows under the field starts, in card pixels.
+    pub(crate) fn below_field(&self) -> f32 {
+        self.field_at.Y + self.field_size.Y + (LIST_GAP * self.scale).round()
+    }
+
+    /// The room made under the field, in pixels: none until some is.
+    pub(crate) fn room(&self) -> f32 {
+        self.room
+    }
+
+    /// Makes `room` pixels under the field for the card to show something
+    /// in, the footer gliding down or up to make way. Returns the box's
+    /// new height in pixels.
+    pub(crate) fn make_room(&mut self, anim: &Animator, room: f32) -> Result<f32> {
+        if room != self.room {
+            self.room = room;
+            let to = v3(self.field_at.X, self.footer_y(0));
+            let footer = &self.footer.visual;
+            anim.vector3(footer, "Offset", to, RESIZE_MS, 0, &anim.decelerate)?;
+        }
+        Ok(self.height(0))
     }
 
     /// Whether a point in card pixels is on the field.
@@ -625,6 +692,8 @@ impl SearchBox {
         let field_bottom = self.field_at.Y + self.field_size.Y;
         let list = if count > 0 {
             (LIST_GAP * s).round() + count as f32 * (ROW_H * s).round()
+        } else if self.room > 0.0 {
+            (LIST_GAP * s).round() + self.room
         } else {
             0.0
         };
