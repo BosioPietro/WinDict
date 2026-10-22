@@ -1,51 +1,61 @@
 # WinDict
 
-A small Windows tray app for looking up words. Select a word in any app, press
-**Ctrl+Alt+D**, and its definition shows up in a card next to the selection.
-Press Esc or click elsewhere to close it.
+A Windows tray app for looking up words. Select a word in any app and press
+**Ctrl+Alt+D**: its definition opens in a card next to the selection. Esc or a
+click elsewhere closes it.
 
-With nothing selected, the shortcut opens a small box to type a word into
-instead, for text that can't be selected: in an image, a protected PDF or a
-game.
+It's meant to stay out of the way: a single executable with no installer, it
+uses about 3 MB of memory while idle, and English lookups work offline.
 
-Each part of speech lists similar words and, where there are any, opposite
-ones (“good”: “bad”). Click one to open its definition in the same card; the arrow next to
-the word, Backspace, Alt+← or the mouse's back button returns to the
-previous one. Tab and Shift+Tab move between the synonyms and the source
-links in order, and Enter opens the one that's ringed.
-
-With online lookup on, the translate button at the top right of the card (or
-**Ctrl+T**, while the card is open) turns it into a translation.
-
-## Footprint
-
-- About 3 MB of memory while idle and ~20 MB while a card is open.
-- An English dictionary (Open English WordNet, about 150,000 words and
-  phrases) is built into the executable, so most lookups never touch the
-  network and take under a millisecond. Italian (from Wikizionario, about
-  75,000 words) is downloaded, once, when it's chosen in the settings.
-- The online dictionary is only used for pronunciations and for words the
-  built-in one doesn't have, and translations only when asked for. Both can be
-  turned off.
-- A single executable written in Rust against the native Windows APIs. No
-  installer and no runtime to install.
-
-Inflected forms are resolved to their base word ("ran" shows "run"), and the
-card follows the system light/dark theme and accent color.
-
-## Get started
+## Installing
 
 Download `WinDict-<version>.exe` from the
 [latest release](https://github.com/BosioPietro/WinDict/releases/latest) and
-run it. Select a word anywhere, press **Ctrl+Alt+D**, and that's it.
+run it.
 
-Click the tray icon for **Start with Windows**, settings, and **Quit**.
-The first time, Windows SmartScreen may ask for confirmation because the app
-isn't commercially signed: choose **More info**, then **Run anyway**.
+The app isn't commercially signed, so the first time Windows SmartScreen may
+ask for confirmation: choose **More info**, then **Run anyway**.
+
+Once it's running, the tray icon's menu has **Start with Windows**,
+**Settings…** and **Quit**.
+
+## Using it
+
+Inflected forms are looked up by their base word, so selecting "ran" shows
+"run". With nothing selected, the shortcut opens a box to type a word into
+instead, for text that can't be selected, such as in an image, a protected
+PDF or a game.
+
+Under each part of speech the card lists similar words and, where there are
+any, opposite ones ("good": "bad"). Clicking one opens its definition in the
+same card. To go back, use the arrow next to the word, Backspace, Alt+← or the
+mouse's back button.
+
+From the keyboard, Tab and Shift+Tab move between the words and the source
+links, and Enter opens the one that's highlighted.
+
+When online lookup is on, the translate button at the top right of the card,
+or **Ctrl+T**, shows a translation of the word instead.
+
+The card follows the system's light or dark theme and accent color.
+
+## Dictionaries and network use
+
+- English comes from Open English WordNet (about 150,000 words and phrases),
+  which is built into the executable. Lookups in it don't use the network and
+  take under a millisecond.
+- Italian comes from Wikizionario (about 75,000 words). It's downloaded once,
+  when it's chosen in the settings.
+- The online dictionary is used for pronunciations and for words the built-in
+  one doesn't have. Translations are fetched only when asked for. Both can be
+  turned off in the settings.
+
+WinDict uses about 3 MB of memory while idle and around 20 MB while a card is
+open. It's written in Rust against the native Windows APIs.
 
 ## Settings
 
-Click the tray icon, then **Settings…**. Changes apply as you make them. To
+Open the tray menu and choose **Settings…**. Changes apply right away. To
 change the shortcut, click it and press the new one; Esc keeps the old one.
 
 The settings are stored in `%APPDATA%\WinDict\config.json`. To edit the file
@@ -56,9 +66,11 @@ by hand, use **Open config.json** at the bottom of the settings window, then
 
 Windows keeps Start and Search above every ordinary window, so by default
 WinDict closes them before showing a definition. To have the card appear on
-top of them instead, install the UI access edition. Windows grants that
-permission only to signed apps in a protected folder, and the included script
-handles all of it. Download `install-uiaccess.ps1` from the
+top of them instead, you need the UI access edition. Windows only grants that
+permission to signed apps installed in a protected folder, and a script takes
+care of both.
+
+Download `install-uiaccess.ps1` from the
 [latest release](https://github.com/BosioPietro/WinDict/releases/latest) and
 run it from an administrator PowerShell:
 
@@ -66,14 +78,14 @@ run it from an administrator PowerShell:
 powershell -ExecutionPolicy Bypass -File install-uiaccess.ps1
 ```
 
-It downloads the latest UI access build, so no Rust toolchain is needed. To
-install your own build from a clone of this repository instead, run
-`scripts\install-uiaccess-local.ps1`, which builds it with Cargo.
+The script downloads the latest UI access build, creates a certificate that's
+trusted on this machine only, signs WinDict with it, installs it to
+`C:\Program Files\WinDict` and starts it. The certificate's private key is
+deleted right after signing, so it can't be used to sign anything else. Run
+the script again to update, or with `-Uninstall` to remove it.
 
-The script creates a certificate that is trusted on this machine only, signs
-WinDict with it, installs it to `C:\Program Files\WinDict` and starts it. The
-certificate's private key is deleted right after signing, so it can never sign
-anything else. Run it again to update, or with `-Uninstall` to remove it.
+To install your own build from a clone of this repository instead, run
+`scripts\install-uiaccess-local.ps1`, which builds it with Cargo first.
 
 ## Building from source
 
@@ -87,15 +99,16 @@ cargo clippy --all-targets -- -D warnings
 
 ## Credits
 
-Definitions from [Open English WordNet](https://en-word.net/) (CC BY 4.0,
-derived from Princeton WordNet; see `data/LICENSE-WordNet.txt`) and
-[Wiktionary](https://www.wiktionary.org/), via
-[dictionaryapi.dev](https://dictionaryapi.dev) with a direct Wiktionary
-fallback. The Italian dictionary, and Italian lookups online, are from
-[Wikizionario](https://it.wiktionary.org/) through
-[wiktextract](https://kaikki.org/itwiktionary/), with Wikizionario's own
-API as a fallback (CC BY-SA 4.0; see
-`data/LICENSE-Wiktionary.txt`). Translations are from Google Translate's
-public web endpoint, which is unofficial and may change, with
-[MyMemory](https://mymemory.translated.net/) as a fallback. WinDict is MIT
-licensed.
+- English definitions: [Open English WordNet](https://en-word.net/)
+  (CC BY 4.0, derived from Princeton WordNet; see `data/LICENSE-WordNet.txt`).
+- Online English lookups: [Wiktionary](https://www.wiktionary.org/), through
+  [dictionaryapi.dev](https://dictionaryapi.dev), falling back to Wiktionary
+  directly.
+- Italian dictionary and online lookups:
+  [Wikizionario](https://it.wiktionary.org/), through
+  [wiktextract](https://kaikki.org/itwiktionary/), falling back to
+  Wikizionario's own API (CC BY-SA 4.0; see `data/LICENSE-Wiktionary.txt`).
+- Translations: Google Translate's public web endpoint, which is unofficial
+  and may change, falling back to [MyMemory](https://mymemory.translated.net/).
+
+WinDict is MIT licensed.
