@@ -5,11 +5,15 @@ use windows::core::{w, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::GetTickCount64;
+use windows::Win32::UI::Accessibility::{
+    SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK, WINEVENTPROC,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetClassNameW, GetCursorPos, KillTimer, SetTimer,
-    SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE,
+    SetWindowsHookExW, UnhookWindowsHookEx, HHOOK, HOOKPROC, SW_SHOWNORMAL, WINDOWS_HOOK_ID,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
 };
 
 /// A window of ours, destroyed when dropped.
@@ -43,6 +47,47 @@ impl Drop for Window {
     fn drop(&mut self) {
         unsafe {
             let _ = DestroyWindow(self.0);
+        }
+    }
+}
+
+/// A hook procedure of ours, unhooked when dropped.
+pub struct Hook(HHOOK);
+
+impl Hook {
+    /// Hooks `proc` in as a low-level hook of `kind` (WH_MOUSE_LL or
+    /// WH_KEYBOARD_LL), called on this thread for input anywhere.
+    pub fn low_level(kind: WINDOWS_HOOK_ID, proc: HOOKPROC) -> Option<Hook> {
+        unsafe { SetWindowsHookExW(kind, proc, None, 0) }
+            .ok()
+            .map(Hook)
+    }
+}
+
+impl Drop for Hook {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = UnhookWindowsHookEx(self.0);
+        }
+    }
+}
+
+/// A WinEvent hook of ours, unhooked when dropped.
+pub struct EventHook(HWINEVENTHOOK);
+
+impl EventHook {
+    /// Has `proc` called on this thread whenever `event` happens anywhere.
+    pub fn new(event: u32, proc: WINEVENTPROC) -> Option<EventHook> {
+        let hook =
+            unsafe { SetWinEventHook(event, event, None, proc, 0, 0, WINEVENT_OUTOFCONTEXT) };
+        (!hook.is_invalid()).then_some(EventHook(hook))
+    }
+}
+
+impl Drop for EventHook {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = UnhookWinEvent(self.0);
         }
     }
 }

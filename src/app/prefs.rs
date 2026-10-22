@@ -98,8 +98,7 @@ impl App {
         let hwnd = recording.map_or(HWND(std::ptr::null_mut()), |s| s.hwnd);
         RECORDING_IN.set(hwnd);
         if recording.is_some() && self.keyboard_hook.is_none() {
-            self.keyboard_hook =
-                unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), None, 0).ok() };
+            self.keyboard_hook = win::Hook::low_level(WH_KEYBOARD_LL, Some(keyboard_hook));
         }
     }
 

@@ -25,7 +25,6 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentThreadId, SetProcessWorkingSetSize,
 };
-use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Composition::Compositor;
@@ -383,10 +382,10 @@ pub struct App {
     /// The dictionaries being downloaded, one at most for each language.
     installing: Vec<Installing>,
     hotkey_ok: bool,
-    mouse_hook: Option<HHOOK>,
-    focus_hook: Option<HWINEVENTHOOK>,
+    mouse_hook: Option<win::Hook>,
+    focus_hook: Option<win::EventHook>,
     /// Catches keys before Windows does, while a shortcut is recorded.
-    keyboard_hook: Option<HHOOK>,
+    keyboard_hook: Option<win::Hook>,
 }
 
 pub fn run(compositor: Compositor) -> windows::core::Result<()> {
@@ -852,11 +851,7 @@ impl App {
                 if let Some(mut s) = self.settings.take() {
                     s.finish_hide();
                 }
-                if let Some(h) = self.keyboard_hook.take() {
-                    unsafe {
-                        let _ = UnhookWindowsHookEx(h);
-                    }
-                }
+                self.keyboard_hook = None;
                 trim_working_set();
             }
             TIMER_TEARDOWN if self.popup.as_ref().is_some_and(|p| !p.visible) => {
@@ -878,34 +873,20 @@ impl App {
                 MOD_NOREPEAT,
                 VK_ESCAPE.0 as u32,
             );
-            if self.mouse_hook.is_none() {
-                self.mouse_hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), None, 0).ok();
-            }
-            if self.focus_hook.is_none() {
-                let hook = SetWinEventHook(
-                    EVENT_SYSTEM_FOREGROUND,
-                    EVENT_SYSTEM_FOREGROUND,
-                    None,
-                    Some(focus_hook),
-                    0,
-                    0,
-                    WINEVENT_OUTOFCONTEXT,
-                );
-                self.focus_hook = (!hook.is_invalid()).then_some(hook);
-            }
+        }
+        if self.mouse_hook.is_none() {
+            self.mouse_hook = win::Hook::low_level(WH_MOUSE_LL, Some(mouse_hook));
+        }
+        if self.focus_hook.is_none() {
+            self.focus_hook = win::EventHook::new(EVENT_SYSTEM_FOREGROUND, Some(focus_hook));
         }
     }
 
     fn remove_dismiss_hooks(&mut self) {
         unsafe {
             let _ = UnregisterHotKey(Some(self.hwnd), HOTKEY_ESCAPE);
-            if let Some(h) = self.mouse_hook.take() {
-                let _ = UnhookWindowsHookEx(h);
-            }
-            if let Some(h) = self.focus_hook.take() {
-                let _ = UnhookWinEvent(h);
-            }
         }
+        (self.mouse_hook, self.focus_hook) = (None, None);
     }
 
     fn on_click(&mut self, x: i32, y: i32) {
