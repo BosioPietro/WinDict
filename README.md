@@ -67,16 +67,18 @@ by hand, use **Open config.json** at the bottom of the settings window, then
 | Setting | Default | |
 | --- | --- | --- |
 | `hotkey` | `"Ctrl+Alt+D"` | Any combination of Ctrl, Alt, Shift, Win and a key. |
+| `ui_language` | Windows' | The language WinDict is shown in: `"english"` or `"italian"`. Unset, it's the language of Windows if WinDict has it, else English. |
 | `theme` | `"system"` | `"system"`, `"dark"` or `"light"`. |
 | `max_definitions` | `4` | Definitions per part of speech. |
 | `max_synonyms` | `6` | Synonyms per part of speech; `0` hides them. |
 | `show_examples` | `true` | Example sentences under the senses. |
 | `online_lookup` | `true` | `false` keeps WinDict fully offline. |
-| `language` | `"en"` | `"en"` or `"it"`. English is built in; Italian is downloaded to `%LOCALAPPDATA%\WinDict\dicts\it.wdict`. |
+| `languages` | `["en"]` | The languages words are looked up in, in order of preference: `"en"`, `"it"` or both. English is built in; Italian is downloaded to `%LOCALAPPDATA%\WinDict\dicts\it.wdict`. |
 | `use_ui_automation` | `true` | Read selections without touching the clipboard where apps allow it. |
 | `translate_from` | `"en"` | The language translated from when the card can't tell. |
 | `translate_to` | `"it"` | The language translated into when the card can't tell. |
 | `mymemory_email` | `""` | Raises MyMemory's daily limit from 5,000 to 50,000 characters. It's sent only to MyMemory. |
+| `animations` | Windows' | `true` or `false`. Unset, it follows Accessibility > Visual effects > Animation effects. |
 
 ## Showing the card above the Start menu
 
@@ -140,7 +142,7 @@ something (a pronunciation, or a word the bundled one lacks).
 The card, the tray menu and the settings window are windows drawn by the
 Windows compositor (Windows.UI.Composition, with Direct2D and DirectWrite
 for text), so their animations stay smooth whatever the UI thread is doing.
-`src/main.rs` lists what each module is for.
+`src/lib.rs` lists what each module is for.
 
 ## Credits
 
