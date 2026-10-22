@@ -1,6 +1,123 @@
-//! The card's glyph buttons, and the dots shown while a lookup runs.
+//! The card's heading, its glyph buttons, and the dots shown while a lookup
+//! runs.
 
 use super::*;
+
+/// The word and its pronunciation. `back` holds the previous rendering
+/// while it cross-fades to the new one.
+pub(super) struct Header {
+    visual: SpriteVisual,
+    brush: CompositionSurfaceBrush,
+    back: SpriteVisual,
+    back_brush: CompositionSurfaceBrush,
+    surface: Option<CompositionDrawingSurface>,
+}
+
+/// How the heading comes to its place.
+pub(super) enum Arrival {
+    /// Growing from the word typed in the search box, at `from` and
+    /// `scale` times its size.
+    Rise { from: Vector3, scale: f32 },
+    /// Gliding over from `from_x` DIPs in, after `delay` ms.
+    Glide { from_x: f32, delay: u64 },
+    /// Already there.
+    Still,
+}
+
+impl Header {
+    pub(super) fn new(c: &Compositor, card: &ContainerVisual) -> Result<Header> {
+        let (back, back_brush) = text_sprite(c)?;
+        back.SetOpacity(0.0)?;
+        card.Children()?.InsertAtTop(&back)?;
+        let (visual, brush) = text_sprite(c)?;
+        card.Children()?.InsertAtTop(&visual)?;
+        Ok(Header {
+            visual,
+            brush,
+            back,
+            back_brush,
+            surface: None,
+        })
+    }
+
+    /// What the heading shows now, if anything.
+    pub(super) fn surface(&self) -> Option<CompositionDrawingSurface> {
+        self.surface.clone()
+    }
+
+    /// Shows the heading drawn on `surface`, `size` pixels. With
+    /// `crossfade`, the one it showed fades out over it.
+    pub(super) fn show(
+        &mut self,
+        anim: &Animator,
+        surface: &CompositionDrawingSurface,
+        size: Vector2,
+        crossfade: bool,
+        s: f32,
+    ) -> Result<()> {
+        let old = self.surface.replace(surface.clone());
+        Animator::stop(&self.visual, &["Opacity"]);
+        Animator::stop(&self.back, &["Opacity"]);
+        self.back.SetOpacity(0.0)?;
+        if let (true, Some(old)) = (crossfade, old) {
+            self.back_brush.SetSurface(&old)?;
+            self.back.SetSize(self.visual.Size()?)?;
+            self.back.SetOffset(v3(PAD_X * s, PAD_TOP * s))?;
+            self.back.SetOpacity(1.0)?;
+            self.visual.SetOpacity(0.0)?;
+            anim.scalar(&self.back, "Opacity", 0.0, 240, 0, &anim.decelerate)?;
+            anim.scalar(&self.visual, "Opacity", 1.0, 240, 0, &anim.decelerate)?;
+        } else {
+            self.visual.SetOpacity(1.0)?;
+        }
+        self.brush.SetSurface(surface)?;
+        self.visual.SetSize(size)
+    }
+
+    /// Brings the heading to its place as `arrival` says.
+    pub(super) fn arrive(&self, anim: &Animator, arrival: Arrival, s: f32) -> Result<()> {
+        let rest = v3(PAD_X * s, PAD_TOP * s);
+        let full = scale(1.0);
+        Animator::stop(&self.visual, &["Offset", "Scale"]);
+        self.visual.SetScale(full)?;
+        match arrival {
+            Arrival::Rise { from, scale: k } => {
+                self.visual.SetScale(Vector3 { X: k, Y: k, Z: 1.0 })?;
+                self.visual.SetOffset(from)?;
+                self.visual.SetOpacity(0.0)?;
+                let ease = &anim.decelerate;
+                anim.vector3(&self.visual, "Offset", rest, RESIZE_MS, 0, ease)?;
+                anim.vector3(&self.visual, "Scale", full, RESIZE_MS, 0, ease)?;
+                anim.scalar(&self.visual, "Opacity", 1.0, 160, 0, ease)
+            }
+            Arrival::Glide { from_x, delay } => {
+                self.visual.SetOffset(v3(from_x * s, PAD_TOP * s))?;
+                let ease = &anim.decelerate;
+                anim.vector3(&self.visual, "Offset", rest, RESIZE_MS, delay, ease)
+            }
+            Arrival::Still => self.visual.SetOffset(rest),
+        }
+    }
+
+    /// What shows the heading, and the one it's fading from, to fade with
+    /// the rest of the card.
+    pub(super) fn visuals(&self) -> Result<[Visual; 2]> {
+        Ok([self.visual.cast()?, self.back.cast()?])
+    }
+
+    /// Back at rest, for a new card.
+    pub(super) fn reset(&self) -> Result<()> {
+        Animator::stop(&self.visual, &["Opacity", "Offset", "Scale"]);
+        self.visual.SetScale(scale(1.0))
+    }
+
+    /// Lets go of the heading's surfaces while the card is idle.
+    pub(super) fn release(&mut self) {
+        let _ = self.brush.SetSurface(None::<&ICompositionSurface>);
+        let _ = self.back_brush.SetSurface(None::<&ICompositionSurface>);
+        self.surface = None;
+    }
+}
 
 /// A glyph button level with the word: the arrow left of it, shown once a
 /// synonym has been followed, and the translate button right of it.

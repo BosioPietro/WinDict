@@ -3,6 +3,7 @@
 //! backdrop brush; every animation runs on the system compositor, so motion
 //! stays smooth no matter what our UI thread is doing.
 
+mod body;
 mod focus;
 mod parts;
 mod scrolling;
@@ -25,7 +26,8 @@ use crate::ui::{
 };
 use crate::win::{self, create_tooltip, set_tooltip_rect, Window};
 
-use parts::{IconButton, IconSpec, Loader};
+use body::Content;
+use parts::{Arrival, Header, IconButton, IconSpec, Loader};
 use scrolling::ScrollChrome;
 
 // Geometry, in DIPs.
@@ -191,36 +193,6 @@ pub struct Popup {
     _window: Window,
 }
 
-// ---------------------------------------------------------------------------
-// Parts of the card
-
-/// The word and its pronunciation. `back` holds the previous rendering
-/// while it cross-fades to the new one.
-struct Header {
-    visual: SpriteVisual,
-    brush: CompositionSurfaceBrush,
-    back: SpriteVisual,
-    back_brush: CompositionSurfaceBrush,
-    surface: Option<CompositionDrawingSurface>,
-}
-
-impl Header {
-    fn new(c: &Compositor, card: &ContainerVisual) -> Result<Header> {
-        let (back, back_brush) = text_sprite(c)?;
-        back.SetOpacity(0.0)?;
-        card.Children()?.InsertAtTop(&back)?;
-        let (visual, brush) = text_sprite(c)?;
-        card.Children()?.InsertAtTop(&visual)?;
-        Ok(Header {
-            visual,
-            brush,
-            back,
-            back_brush,
-            surface: None,
-        })
-    }
-}
-
 /// Somewhere Tab stops in the card.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Stop {
@@ -233,135 +205,6 @@ enum Stop {
 impl Stop {
     fn is_button(self) -> bool {
         !matches!(self, Stop::Link(_))
-    }
-}
-
-/// The scrolling part of the card: a clipped host below the header, and the
-/// rendered definition inside it.
-struct Content {
-    host: ContainerVisual,
-    /// Shows `host`, faded at the ends it scrolls towards.
-    fade: ScrollFade,
-    visual: SpriteVisual,
-    brush: CompositionSurfaceBrush,
-    links: Vec<Link>,
-    /// Rings the link Tab moved to; inside `visual`, so it scrolls with it.
-    focus: ContainerVisual,
-    focus_brush: CompositionColorBrush,
-    /// The rings, one for each of the link's rectangles, kept to glide from
-    /// link to link; the ones not in use are faded out.
-    rings: Vec<SpriteVisual>,
-    /// The mask they all show through, stretched by its corners' radius.
-    ring_source: CompositionSurfaceBrush,
-    ring_grid: CompositionNineGridBrush,
-    ring_mask: CompositionMaskBrush,
-    /// Whether a link was ringed last, for the ring to glide from.
-    ring_shown: bool,
-    /// The caret in the language box being typed in; inside `visual` too.
-    caret: SpriteVisual,
-    caret_brush: CompositionColorBrush,
-    /// The first of the focused link's rectangles in `links`.
-    focused: Option<usize>,
-    /// Lightens the button swapping a translation's languages under the
-    /// pointer; inside `visual` too.
-    swap: ShapeVisual,
-    swap_geometry: CompositionRoundedRectangleGeometry,
-    swap_brush: CompositionColorBrush,
-    swap_hovered: bool,
-    /// Says what that button does. Owned by the card's window.
-    swap_tip: Option<HWND>,
-    /// The area of the window it shows over, last set.
-    swap_tip_rect: RECT,
-}
-
-impl Content {
-    fn new(c: &Compositor, card: &ContainerVisual, hwnd: HWND) -> Result<Content> {
-        let host = c.CreateContainerVisual()?;
-        host.SetClip(&c.CreateInsetClip()?)?;
-        let (visual, brush) = text_sprite(c)?;
-        host.Children()?.InsertAtTop(&visual)?;
-        let swap = c.CreateShapeVisual()?;
-        swap.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
-        swap.SetOpacity(0.0)?;
-        let swap_geometry = c.CreateRoundedRectangleGeometry()?;
-        let swap_shape = c.CreateSpriteShapeWithGeometry(&swap_geometry)?;
-        let swap_brush = c.CreateColorBrush()?;
-        swap_shape.SetFillBrush(&swap_brush)?;
-        swap.Shapes()?.Append(&swap_shape)?;
-        visual.Children()?.InsertAtTop(&swap)?;
-        let focus = c.CreateContainerVisual()?;
-        visual.Children()?.InsertAtTop(&focus)?;
-        let caret = c.CreateSpriteVisual()?;
-        let caret_brush = c.CreateColorBrush()?;
-        caret.SetBrush(&caret_brush)?;
-        caret.SetOpacity(0.0)?;
-        visual.Children()?.InsertAtTop(&caret)?;
-        let fade = ScrollFade::new(c, card, &host)?;
-        let focus_brush = c.CreateColorBrush()?;
-        let ring_source = c.CreateSurfaceBrush()?;
-        ring_source.SetStretch(CompositionStretch::Fill)?;
-        let ring_grid = c.CreateNineGridBrush()?;
-        ring_grid.SetSource(&ring_source)?;
-        let ring_mask = c.CreateMaskBrush()?;
-        ring_mask.SetSource(&focus_brush)?;
-        ring_mask.SetMask(&ring_grid)?;
-        Ok(Content {
-            host,
-            fade,
-            visual,
-            brush,
-            links: Vec::new(),
-            focus,
-            focus_brush,
-            rings: Vec::new(),
-            ring_source,
-            ring_grid,
-            ring_mask,
-            ring_shown: false,
-            caret,
-            caret_brush,
-            focused: None,
-            swap,
-            swap_geometry,
-            swap_brush,
-            swap_hovered: false,
-            swap_tip: create_tooltip(hwnd, tr().swap_tip, SWAP_TOOL),
-            swap_tip_rect: RECT::default(),
-        })
-    }
-
-    /// The swap button's link, if the card has one.
-    fn swap_link(&self) -> Option<&Link> {
-        self.links.iter().find(|l| l.target == Target::Swap)
-    }
-
-    /// Puts the caret at `mark`, blinking, or takes it away.
-    fn show_caret(&self, c: &Compositor, mark: Option<Mark>, s: f32) -> Result<()> {
-        Animator::stop(&self.caret, &["Opacity"]);
-        let Some(m) = mark else {
-            return self.caret.SetOpacity(0.0);
-        };
-        self.caret
-            .SetSize(v2((m.width * s).round().max(1.0), (m.height * s).round()))?;
-        self.caret
-            .SetOffset(v3((m.x * s).round(), (m.y * s).round()))?;
-        blink(c, &self.caret)
-    }
-
-    /// The rectangles of the link starting at `start`: more than one when
-    /// a synonym wraps.
-    fn rects(&self, start: usize) -> impl Iterator<Item = &Link> {
-        let target = &self.links[start].target;
-        self.links[start..]
-            .iter()
-            .take_while(move |l| &l.target == target)
-    }
-
-    /// Where each link starts in `links`, in reading order.
-    fn stops(&self) -> Vec<usize> {
-        (0..self.links.len())
-            .filter(|&i| i == 0 || self.links[i - 1].target != self.links[i].target)
-            .collect()
     }
 }
 
@@ -410,7 +253,7 @@ impl Popup {
             },
         )?;
         let content = Content::new(c, &frame.card, hwnd)?;
-        let loader = Loader::new(c, &content.host, &theme)?;
+        let loader = Loader::new(c, content.host(), &theme)?;
         let scroll_chrome = ScrollChrome::new(c, &frame.card)?;
         let search = SearchBox::new(c, &frame.card)?;
         // A ring gliding between a button and a link, over everything: they
@@ -422,7 +265,7 @@ impl Popup {
         let glide_grid = c.CreateNineGridBrush()?;
         glide_grid.SetSource(&glide_source)?;
         let glide_mask = c.CreateMaskBrush()?;
-        glide_mask.SetSource(&content.focus_brush)?;
+        glide_mask.SetSource(content.focus_brush())?;
         glide_mask.SetMask(&glide_grid)?;
         glide.SetBrush(&glide_mask)?;
         frame.card.Children()?.InsertAtTop(&glide)?;
@@ -499,15 +342,10 @@ impl Popup {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
         // Release the text surfaces while idle.
-        let _ = self.header.brush.SetSurface(None::<&ICompositionSurface>);
-        let _ = self.content.brush.SetSurface(None::<&ICompositionSurface>);
+        self.header.release();
+        self.content.release();
         self.back.release();
         self.translate.release();
-        let _ = self
-            .header
-            .back_brush
-            .SetSurface(None::<&ICompositionSurface>);
-        self.header.surface = None;
         self.loader.stop();
         self.search.reset();
         self.renderer.trim();
@@ -548,7 +386,7 @@ impl Popup {
         );
         let header_same = std::mem::replace(&mut self.header_key, key.clone()) == key;
         // An unchanged heading keeps the surface it has, so it can't flicker.
-        let header_surface = match self.header.surface.clone().filter(|_| header_same) {
+        let header_surface = match self.header.surface().filter(|_| header_same) {
             Some(surface) => surface,
             None => self.renderer.draw(&header_layout, s, &self.theme)?,
         };
@@ -572,72 +410,41 @@ impl Popup {
             Transition::Refine => self.focused_link().cloned(),
             _ => None,
         };
-        self.content.links = body_layout.links.clone();
+        self.content.set_links(body_layout.links.clone());
         if kept == Some(Target::Translate) && self.translate.shown() {
             self.focus_translate(0)?;
         } else if kept == Some(Target::Back) && self.back.shown() {
             self.focus_back(0)?;
         } else {
-            let links = &self.content.links;
+            let links = self.content.links();
             let focused = kept.and_then(|t| links.iter().position(|l| l.target == t));
             self.focus_link(focused, 0)?;
         }
 
         // Header: on a refinement, cross-fade from the old rendering so only
         // what changed (typically the pronunciation) appears to fade in.
-        let anim = &self.anim;
-        let header = &mut self.header;
-        let old_header = header.surface.replace(header_surface.clone());
-        Animator::stop(&header.visual, &["Opacity"]);
-        Animator::stop(&header.back, &["Opacity"]);
-        header.back.SetOpacity(0.0)?;
-        if let (Transition::Refine, Some(old), false) = (transition, old_header, header_same) {
-            header.back_brush.SetSurface(&old)?;
-            header.back.SetSize(header.visual.Size()?)?;
-            header.back.SetOffset(v3(PAD_X * s, PAD_TOP * s))?;
-            header.back.SetOpacity(1.0)?;
-            header.visual.SetOpacity(0.0)?;
-            anim.scalar(&header.back, "Opacity", 0.0, 240, 0, &anim.decelerate)?;
-            anim.scalar(&header.visual, "Opacity", 1.0, 240, 0, &anim.decelerate)?;
-        } else {
-            header.visual.SetOpacity(1.0)?;
-        }
-        header.brush.SetSurface(&header_surface)?;
-        header
-            .visual
-            .SetSize(v2(content_w * s, header_layout.height * s))?;
-        let rest = v3(PAD_X * s, PAD_TOP * s);
-        let full = scale(1.0);
-        Animator::stop(&header.visual, &["Offset", "Scale"]);
-        header.visual.SetScale(full)?;
-        if let Some((from, size)) = rise_from {
+        let crossfade = transition == Transition::Refine && !header_same;
+        let size = v2(content_w * s, header_layout.height * s);
+        self.header
+            .show(&self.anim, &header_surface, size, crossfade, s)?;
+        let arrival = if let Some((from, size)) = rise_from {
             // The typed word grows into the heading from where it was typed.
-            let k = size / WORD_SIZE;
-            header.visual.SetScale(Vector3 { X: k, Y: k, Z: 1.0 })?;
-            header.visual.SetOffset(from)?;
-            header.visual.SetOpacity(0.0)?;
-            let ease = &anim.decelerate;
-            anim.vector3(&header.visual, "Offset", rest, RESIZE_MS, 0, ease)?;
-            anim.vector3(&header.visual, "Scale", full, RESIZE_MS, 0, ease)?;
-            anim.scalar(&header.visual, "Opacity", 1.0, 160, 0, ease)?;
+            Arrival::Rise {
+                from,
+                scale: size / WORD_SIZE,
+            }
         } else if transition != Transition::Instant && previous_indent != indent {
             // The word glides over to make room for the back button, or
             // to take its place.
             // Moving left, it waits a moment for the arrow to fade first.
-            let from = PAD_X + previous_indent - indent;
-            let delay = if indent < previous_indent { 60 } else { 0 };
-            header.visual.SetOffset(v3(from * s, PAD_TOP * s))?;
-            anim.vector3(
-                &header.visual,
-                "Offset",
-                rest,
-                RESIZE_MS,
-                delay,
-                &anim.decelerate,
-            )?;
+            Arrival::Glide {
+                from_x: PAD_X + previous_indent - indent,
+                delay: if indent < previous_indent { 60 } else { 0 },
+            }
         } else {
-            header.visual.SetOffset(rest)?;
-        }
+            Arrival::Still
+        };
+        self.header.arrive(&self.anim, arrival, s)?;
 
         // The buttons sit level with the word.
         let line = header_layout.first_line_bottom();
@@ -646,12 +453,10 @@ impl Popup {
             button.place(top, s)?;
         }
 
-        let content = &self.content;
-        content.brush.SetSurface(&body_surface)?;
-        content.visual.SetSize(v2(content_w * s, body_h))?;
-        content.show_caret(&self.anim.compositor, body_layout.caret, s)?;
-        Animator::stop(&content.visual, &["Offset", "Opacity"]);
-        Animator::stop(&content.host, &["Offset"]);
+        let size = v2(content_w * s, body_h);
+        let c = &self.anim.compositor;
+        self.content
+            .show(c, &body_surface, size, body_layout.caret, s)?;
 
         let loading = matches!(body, Body::Loading);
         self.loader.set_running(&self.anim, loading, self.scale)?;
@@ -670,46 +475,28 @@ impl Popup {
         card_h: f32,
         previous_header_h: f32,
     ) -> Result<()> {
-        let (s, header_h) = (self.scale, self.header_h);
-        let anim = &self.anim;
-        let content = &self.content;
+        let s = self.scale;
         match transition {
             Transition::Instant => {
                 self.scroll = 0.0;
                 self.scroll_anim = None;
-                content.visual.SetOpacity(1.0)?;
-                content.visual.SetOffset(v3(PAD_X * s, 0.0))?;
-                content.host.SetOffset(v3(0.0, header_h))?;
+                self.content.appear(self.header_h, s)?;
                 self.resize(card_h, false)?;
             }
             Transition::Replace => {
                 // New body slides up a touch and fades in while the card resizes.
                 self.scroll = 0.0;
                 self.scroll_anim = None;
-                content.visual.SetOpacity(0.0)?;
-                content.visual.SetOffset(v3(PAD_X * s, 8.0 * s))?;
-                anim.scalar(&content.visual, "Opacity", 1.0, 220, 80, &anim.decelerate)?;
-                let rest = v3(PAD_X * s, 0.0);
-                anim.vector3(
-                    &content.visual,
-                    "Offset",
-                    rest,
-                    RESIZE_MS,
-                    80,
-                    &anim.decelerate,
-                )?;
+                self.content.slide_in(&self.anim, s)?;
                 self.move_content_host(previous_header_h)?;
                 self.resize(card_h, true)?;
             }
             Transition::Refine => {
                 // Same entry with more detail: keep the reader's place.
-                content.visual.SetOpacity(1.0)?;
                 self.resize(card_h, true)?;
                 self.scroll = self.scroll.min(self.max_scroll());
                 self.scroll_anim = None;
-                self.content
-                    .visual
-                    .SetOffset(v3(PAD_X * s, -self.scroll.round()))?;
+                self.content.keep_place(self.scroll, s)?;
                 self.move_content_host(previous_header_h)?;
             }
         }
@@ -750,32 +537,13 @@ impl Popup {
     /// pointer's on it, and keeps its tooltip over it as the body changes
     /// and scrolls.
     fn sync_swap(&mut self) -> Result<()> {
-        let s = self.scale;
-        let link = self.content.swap_link().cloned();
-        let rect = link.as_ref().map_or(RECT::default(), |l| self.link_rect(l));
+        let link = self.content.swap_link();
+        let rect = link.map_or(RECT::default(), |l| self.link_rect(l));
         let over = self
             .pointer
             .is_some_and(|(x, y)| self.link_at(x, y) == Some(&Target::Swap));
-        let content = &mut self.content;
-        if let Some(l) = &link {
-            let geometry = &content.swap_geometry;
-            geometry.SetOffset(v2((l.x * s).round(), (l.y * s).round()))?;
-            geometry.SetSize(v2((l.width * s).round(), (l.height * s).round()))?;
-            geometry.SetCornerRadius(v2(BACK_RADIUS * s, BACK_RADIUS * s))?;
-        }
-        if over != content.swap_hovered {
-            content.swap_hovered = over;
-            let opacity = if over { 1.0 } else { 0.0 };
-            let anim = &self.anim;
-            anim.scalar(&content.swap, "Opacity", opacity, 100, 0, &anim.decelerate)?;
-        }
-        if rect != content.swap_tip_rect {
-            content.swap_tip_rect = rect;
-            if let Some(tip) = content.swap_tip {
-                set_tooltip_rect(tip, self.hwnd, SWAP_TOOL, rect);
-            }
-        }
-        Ok(())
+        self.content
+            .sync_swap(&self.anim, self.hwnd, rect, over, self.scale)
     }
 
     /// The part of the body's link `l` in view, in window pixels.
@@ -834,19 +602,8 @@ impl Popup {
     }
 
     fn move_content_host(&self, previous_header_h: f32) -> Result<()> {
-        let to = v3(0.0, self.header_h);
-        if (previous_header_h - self.header_h).abs() > 0.5 {
-            self.anim.vector3(
-                &self.content.host,
-                "Offset",
-                to,
-                RESIZE_MS,
-                0,
-                &self.anim.decelerate,
-            )
-        } else {
-            self.content.host.SetOffset(to)
-        }
+        let animate = (previous_header_h - self.header_h).abs() > 0.5;
+        self.content.move_host(&self.anim, self.header_h, animate)
     }
 
     /// The card's bounds in screen pixels.
@@ -879,12 +636,11 @@ impl Popup {
         for v in [
             &self.root.cast::<Visual>()?,
             &self.frame.visual.cast()?,
-            &self.content.visual.cast()?,
-            &self.header.visual.cast()?,
+            &self.content.visual()?,
         ] {
             Animator::stop(v, &["Opacity", "Offset", "Scale"]);
         }
-        self.header.visual.SetScale(scale(1.0))?;
+        self.header.reset()?;
         // A new card has nowhere to go back to; whether it can be translated
         // was said before showing it.
         self.back.hide_at_once()?;
@@ -892,9 +648,7 @@ impl Popup {
         self.search.reset();
         // The pointer comes back to the card afresh.
         self.pointer = None;
-        self.content.swap_hovered = false;
-        Animator::stop(&self.content.swap, &["Opacity"]);
-        self.content.swap.SetOpacity(0.0)?;
+        self.content.reset_swap()?;
         self.card_h = 0.0;
         Ok(())
     }
@@ -965,13 +719,10 @@ impl Popup {
         self.header_key = Default::default();
         self.frame.apply_theme(&self.renderer, &t, self.scale)?;
         self.loader.apply_theme(&t)?;
-        self.content.focus_brush.SetColor(t.focus())?;
-        self.content.swap_brush.SetColor(t.highlight())?;
-        self.content.caret_brush.SetColor(t.accent)?;
+        let c = &self.anim.compositor;
+        self.content.apply_theme(c, &t, self.scale)?;
         self.back.apply_theme(&self.renderer, &t, self.scale)?;
         self.translate.apply_theme(&self.renderer, &t, self.scale)?;
-        let c = &self.anim.compositor;
-        self.content.fade.set_scale(c, self.scale)?;
         self.scroll_chrome.apply_theme(&t)
     }
 
@@ -987,12 +738,10 @@ impl Popup {
         } else if animate {
             self.set_region(old_h, card_h);
             self.frame.resize(&self.anim, w, card_h, offset, s, true)?;
-            self.anim
-                .vector2(&self.content.host, "Size", host_size, RESIZE_MS)?;
+            self.content.size_host(&self.anim, host_size, true)?;
         } else {
             self.frame.resize(&self.anim, w, card_h, offset, s, false)?;
-            Animator::stop(&self.content.host, &["Size"]);
-            self.content.host.SetSize(host_size)?;
+            self.content.size_host(&self.anim, host_size, false)?;
             self.set_region(card_h, card_h);
         }
         Ok(())

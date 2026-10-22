@@ -12,16 +12,12 @@ impl Popup {
             return None;
         }
         let (bx, by) = ((x - PAD_X * s) / s, (y - self.header_h + self.scroll) / s);
-        self.content
-            .links
-            .iter()
-            .find(|l| bx >= l.x && bx < l.x + l.width && by >= l.y && by < l.y + l.height)
-            .map(|l| &l.target)
+        self.content.link_at(bx, by)
     }
 
     /// Whether the card has links, or buttons, to Tab through.
     pub fn has_links(&self) -> bool {
-        self.translate.shown() || self.back.shown() || !self.content.links.is_empty()
+        self.translate.shown() || self.back.shown() || !self.content.links().is_empty()
     }
 
     /// The link, or button, Tab moved to, if any.
@@ -34,7 +30,8 @@ impl Popup {
         if self.back.focused() {
             return Some(&BACK);
         }
-        self.content.focused.map(|i| &self.content.links[i].target)
+        let links = self.content.links();
+        self.content.focused().map(|i| &links[i].target)
     }
 
     /// Where Tab is, if anywhere.
@@ -44,7 +41,7 @@ impl Popup {
         } else if self.back.focused() {
             Some(Stop::Back)
         } else {
-            self.content.focused.map(Stop::Link)
+            self.content.focused().map(Stop::Link)
         }
     }
 
@@ -158,7 +155,8 @@ impl Popup {
     /// Moves the keyboard focus to the link going to `target`, if the card
     /// has one.
     pub fn focus_target(&mut self, target: &Target) -> Result<()> {
-        if let Some(start) = self.content.links.iter().position(|l| &l.target == target) {
+        let links = self.content.links();
+        if let Some(start) = links.iter().position(|l| &l.target == target) {
             self.focus_link(Some(start), 0)?;
             self.scroll_into_view(start)?;
         }
@@ -188,85 +186,8 @@ impl Popup {
     pub(super) fn focus_link(&mut self, start: Option<usize>, reveal: u64) -> Result<()> {
         self.translate.set_focused(false)?;
         self.back.set_focused(false)?;
-        let content = &mut self.content;
-        content.focused = start;
-        let (anim, s) = (&self.anim, self.scale);
-        let Some(start) = start else {
-            content.ring_shown = false;
-            for ring in &content.rings {
-                if reveal > 0 {
-                    Animator::stop(ring, &["Opacity"]);
-                    ring.SetOpacity(0.0)?;
-                } else {
-                    anim.scalar(ring, "Opacity", 0.0, FOCUS_FADE_MS, 0, &anim.decelerate)?;
-                }
-            }
-            return Ok(());
-        };
-        // Drawn pixel for pixel and shown through a mask, as shapes are
-        // jagged in what scrolls. The stroke is inside the mask, so each
-        // ring is its link grown by half of it, centred on the link's edge.
-        let stroke = (ui::FOCUS_STROKE * s).round();
-        let grow = stroke / 2.0;
-        let radius = FOCUS_RADIUS * s + grow;
-        let side = (2.0 * radius).ceil() + 1.0;
-        let mask = self
-            .renderer
-            .draw_rounded(side, side, radius, Some(stroke))?;
-        content.ring_source.SetSurface(&mask)?;
-        content.ring_grid.SetInsets(radius)?;
-        let rects: Vec<_> = content
-            .rects(start)
-            .map(|l| {
-                let (x, y) = ((l.x * s).round(), (l.y * s).round());
-                let (w, h) = ((l.width * s).round(), (l.height * s).round());
-                (v3(x - grow, y - grow), v2(w + stroke, h + stroke))
-            })
-            .collect();
-        let glide = content.ring_shown && reveal == 0;
-        for (i, &(at, size)) in rects.iter().enumerate() {
-            if i == content.rings.len() {
-                let ring = anim.compositor.CreateSpriteVisual()?;
-                ring.SetBrush(&content.ring_mask)?;
-                ring.SetOpacity(0.0)?;
-                content.focus.Children()?.InsertAtTop(&ring)?;
-                content.rings.push(ring);
-            }
-            let ring = &content.rings[i];
-            // One that was in use glides to its place, one that wasn't
-            // fades in there; either way the others of this link follow.
-            let from_view = glide && ring.Opacity()? > 0.0;
-            if from_view {
-                anim.vector3(ring, "Offset", at, FOCUS_MS, 0, &anim.decelerate)?;
-                anim.vector2(ring, "Size", size, FOCUS_MS)?;
-            } else {
-                Animator::stop(ring, &["Offset", "Size"]);
-                ring.SetOffset(at)?;
-                ring.SetSize(size)?;
-            }
-            if reveal > 0 {
-                Animator::stop(ring, &["Opacity"]);
-                ring.SetOpacity(0.0)?;
-            }
-            anim.scalar(
-                ring,
-                "Opacity",
-                1.0,
-                FOCUS_FADE_MS,
-                reveal,
-                &anim.decelerate,
-            )?;
-        }
-        for ring in content.rings.iter().skip(rects.len()) {
-            if reveal > 0 {
-                Animator::stop(ring, &["Opacity"]);
-                ring.SetOpacity(0.0)?;
-            } else {
-                anim.scalar(ring, "Opacity", 0.0, FOCUS_FADE_MS, 0, &anim.decelerate)?;
-            }
-        }
-        content.ring_shown = true;
-        Ok(())
+        self.content
+            .focus(&self.anim, &self.renderer, start, reveal, self.scale)
     }
 
     /// Scrolls the body just enough to show the link starting at `start`.

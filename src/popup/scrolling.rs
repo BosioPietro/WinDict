@@ -41,7 +41,7 @@ impl Popup {
         let glide = Glide::new(self.scroll_anim, at, self.scroll, push, max, most, ms);
         self.scroll_anim = Some(glide);
         let x = PAD_X * self.scale;
-        glide.play(&self.anim, &self.content.visual, |scroll| v3(x, -scroll))?;
+        self.content.play_scroll(&self.anim, &glide, x)?;
         self.update_scroll_chrome(true)?;
         self.sync_swap()
     }
@@ -62,7 +62,8 @@ impl Popup {
         let max = self.max_scroll();
         let anim = &self.anim;
         let chrome = &self.scroll_chrome;
-        self.content.fade.show(anim, self.scroll, max, s, animate)?;
+        self.content
+            .show_fades(anim, self.scroll, max, s, animate)?;
 
         if max <= 0.0 {
             Animator::stop(&chrome.thumb, &["Opacity"]);

@@ -98,10 +98,11 @@ impl Popup {
         self.focus_link(None, 0)?;
         self.header_indent = 0.0;
         let anim = &self.anim;
+        let [word, old_word] = self.header.visuals()?;
         let shown: [Visual; 4] = [
-            self.header.visual.cast()?,
-            self.header.back.cast()?,
-            self.content.visual.cast()?,
+            word,
+            old_word,
+            self.content.visual()?,
             self.loader.visual().cast()?,
         ];
         for v in &shown {
@@ -113,7 +114,7 @@ impl Popup {
             }
         }
         self.loader.forget();
-        self.content.links.clear();
+        self.content.set_links(Vec::new());
         let delay = if in_place { MAKE_WAY_MS } else { 0 };
         let (renderer, theme, s) = (&self.renderer, &self.theme, self.scale);
         let h = self
