@@ -206,7 +206,9 @@ impl Settings {
         }
         self.email_shift = 0.0;
         self.show_field()?;
-        self.show_caps(false)?;
+        for shortcut in SHORTCUTS {
+            self.show_caps(shortcut, false)?;
+        }
         for note in NOTES {
             let (text, error) = self.notes[note as usize].clone();
             self.show_note(note, &text, error, false)?;
@@ -451,7 +453,11 @@ impl Settings {
             bar,
             tips,
             reveal,
-            shortcut: parts.shortcut.ok_or_else(missing)?,
+            shortcuts: parts
+                .shortcuts
+                .into_iter()
+                .collect::<Option<_>>()
+                .ok_or_else(missing)?,
             switches: parts
                 .switches
                 .into_iter()
@@ -791,7 +797,7 @@ impl Settings {
         }
         // Rows that are clicked as a whole light up under the pointer.
         let hover = match spec.control {
-            Control::Shortcut | Control::Switch(_) | Control::Languages => {
+            Control::Shortcut(_) | Control::Switch(_) | Control::Languages => {
                 let (hover, _) = rounded(c, r, group, row, 0.0, t.highlight())?;
                 hover.SetOpacity(0.0)?;
                 Some(hover)
@@ -839,7 +845,7 @@ impl Settings {
         detail.visual.SetOffset(detail_at)?;
         // A description that changes cross-fades from the one before.
         let note = match spec.control {
-            Control::Shortcut => Some(Note::Shortcut),
+            Control::Shortcut(shortcut) => Some(Note::of(shortcut)),
             Control::Languages => Some(Note::Language),
             _ => None,
         };
@@ -857,15 +863,15 @@ impl Settings {
         let place = |rect: Rect| rect.offset(group_at);
         let outset = px(FOCUS_OUTSET);
         match spec.control {
-            Control::Shortcut => {
+            Control::Shortcut(shortcut) => {
                 let view = self.build_shortcut(group, row, right, middle, hover)?;
                 let inset = px(RECORD_INSET);
-                parts.hits.push((Hit::Shortcut, place(row)));
+                parts.hits.push((Hit::Shortcut(shortcut), place(row)));
                 let ring_at = place(row).outset(-inset);
                 parts
                     .stops
-                    .push((Stop::Shortcut, ring_at, px(RECORD_RADIUS)));
-                parts.shortcut = Some(view);
+                    .push((Stop::Shortcut(shortcut), ring_at, px(RECORD_RADIUS)));
+                parts.shortcuts[shortcut as usize] = Some(view);
             }
             Control::Switch(sw) => {
                 let (view, track) = self.build_switch(group, right, middle)?;
@@ -1099,7 +1105,7 @@ impl Settings {
 /// The parts of a view as its rows are built.
 #[derive(Default)]
 struct Parts {
-    shortcut: Option<ShortcutView>,
+    shortcuts: [Option<ShortcutView>; SHORTCUTS.len()],
     translate: Option<Rect>,
     switches: [Option<SwitchView>; SWITCHES.len()],
     choices: [Option<ChoiceView>; CHOICES.len()],

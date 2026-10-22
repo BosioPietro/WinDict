@@ -355,6 +355,10 @@ impl App {
         if !self.card.popup.as_ref().is_some_and(|p| p.visible) {
             return;
         }
+        // A passage translated straight away has no definition to go to.
+        if self.card.translating.is_some() && self.card.current.is_none() {
+            return;
+        }
         let query = match self.card.translating.take() {
             Some(_) => self.card.current.clone(),
             None => self.card.history.pop(),
@@ -365,6 +369,12 @@ impl App {
         self.new_request();
         self.lookup(query, Place::Same(Transition::Replace));
         self.sync_back_keys();
+    }
+
+    /// Whether the card shows a translation of a definition, which Back and
+    /// Ctrl+T go back to.
+    pub(super) fn has_definition_behind(&self) -> bool {
+        self.card.translating.is_some() && self.card.current.is_some()
     }
 
     /// Backspace and Alt+Left go back, but only while there's somewhere to
@@ -380,7 +390,7 @@ impl App {
             .translating
             .as_ref()
             .is_some_and(|t| t.picking.is_some());
-        let wanted = (!self.card.history.is_empty() || self.card.translating.is_some()) && !picking;
+        let wanted = (!self.card.history.is_empty() || self.has_definition_behind()) && !picking;
         self.back_keys.set(self.hwnd, wanted);
     }
 }

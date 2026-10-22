@@ -28,7 +28,7 @@ impl App {
         let scroll = popup.is_some_and(|p| p.scrolls());
         // Ctrl+T, likewise, only while there's a translation to go to or from.
         let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
-        let translate = visible && (self.can_translate() || self.card.translating.is_some());
+        let translate = visible && (self.can_translate() || self.has_definition_behind());
         // And Ctrl+C only while there's something to copy.
         let copy = popup.is_some() && self.copyable().is_some();
         // Ctrl+plus and Ctrl+minus zoom any card but the search box.

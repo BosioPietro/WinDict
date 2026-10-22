@@ -31,11 +31,24 @@ pub enum SelectionMode {
     Clipboard,
 }
 
+/// What a global shortcut does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Shortcut {
+    /// Looks the selection up.
+    Lookup,
+    /// Translates the selection, a word or a whole passage, straight away.
+    Translate,
+}
+
+pub const SHORTCUTS: [Shortcut; 2] = [Shortcut::Lookup, Shortcut::Translate];
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
     /// Global shortcut, e.g. "Ctrl+Alt+D", "Win+Shift+F1".
     pub hotkey: String,
+    /// Global shortcut that translates the selection instead.
+    pub translate_hotkey: String,
     /// The language WinDict is shown in, "english" or "italian". Unset, it's
     /// the language of Windows if WinDict has it, else English.
     pub ui_language: Language,
@@ -79,6 +92,21 @@ pub struct Config {
 pub const ZOOMS: [u32; 8] = [80, 90, 100, 110, 125, 150, 175, 200];
 
 impl Config {
+    /// The keys of `shortcut`, as written.
+    pub fn hotkey(&self, shortcut: Shortcut) -> &str {
+        match shortcut {
+            Shortcut::Lookup => &self.hotkey,
+            Shortcut::Translate => &self.translate_hotkey,
+        }
+    }
+
+    pub fn hotkey_mut(&mut self, shortcut: Shortcut) -> &mut String {
+        match shortcut {
+            Shortcut::Lookup => &mut self.hotkey,
+            Shortcut::Translate => &mut self.translate_hotkey,
+        }
+    }
+
     /// Whether the windows animate.
     pub fn animated(&self) -> bool {
         self.animations.unwrap_or_else(ui::system_motion)
@@ -106,7 +134,8 @@ pub fn zoom_index(zoom: u32) -> usize {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            hotkey: "Ctrl+Alt+D".into(),
+            hotkey: "Alt+D".into(),
+            translate_hotkey: "Alt+T".into(),
             ui_language: Language::system(),
             theme: ThemeMode::System,
             max_definitions: 4,
@@ -233,6 +262,7 @@ mod tests {
         assert_eq!(config.hotkey, "Win+F1");
         assert_eq!(config.theme, ThemeMode::Dark);
         // Missing fields keep their defaults.
+        assert_eq!(config.hotkey(Shortcut::Translate), "Alt+T");
         assert_eq!(config.max_synonyms, 6);
         assert!(config.online_lookup);
         assert!(config.check_updates);
@@ -335,7 +365,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let (config, first_run) = load_from(&path).unwrap();
         assert!(first_run);
-        assert_eq!(config.hotkey, "Ctrl+Alt+D");
+        assert_eq!(config.hotkey, "Alt+D");
         assert!(path.exists());
         assert!(!load_from(&path).unwrap().1);
         // A path that can't be read as a file is an error, and stays as it is.

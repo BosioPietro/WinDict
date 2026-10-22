@@ -2,12 +2,15 @@
 //! (the endpoint translate.google.com asks), which groups the translations
 //! by part of speech, then the older keyless `gtx` endpoint should that
 //! fail, and MyMemory (https://mymemory.translated.net) as a last fallback,
-//! asked with the word's first definition for context.
+//! asked with the word's first definition for context. The translation
+//! shortcut translates whole passages the same way.
+
+use std::borrow::Cow;
 
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::dictionary::percent_encode;
+use crate::dictionary::{percent_encode, NormalizeError, MAX_LOOKUP_CHARS};
 use crate::http;
 use crate::i18n::{fill, tr};
 use crate::lang::LangCode;
@@ -26,6 +29,9 @@ const MAX_BACK: usize = 4;
 const MAX_ALTERNATIVES: usize = 5;
 /// Longer contexts cost more of MyMemory's daily allowance than they help.
 const MAX_CONTEXT_CHARS: usize = 160;
+/// The most a passage can be to be translated: it goes in the URL, and
+/// MyMemory takes no more than 500 bytes.
+pub const MAX_PASSAGE_CHARS: usize = 500;
 /// Joins the word and its definition, so the translation of one can be told
 /// from that of the other.
 const CONTEXT_SEPARATOR: &str = ": ";
@@ -145,6 +151,44 @@ fn fold(text: &str) -> String {
             c => c,
         })
         .collect()
+}
+
+/// `raw`, the selection, as it's translated: on one line, with its spaces
+/// tidied, unless there's nothing to it or too much.
+pub fn passage(raw: &str) -> Result<String, NormalizeError> {
+    let text = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !text.chars().any(char::is_alphanumeric) {
+        return Err(NormalizeError::Empty);
+    }
+    if text.chars().count() > MAX_PASSAGE_CHARS {
+        return Err(NormalizeError::TooLong);
+    }
+    Ok(text)
+}
+
+/// Whether `text` is longer than a word or a short phrase, and so is read
+/// at the size of the body rather than of a heading.
+pub fn is_passage(text: &str) -> bool {
+    text.chars().count() > MAX_LOOKUP_CHARS
+}
+
+/// The card's heading for a translation of `text`: a passage is cut short
+/// after a few words.
+pub fn heading(text: &str) -> Cow<'_, str> {
+    if !is_passage(text) {
+        return Cow::Borrowed(text);
+    }
+    let end = text
+        .char_indices()
+        .nth(MAX_LOOKUP_CHARS)
+        .map_or(text.len(), |(i, _)| i);
+    // At the last space before the cut, unless that's too early.
+    let cut = match text[..end].rfind(' ') {
+        Some(space) if space > end / 2 => space,
+        _ => end,
+    };
+    let kept = text[..cut].trim_end_matches(|c: char| !c.is_alphanumeric());
+    Cow::Owned(format!("{kept}\u{2026}"))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -525,6 +569,31 @@ fn split_context(translated: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_passages() {
+        assert_eq!(passage("  Hello,\r\n  world!  ").unwrap(), "Hello, world!");
+        assert_eq!(passage(" ... "), Err(NormalizeError::Empty));
+        let long = "word ".repeat(MAX_PASSAGE_CHARS / 5 + 1);
+        assert_eq!(passage(&long), Err(NormalizeError::TooLong));
+        // Longer than a lookup takes is fine.
+        let sentence = "this is a much longer sentence than a word, and so on";
+        assert_eq!(passage(sentence).unwrap(), sentence);
+    }
+
+    #[test]
+    fn cuts_headings_short() {
+        assert_eq!(heading("ice cream"), "ice cream");
+        let text = "The quick brown fox jumps over the lazy dog, then naps for a while, \
+            as foxes do";
+        let cut = heading(text);
+        assert!(cut.ends_with('\u{2026}'), "{cut}");
+        assert!(cut.chars().count() <= MAX_LOOKUP_CHARS + 1, "{cut}");
+        assert!(text.starts_with(cut.trim_end_matches('\u{2026}')));
+        // With no space to cut at, mid-word.
+        let word = "a".repeat(MAX_LOOKUP_CHARS + 10);
+        assert_eq!(heading(&word).chars().count(), MAX_LOOKUP_CHARS + 1);
+    }
 
     #[test]
     fn reads_google_dictionary() {

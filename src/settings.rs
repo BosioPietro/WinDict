@@ -33,7 +33,7 @@ use windows_numerics::{Vector2, Vector3};
 
 use crate::app::edit::{Input, LineEdit, Motion};
 use crate::app::picking::Picking;
-use crate::config::{self, Config, SelectionMode, ThemeMode, ZOOMS};
+use crate::config::{self, Config, SelectionMode, Shortcut, ThemeMode, SHORTCUTS, ZOOMS};
 use crate::dicts;
 use crate::hotkey::{self, held_modifiers, is_modifier, Hotkey};
 use crate::i18n::{tr, Language, Strings};
@@ -65,7 +65,7 @@ pub enum Change {
     RecordingStarted,
     /// Recording ended without a new shortcut.
     RecordingStopped,
-    Hotkey(String),
+    Hotkey(Shortcut, String),
     Theme(ThemeMode),
     /// The language WinDict is shown in.
     Interface(Language),
@@ -218,16 +218,31 @@ fn summary(languages: &[LangCode]) -> String {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Note {
     Shortcut,
+    TranslateShortcut,
     Language,
     Selection,
 }
 
-const NOTES: [Note; 3] = [Note::Shortcut, Note::Language, Note::Selection];
+const NOTES: [Note; 4] = [
+    Note::Shortcut,
+    Note::TranslateShortcut,
+    Note::Language,
+    Note::Selection,
+];
 
 impl Note {
+    /// The description under `shortcut`.
+    fn of(shortcut: Shortcut) -> Note {
+        match shortcut {
+            Shortcut::Lookup => Note::Shortcut,
+            Shortcut::Translate => Note::TranslateShortcut,
+        }
+    }
+
     fn usual(self, values: &Values) -> String {
         match self {
             Note::Shortcut => tr().shortcut_detail.into(),
+            Note::TranslateShortcut => tr().translate_shortcut_detail.into(),
             Note::Language => summary(&values.config.languages),
             Note::Selection => selection_detail(values.config.selection).into(),
         }
@@ -238,7 +253,7 @@ impl Note {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Hit {
     Close,
-    Shortcut,
+    Shortcut(Shortcut),
     Switch(Switch),
     /// One of a choice's options.
     Choice(Choice, usize),
@@ -264,7 +279,7 @@ enum Hit {
 /// What Tab stops at, in order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Stop {
-    Shortcut,
+    Shortcut(Shortcut),
     Switch(Switch),
     Choice(Choice),
     Counter(Counter),
@@ -280,7 +295,7 @@ impl Hit {
     fn stop(self) -> Option<Stop> {
         match self {
             Hit::Close => None,
-            Hit::Shortcut => Some(Stop::Shortcut),
+            Hit::Shortcut(shortcut) => Some(Stop::Shortcut(shortcut)),
             Hit::Switch(sw) => Some(Stop::Switch(sw)),
             Hit::Choice(choice, _) => Some(Stop::Choice(choice)),
             Hit::Step(counter, _) => Some(Stop::Counter(counter)),
@@ -297,7 +312,7 @@ impl Hit {
 
 #[derive(Clone, Copy)]
 enum Control {
-    Shortcut,
+    Shortcut(Shortcut),
     Switch(Switch),
     Choice(Choice),
     Counter(Counter),
@@ -319,7 +334,7 @@ enum Control {
 impl Control {
     fn width(self) -> f32 {
         match self {
-            Control::Shortcut => SHORTCUT_W,
+            Control::Shortcut(_) => SHORTCUT_W,
             Control::Switch(_) => SWITCH_W,
             Control::Choice(choice) => choice.names().len() as f32 * choice.segment_w(),
             Control::Counter(counter) => counter.width(),
@@ -369,7 +384,13 @@ const SECTIONS: &[(Label, &[Row])] = &[
                 "\u{E765}",
                 |s| s.shortcut,
                 |s| s.shortcut_detail,
-                Control::Shortcut,
+                Control::Shortcut(Shortcut::Lookup),
+            ),
+            row(
+                "\u{E765}",
+                |s| s.translate_shortcut,
+                |s| s.translate_shortcut_detail,
+                Control::Shortcut(Shortcut::Translate),
             ),
             row(
                 "\u{E7E8}",
@@ -684,7 +705,8 @@ struct View {
     tips: Vec<(Hit, TipView)>,
     /// What rises in as the window opens, and where each rests.
     reveal: Vec<(Visual, Vector3)>,
-    shortcut: ShortcutView,
+    /// In the order of [`SHORTCUTS`].
+    shortcuts: Vec<ShortcutView>,
     /// In the order of [`SWITCHES`] and [`COUNTERS`].
     switches: Vec<SwitchView>,
     field: FieldView,
@@ -778,7 +800,8 @@ pub struct Settings {
     /// Whether the focus ring shows: only once the keyboard is used.
     ring: bool,
     ring_shown: bool,
-    recording: bool,
+    /// The shortcut being recorded, if one is.
+    recording: Option<Shortcut>,
     /// The modifiers held while recording.
     preview: HOT_KEY_MODIFIERS,
     /// What the descriptions that change say, and whether it's that
@@ -844,7 +867,7 @@ impl Settings {
             focus: None,
             ring: false,
             ring_shown: false,
-            recording: false,
+            recording: None,
             preview: HOT_KEY_MODIFIERS(0),
             notes,
             open: false,
@@ -873,7 +896,7 @@ impl Settings {
         let s = zoomed(work, s, values.config.zoom_factor());
         (self.theme, self.scale, self.values) = (theme, s, values);
         (self.hovered, self.pressed, self.focus) = (None, None, None);
-        (self.ring, self.recording, self.scroll) = (false, false, 0.0);
+        (self.ring, self.recording, self.scroll) = (false, None, 0.0);
         self.scroll_anim = None;
         self.notes = NOTES.map(|note| (note.usual(&self.values), false));
         self.retitle();
@@ -923,7 +946,7 @@ impl Settings {
             return Ok(());
         }
         self.visible = false;
-        self.recording = false;
+        self.recording = None;
         self.anim.fade_out(&self.root, 6.0 * self.scale)
     }
 
@@ -938,7 +961,7 @@ impl Settings {
 
     /// Whether a new shortcut is being recorded.
     pub fn recording(&self) -> bool {
-        self.recording
+        self.recording.is_some()
     }
 
     /// Whether a point in window pixels is on the header, which drags the window.
@@ -1002,7 +1025,8 @@ impl Settings {
         }
         self.show_focus(false)?;
         self.set_pressed(hit)?;
-        if self.recording && hit != Some(Hit::Shortcut) {
+        let on_it = |shortcut| hit == Some(Hit::Shortcut(shortcut));
+        if self.recording.is_some_and(|shortcut| !on_it(shortcut)) {
             self.stop_recording()?;
             return Ok(Some(Change::RecordingStopped));
         }
@@ -1026,7 +1050,7 @@ impl Settings {
 
     /// A key went down.
     pub fn key(&mut self, key: VIRTUAL_KEY) -> Result<Option<Change>> {
-        if self.recording {
+        if self.recording() {
             return self.record(key, held_modifiers());
         }
         if self.picking.is_some() {
@@ -1075,7 +1099,9 @@ impl Settings {
                 self.email.delete(motion);
                 self.typed(&before)?
             }
-            (VK_SPACE | VK_RETURN, Some(Stop::Shortcut)) => self.activate(Hit::Shortcut)?,
+            (VK_SPACE | VK_RETURN, Some(Stop::Shortcut(shortcut))) => {
+                self.activate(Hit::Shortcut(shortcut))?
+            }
             (VK_SPACE | VK_RETURN, Some(Stop::Switch(sw))) => self.activate(Hit::Switch(sw))?,
             (VK_SPACE | VK_RETURN, Some(Stop::Config)) => self.activate(Hit::Config)?,
             (VK_SPACE | VK_RETURN, Some(Stop::Select(side))) => self.activate(Hit::Select(side))?,
@@ -1115,7 +1141,7 @@ impl Settings {
     /// box of the language being picked, or else in the email field, when
     /// that has the focus.
     pub fn char(&mut self, unit: u16) -> Result<Option<Change>> {
-        if self.recording {
+        if self.recording() {
             return Ok(None);
         }
         if self.picking.is_some() {
@@ -1139,7 +1165,7 @@ impl Settings {
 
     /// A key came up: while recording, the held modifiers show as they're let go.
     pub fn key_up(&mut self, key: VIRTUAL_KEY) -> Result<()> {
-        if self.recording && is_modifier(key) {
+        if self.recording() && is_modifier(key) {
             self.set_preview(held_modifiers())?;
         }
         Ok(())
@@ -1153,7 +1179,7 @@ impl Settings {
         modifiers: HOT_KEY_MODIFIERS,
         down: bool,
     ) -> Result<Option<Change>> {
-        if !self.recording {
+        if !self.recording() {
             return Ok(None);
         }
         if down {
@@ -1177,7 +1203,7 @@ impl Settings {
         self.show_editing()?;
         self.set_pressed(None)?;
         self.lose_capture()?;
-        if !self.recording {
+        if !self.recording() {
             return Ok(None);
         }
         self.stop_recording()?;
@@ -1217,13 +1243,13 @@ impl Settings {
         self.glide_to(to, push, ms)
     }
 
-    /// The shortcut just recorded couldn't be used: it goes back to
-    /// `hotkey`, saying why.
-    pub fn reject_hotkey(&mut self, hotkey: &str, why: &str) -> Result<()> {
-        self.values.config.hotkey = hotkey.to_owned();
-        self.show_caps(true)?;
-        self.shake_caps()?;
-        self.set_note(Note::Shortcut, why, true)
+    /// The shortcut just recorded couldn't be used: `shortcut` goes back
+    /// to `hotkey`, saying why.
+    pub fn reject_hotkey(&mut self, shortcut: Shortcut, hotkey: &str, why: &str) -> Result<()> {
+        *self.values.config.hotkey_mut(shortcut) = hotkey.to_owned();
+        self.show_caps(shortcut, true)?;
+        self.shake_caps(shortcut)?;
+        self.set_note(Note::of(shortcut), why, true)
     }
 
     /// Ticks `languages` (codes, like "en"), and only them.
@@ -1292,7 +1318,7 @@ impl Settings {
 
     /// Shows `values` changed from elsewhere, cross-fading to them.
     pub fn refresh(&mut self, theme: Theme, values: Values) -> Result<()> {
-        (self.values, self.recording) = (values, false);
+        (self.values, self.recording) = (values, None);
         if self.email.text().trim() != self.values.config.mymemory_email {
             self.email = LineEdit::new(&self.values.config.mymemory_email, MAX_EMAIL_CHARS);
         }
@@ -1399,12 +1425,14 @@ impl Settings {
         Ok(match hit {
             Hit::Close => Some(Change::Close),
             Hit::Config => Some(Change::OpenConfig),
-            Hit::Shortcut if self.recording => {
+            Hit::Shortcut(shortcut) if self.recording == Some(shortcut) => {
                 self.stop_recording()?;
                 Some(Change::RecordingStopped)
             }
-            Hit::Shortcut => {
-                self.start_recording()?;
+            Hit::Shortcut(shortcut) => {
+                // Recording the other shortcut stops, and this one starts.
+                self.stop_recording()?;
+                self.start_recording(shortcut)?;
                 Some(Change::RecordingStarted)
             }
             Hit::Switch(sw) => {

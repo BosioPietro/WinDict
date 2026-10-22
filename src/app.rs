@@ -35,7 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Composition::Compositor;
 
 use crate::autostart;
-use crate::config::{self, Config, SelectionMode};
+use crate::config::{self, Config, SelectionMode, Shortcut, SHORTCUTS};
 use crate::dictionary::{self, Definition, Detail, Lookup, NormalizeError};
 use crate::dicts;
 use crate::hotkey;
@@ -115,6 +115,15 @@ const HOTKEY_ZOOM_OUT: i32 = 14;
 const HOTKEY_ZOOM_OUT_PAD: i32 = 15;
 const HOTKEY_ZOOM_RESET: i32 = 16;
 const HOTKEY_ZOOM_RESET_PAD: i32 = 17;
+const HOTKEY_TRANSLATE_SELECTION: i32 = 18;
+
+/// The id `shortcut` is registered with.
+fn hotkey_id(shortcut: Shortcut) -> i32 {
+    match shortcut {
+        Shortcut::Lookup => HOTKEY_LOOKUP,
+        Shortcut::Translate => HOTKEY_TRANSLATE_SELECTION,
+    }
+}
 
 /// Hotkeys registered only while the card has a use for them, as (id,
 /// modifiers, key).
@@ -439,6 +448,8 @@ struct Card {
     request: u64,
     /// The card is open on its way, while the capture waits for a copy.
     copying: bool,
+    /// The selection being read is to be translated, not looked up.
+    to_translate: bool,
     /// The offline entry for the current request, if any.
     local: Option<Definition>,
     /// The word the card shows, as it was looked up.
@@ -603,7 +614,7 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             focus_hook: None,
             keyboard_hook: None,
         };
-        app.register_hotkey();
+        app.register_hotkeys();
         let mut dictionary_error = offline::set_languages(&app.config.languages).err();
         // A downloaded dictionary that's gone, or isn't the one this version
         // lists, is fetched again; failing to is told then.
@@ -728,31 +739,50 @@ fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
 }
 
 impl App {
-    /// Registers the shortcut, saying in a notification if it can't be.
-    fn register_hotkey(&mut self) {
-        match self.bind_hotkey() {
+    /// Registers the shortcuts, saying in a notification if one can't be.
+    fn register_hotkeys(&mut self) {
+        for shortcut in SHORTCUTS {
+            self.register_hotkey(shortcut);
+        }
+    }
+
+    /// Registers `shortcut`, saying in a notification if it can't be.
+    fn register_hotkey(&mut self, shortcut: Shortcut) {
+        match self.bind_hotkey(shortcut) {
             Ok(()) => {}
-            Err(Unbound::Taken) => self.tray.notify(
+            Err(Unbound::Taken | Unbound::Clash) => self.tray.notify(
                 tr().shortcut_unavailable,
                 &fill(
                     tr().shortcut_unavailable_detail,
-                    &[("hotkey", &self.config.hotkey)],
+                    &[("hotkey", &self.config.hotkey(shortcut))],
                 ),
             ),
             Err(Unbound::Invalid(e)) => self.tray.notify(tr().shortcut_invalid, &e),
         }
     }
 
-    fn bind_hotkey(&mut self) -> Result<(), Unbound> {
-        win::unregister_hotkey(self.hwnd, HOTKEY_LOOKUP);
-        self.hotkey_ok = false;
-        let hk = hotkey::parse(&self.config.hotkey).map_err(Unbound::Invalid)?;
+    fn bind_hotkey(&mut self, shortcut: Shortcut) -> Result<(), Unbound> {
+        let id = hotkey_id(shortcut);
+        win::unregister_hotkey(self.hwnd, id);
+        if shortcut == Shortcut::Lookup {
+            self.hotkey_ok = false;
+        }
+        let hk = hotkey::parse(self.config.hotkey(shortcut)).map_err(Unbound::Invalid)?;
         let modifiers = hk.modifiers | MOD_NOREPEAT;
-        win::register_hotkey(self.hwnd, HOTKEY_LOOKUP, modifiers, hk.vk)
-            .map_err(|_| Unbound::Taken)?;
-        self.hotkey_ok = true;
-        self.sync_tip();
+        win::register_hotkey(self.hwnd, id, modifiers, hk.vk).map_err(|_| Unbound::Taken)?;
+        if shortcut == Shortcut::Lookup {
+            self.hotkey_ok = true;
+            self.sync_tip();
+        }
         Ok(())
+    }
+
+    /// Lets go of every shortcut, as one is recorded, so that none fires
+    /// as it's pressed.
+    fn unregister_hotkeys(&mut self) {
+        for shortcut in SHORTCUTS {
+            win::unregister_hotkey(self.hwnd, hotkey_id(shortcut));
+        }
     }
 
     fn theme(&self) -> Theme {
@@ -816,9 +846,12 @@ impl App {
     // -----------------------------------------------------------------------
     // Flow
 
-    fn on_hotkey(&mut self) {
+    /// A shortcut was pressed: the selection is read, to look it up or,
+    /// with the translation shortcut, to translate it.
+    fn on_hotkey(&mut self, shortcut: Shortcut) {
         self.new_request();
         self.card.copying = false;
+        self.card.to_translate = false;
         // The card has the keyboard (a search): there's no selection to
         // read, so open a fresh search box, or close the one that's open.
         let foreground = unsafe { GetForegroundWindow() };
@@ -838,6 +871,7 @@ impl App {
         if self.is_pinned(foreground) {
             return self.open_search(tr().search_title, None);
         }
+        self.card.to_translate = shortcut == Shortcut::Translate;
         // The capture may press Ctrl+C itself, which is the app's to read.
         self.copy_key.set(self.hwnd, false);
         unsafe {
@@ -900,6 +934,7 @@ impl App {
         // The card opened on its way turns into the answer in place, unless
         // it was closed meanwhile.
         let in_place = std::mem::take(&mut self.card.copying);
+        let to_translate = std::mem::take(&mut self.card.to_translate);
         let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
         if in_place && !visible {
             return;
@@ -913,6 +948,9 @@ impl App {
             Some(s) => (s.text, s.anchor),
             None => (String::new(), None),
         };
+        if to_translate {
+            return self.translate_selection(&text, anchor, in_place);
+        }
         let word = match dictionary::normalize(&text) {
             Ok(word) => word,
             Err(NormalizeError::TooLong) => {
@@ -1193,7 +1231,7 @@ impl App {
                 self.apply_zoom();
                 i18n::set(self.config.ui_language);
                 ui::set_motion(self.config.animated());
-                self.register_hotkey();
+                self.register_hotkeys();
                 self.schedule_update_check(updating::FIRST_CHECK_MS);
                 self.refresh_settings();
                 if let Err(e) = offline::set_languages(&self.config.languages) {
@@ -1221,6 +1259,13 @@ enum Unbound {
     Invalid(String),
     /// Another app has it.
     Taken,
+    /// The other shortcut is the same keys.
+    Clash,
+}
+
+/// Whether two shortcuts, as written, are the same keys.
+fn same_keys(a: &str, b: &str) -> bool {
+    matches!((hotkey::parse(a), hotkey::parse(b)), (Ok(a), Ok(b)) if a == b)
 }
 
 /// `anchor`, if a card can open next to it: some width, about a line tall,

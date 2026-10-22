@@ -19,6 +19,67 @@ impl App {
         }
     }
 
+    /// The translation shortcut: turns `text`, the selection, into a
+    /// translation straight away, a word or a whole passage alike. The card
+    /// opens at `anchor`, unless it's open `in_place` already. A word the
+    /// dictionary has is translated as Ctrl+T would from its definition,
+    /// which Back then shows.
+    pub(super) fn translate_selection(&mut self, text: &str, anchor: Option<RECT>, in_place: bool) {
+        let text = match translate::passage(text) {
+            Ok(text) => text,
+            Err(NormalizeError::Empty) => {
+                let detail = fill(
+                    tr().nothing_selected_detail,
+                    &[("hotkey", &self.config.translate_hotkey)],
+                );
+                return self.show_message(anchor, tr().nothing_selected, &detail, true);
+            }
+            Err(NormalizeError::TooLong) => {
+                return self.show_message(anchor, tr().too_long, tr().translate_too_long, true);
+            }
+        };
+        // Translations come from the internet, like the online answers.
+        if !self.config.online_lookup {
+            return self.show_message(
+                anchor,
+                tr().translate_offline,
+                tr().translate_offline_detail,
+                true,
+            );
+        }
+        let detail = Detail {
+            senses: 1,
+            synonyms: 0,
+            examples: false,
+        };
+        let word = dictionary::normalize(&text).ok();
+        let def = word.as_deref().and_then(|w| offline::lookup(w, detail));
+        // What's selected is translated as it's written, in the languages
+        // the dictionary has it in.
+        let (current, senses) = match (word, def) {
+            (Some(word), Some(def)) => {
+                let query = Query {
+                    word,
+                    language: None,
+                };
+                (Some(query), Translatable::of(&def).senses)
+            }
+            _ => (None, Vec::new()),
+        };
+        if !in_place {
+            self.show_body(
+                anchor_or_cursor(anchor),
+                "WinDict",
+                None,
+                Body::Loading,
+                false,
+            );
+        }
+        (self.card.current, self.card.speakable) = (current, None);
+        self.card.translatable = Some(Translatable { word: text, senses });
+        self.translate();
+    }
+
     /// Turns the card into a translation of its word: from the language
     /// it's in to the other one in use, or as the settings say when that
     /// can't be told.
@@ -130,6 +191,8 @@ impl App {
     /// Shows the translation as it stands, the focus on `focus`, or where
     /// it was.
     pub(super) fn show_translation(&mut self, transition: Transition, focus: Option<Target>) {
+        // Back goes to the definition, when there's one to go to.
+        let back = self.card.current.is_some();
         let Some(t) = self.card.translating.as_mut() else {
             return;
         };
@@ -169,14 +232,12 @@ impl App {
             picker,
         };
         popup.hold_region(t.picking.is_some());
-        let _ = popup.set_back(true);
+        let _ = popup.set_back(back);
         let _ = popup.set_translate(false);
         let _ = popup.set_speak(false);
         let body = Body::Translation(card);
-        if popup
-            .set_content(&t.about.word, None, body, transition)
-            .is_err()
-        {
+        let title = translate::heading(&t.about.word);
+        if popup.set_content(&title, None, body, transition).is_err() {
             return;
         }
         t.shown = true;

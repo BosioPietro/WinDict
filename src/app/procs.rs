@@ -59,7 +59,8 @@ pub(super) unsafe extern "system" fn main_proc(
     match msg {
         WM_HOTKEY => {
             match wparam.0 as i32 {
-                HOTKEY_LOOKUP => with_app(|app| app.on_hotkey()),
+                HOTKEY_LOOKUP => with_app(|app| app.on_hotkey(Shortcut::Lookup)),
+                HOTKEY_TRANSLATE_SELECTION => with_app(|app| app.on_hotkey(Shortcut::Translate)),
                 HOTKEY_ESCAPE => with_app(|app| app.escape()),
                 HOTKEY_BACK | HOTKEY_BACK_ALT => with_app(|app| app.back()),
                 HOTKEY_NEXT_LINK => with_app(|app| app.step_link(true)),

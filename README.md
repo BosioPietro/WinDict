@@ -1,7 +1,7 @@
 # WinDict
 
 A Windows tray app for looking up and translating words. Select a word in any app and press
-**Ctrl+Alt+D**: its definition opens in a card next to the selection. Esc or a
+**Alt+D**: its definition opens in a card next to the selection. Esc or a
 click elsewhere closes it.
 
 It's meant to stay out of the way: a single executable with no installer, it
@@ -31,9 +31,6 @@ any, opposite ones ("good": "bad"). Clicking one opens its definition in the
 same card. To go back, use the arrow next to the word, Backspace, Alt+← or the
 mouse's back button.
 
-From the keyboard, Tab and Shift+Tab move between the words and the source
-links, and Enter opens the one that's highlighted.
-
 The speaker button after the word says it out loud, in the word's own
 language, with a voice Windows has for it. It shows only when there's one:
 voices for more languages can be added in Windows Settings, under Time &
@@ -41,6 +38,10 @@ language → Speech.
 
 When online lookup is on, the translate button at the top right of the card,
 or **Ctrl+T**, shows a translation of the word instead.
+
+To translate straight away, select a word, a phrase or a whole passage (up to
+500 characters) and press **Alt+T**: the card opens on the translation.
+For a single word the dictionary has, Back shows its definition.
 
 The card follows the system's light or dark theme and accent color.
 
@@ -67,7 +68,8 @@ open. It's written in Rust against the native Windows APIs.
 ## Settings
 
 Open the tray menu and choose **Settings…**. Changes apply right away. To
-change the shortcut, click it and press the new one; Esc keeps the old one.
+change a shortcut (the lookup one or the translation one, both under
+**General**), click it and press the new one; Esc keeps the old one.
 
 The settings are stored in `%APPDATA%\WinDict\config.json`. To edit the file
 by hand, use **Open config.json** at the bottom of the settings window, then

@@ -55,9 +55,9 @@ impl App {
         let recording = settings.recording();
         let _ = settings.begin_hide();
         self.sync_recording();
-        // Recording had put the shortcut aside.
+        // Recording had put the shortcuts aside.
         if recording {
-            self.register_hotkey();
+            self.register_hotkeys();
         }
         win::set_timer(self.hwnd, TIMER_SETTINGS_HIDE, HIDE_DONE_MS);
     }
@@ -108,22 +108,35 @@ impl App {
             Change::Close => return self.close_settings(),
             Change::OpenConfig => return open_config_file(),
             Change::Autostart(on) => return autostart::set(on),
-            // The shortcut being replaced mustn't fire as it's pressed to keep it.
-            Change::RecordingStarted => return win::unregister_hotkey(self.hwnd, HOTKEY_LOOKUP),
-            Change::RecordingStopped => return self.register_hotkey(),
-            Change::Hotkey(hotkey) => {
-                let previous = std::mem::replace(&mut self.config.hotkey, hotkey);
-                if let Err(unbound) = self.bind_hotkey() {
-                    self.config.hotkey = previous;
-                    self.register_hotkey();
+            // No shortcut may fire as it's pressed to be kept, the one being
+            // replaced or the other.
+            Change::RecordingStarted => return self.unregister_hotkeys(),
+            Change::RecordingStopped => return self.register_hotkeys(),
+            Change::Hotkey(shortcut, hotkey) => {
+                let other = SHORTCUTS.into_iter().find(|&s| s != shortcut);
+                let clash = other.filter(|&o| same_keys(self.config.hotkey(o), &hotkey));
+                let previous = std::mem::replace(self.config.hotkey_mut(shortcut), hotkey);
+                let bound = match clash {
+                    Some(_) => Err(Unbound::Clash),
+                    None => self.bind_hotkey(shortcut),
+                };
+                if let Err(unbound) = bound {
+                    *self.config.hotkey_mut(shortcut) = previous;
+                    self.register_hotkeys();
                     let why = match &unbound {
                         Unbound::Taken => tr().shortcut_taken,
+                        Unbound::Clash => tr().shortcut_clash,
                         Unbound::Invalid(e) => e,
                     };
+                    let hotkey = self.config.hotkey(shortcut).to_owned();
                     if let Some(settings) = self.settings.as_mut() {
-                        let _ = settings.reject_hotkey(&self.config.hotkey, why);
+                        let _ = settings.reject_hotkey(shortcut, &hotkey, why);
                     }
                     return;
+                }
+                // The other one was put aside while this was recorded.
+                if let Some(other) = other {
+                    self.register_hotkey(other);
                 }
             }
             Change::Theme(mode) => {

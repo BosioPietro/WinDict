@@ -620,7 +620,13 @@ impl Renderer {
         translation: &Translation,
         width: f32,
     ) -> Result<()> {
-        let main = self.text(&capitalize(&translation.text), &self.formats.heading, width)?;
+        // A passage reads at the size of the body: as a heading it'd fill the card.
+        let format = if translate::is_passage(&translation.text) {
+            &self.formats.body
+        } else {
+            &self.formats.heading
+        };
+        let main = self.text(&capitalize(&translation.text), format, width)?;
         let (_, h) = out.text(main, 0.0, Ink::Primary);
         out.y += h;
         if let Some(context) = &translation.context {

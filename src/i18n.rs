@@ -132,6 +132,10 @@ strings! {
     translate_into: "Translate into {language}",
     translating: "Translating\u{2026}",
     translate_failed: "Couldn\u{2019}t translate it",
+    /// Under "That's a lot of text", for the translation shortcut.
+    translate_too_long: "Select a shorter passage to translate.",
+    translate_offline: "Translation is off",
+    translate_offline_detail: "Turn on the online dictionary in Settings to translate.",
     /// The heading over translations that have no part of speech.
     also: "Also",
     no_languages_match: "No languages match",
@@ -166,6 +170,7 @@ strings! {
     needs_modifier: "Hold Ctrl, Alt or Win with the key",
     unusable_key: "That key can\u{2019}t be part of a shortcut",
     shortcut_taken: "Already used by Windows or another app",
+    shortcut_clash: "Already used by WinDict\u{2019}s other shortcut",
 
     // Settings: sections and rows, each with its description under it.
     general: "General",
@@ -188,6 +193,8 @@ strings! {
     animations: "Animations",
     animations_detail: "Starts as Windows has them; turn on to override",
     translation: "Translation",
+    translate_shortcut: "Translation shortcut",
+    translate_shortcut_detail: "To translate straight away",
     default_languages: "Default languages",
     default_languages_detail: "Translated from and into when it can\u{2019}t be inferred",
     mymemory_email: "MyMemory email",

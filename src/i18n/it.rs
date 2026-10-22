@@ -75,6 +75,9 @@ pub const IT: Strings = Strings {
     translate_into: "Traduci in {language}",
     translating: "Traduzione in corso\u{2026}",
     translate_failed: "Impossibile tradurre",
+    translate_too_long: "Seleziona un testo più breve da tradurre.",
+    translate_offline: "Traduzione disattivata",
+    translate_offline_detail: "Attiva il dizionario online nelle Impostazioni per tradurre.",
     also: "Anche",
     no_languages_match: "Nessuna lingua corrisponde",
 
@@ -105,6 +108,7 @@ pub const IT: Strings = Strings {
     needs_modifier: "Tieni premuto Ctrl, Alt o Win insieme al tasto",
     unusable_key: "Questo tasto non può far parte di una scorciatoia",
     shortcut_taken: "Già usata da Windows o da un\u{2019}altra app",
+    shortcut_clash: "Già usata dall\u{2019}altra scorciatoia di WinDict",
 
     // Settings: sections and rows, each with its description under it.
     general: "Generali",
@@ -127,6 +131,8 @@ pub const IT: Strings = Strings {
     animations: "Animazioni",
     animations_detail: "Usa le animazioni nell\u{2019}app",
     translation: "Traduzione",
+    translate_shortcut: "Scorciatoia di traduzione",
+    translate_shortcut_detail: "Per tradurre direttamente",
     default_languages: "Lingue predefinite",
     default_languages_detail: "Da e verso cui si traduce quando non si può determinare",
     mymemory_email: "Email di MyMemory",

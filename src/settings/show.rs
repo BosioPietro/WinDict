@@ -149,11 +149,11 @@ impl Settings {
         Ok(())
     }
 
-    /// Shows the shortcut's keys, or while recording, the modifiers held so
-    /// far. With `rise`, the new keys rise into place as the old fade.
-    pub(super) fn show_caps(&mut self, rise: bool) -> Result<()> {
+    /// Shows `shortcut`'s keys, or while it's recorded, the modifiers held
+    /// so far. With `rise`, the new keys rise into place as the old fade.
+    pub(super) fn show_caps(&mut self, shortcut: Shortcut, rise: bool) -> Result<()> {
         let (r, anim, t, s) = (&self.renderer, &self.anim, &self.theme, self.scale);
-        let layout: Layout = if self.recording {
+        let layout: Layout = if self.recording == Some(shortcut) {
             let held = hotkey::modifier_names(self.preview);
             if held.is_empty() {
                 r.layout_aligned(
@@ -167,13 +167,13 @@ impl Settings {
                 r.layout_caps(&held)?
             }
         } else {
-            let names = key_names(&self.values.config.hotkey);
+            let names = key_names(self.values.config.hotkey(shortcut));
             r.layout_caps(&names.iter().map(String::as_str).collect::<Vec<_>>())?
         };
         let Some(view) = self.view.as_mut() else {
             return Ok(());
         };
-        let v = &mut view.shortcut;
+        let v = &mut view.shortcuts[shortcut as usize];
         std::mem::swap(&mut v.caps, &mut v.old_caps);
         let size = v.caps.show(r, &layout, s, t)?;
         let rest = v3(
@@ -199,11 +199,11 @@ impl Settings {
         }
     }
 
-    pub(super) fn shake_caps(&self) -> Result<()> {
+    pub(super) fn shake_caps(&self, shortcut: Shortcut) -> Result<()> {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let v = &view.shortcut;
+        let v = &view.shortcuts[shortcut as usize];
         self.anim.shake(&v.caps.visual, v.caps_rest, self.scale)
     }
 
@@ -484,13 +484,21 @@ impl Settings {
         }
     }
 
-    /// The ring round the shortcut breathes while recording.
+    /// The ring round the shortcut being recorded breathes; the others fade.
     pub(super) fn show_recording(&self) -> Result<()> {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let (anim, ring) = (&self.anim, &view.shortcut.ring);
-        if !self.recording {
+        for shortcut in SHORTCUTS {
+            let ring = &view.shortcuts[shortcut as usize].ring;
+            self.show_ring(ring, self.recording == Some(shortcut))?;
+        }
+        Ok(())
+    }
+
+    fn show_ring(&self, ring: &ShapeVisual, recording: bool) -> Result<()> {
+        let anim = &self.anim;
+        if !recording {
             return anim.scalar(ring, "Opacity", 0.0, 150, 0, &anim.accelerate);
         }
         if !ui::motion() {
@@ -520,7 +528,7 @@ impl Settings {
         };
         match hit {
             Some(Hit::Close) => fade(&view.close_hover),
-            Some(Hit::Shortcut) => fade(&view.shortcut.hover),
+            Some(Hit::Shortcut(shortcut)) => fade(&view.shortcuts[shortcut as usize].hover),
             Some(Hit::Switch(sw)) => {
                 fade(&view.switches[sw as usize].hover)?;
                 self.show_knob(sw)

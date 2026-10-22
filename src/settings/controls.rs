@@ -132,19 +132,22 @@ impl Settings {
         Ok(Some(change))
     }
 
-    pub(super) fn start_recording(&mut self) -> Result<()> {
-        self.recording = true;
+    pub(super) fn start_recording(&mut self, shortcut: Shortcut) -> Result<()> {
+        self.recording = Some(shortcut);
         self.preview = held_modifiers();
-        self.show_caps(false)?;
-        self.set_note(Note::Shortcut, tr().recording_detail, false)?;
+        self.show_caps(shortcut, false)?;
+        self.set_note(Note::of(shortcut), tr().recording_detail, false)?;
         self.show_recording()
     }
 
-    /// Stops recording, showing the shortcut there is.
+    /// Stops recording, if it's going on, showing the shortcut there is.
     pub(super) fn stop_recording(&mut self) -> Result<()> {
-        self.recording = false;
-        self.show_caps(true)?;
-        self.set_note(Note::Shortcut, tr().shortcut_detail, false)?;
+        let Some(shortcut) = self.recording.take() else {
+            return Ok(());
+        };
+        self.show_caps(shortcut, true)?;
+        let note = Note::of(shortcut);
+        self.set_note(note, &note.usual(&self.values), false)?;
         self.show_recording()
     }
 
@@ -154,6 +157,9 @@ impl Settings {
         key: VIRTUAL_KEY,
         modifiers: HOT_KEY_MODIFIERS,
     ) -> Result<Option<Change>> {
+        let Some(shortcut) = self.recording else {
+            return Ok(None);
+        };
         if is_modifier(key) {
             self.set_preview(modifiers)?;
             return Ok(None);
@@ -173,14 +179,14 @@ impl Settings {
             None
         };
         if let Some(complaint) = complaint {
-            self.shake_caps()?;
-            self.set_note(Note::Shortcut, complaint, true)?;
+            self.shake_caps(shortcut)?;
+            self.set_note(Note::of(shortcut), complaint, true)?;
             return Ok(None);
         }
         let text = Hotkey { modifiers, vk }.to_string();
-        self.values.config.hotkey = text.clone();
+        *self.values.config.hotkey_mut(shortcut) = text.clone();
         self.stop_recording()?;
-        Ok(Some(Change::Hotkey(text)))
+        Ok(Some(Change::Hotkey(shortcut, text)))
     }
 
     pub(super) fn set_preview(&mut self, modifiers: HOT_KEY_MODIFIERS) -> Result<()> {
@@ -188,6 +194,9 @@ impl Settings {
             return Ok(());
         }
         self.preview = modifiers;
-        self.show_caps(false)
+        match self.recording {
+            Some(shortcut) => self.show_caps(shortcut, false),
+            None => Ok(()),
+        }
     }
 }
