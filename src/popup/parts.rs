@@ -473,3 +473,170 @@ impl Loader {
         let _ = self.visual.SetOpacity(0.0);
     }
 }
+
+/// "Copied", shown for a moment at the bottom of the card, on acrylic of
+/// its own so the text under it doesn't show through, a shade apart from
+/// the card's and casting a shadow on it.
+pub(super) struct Badge {
+    visual: ContainerVisual,
+    shadow: SpriteVisual,
+    shadow_surface: CompositionSurfaceBrush,
+    shadow_brush: CompositionNineGridBrush,
+    /// Inside `visual`, clipped to its rounded corners.
+    panel: ContainerVisual,
+    clip: CompositionRoundedRectangleGeometry,
+    tint: CompositionColorBrush,
+    shade: CompositionColorBrush,
+    border: ShapeVisual,
+    border_geometry: CompositionRoundedRectangleGeometry,
+    border_brush: CompositionColorBrush,
+    text: SpriteVisual,
+    text_brush: CompositionSurfaceBrush,
+}
+
+impl Badge {
+    pub(super) fn new(c: &Compositor, card: &ContainerVisual) -> Result<Badge> {
+        let visual = c.CreateContainerVisual()?;
+        visual.SetOpacity(0.0)?;
+        card.Children()?.InsertAtTop(&visual)?;
+        let shadow = c.CreateSpriteVisual()?;
+        let shadow_surface = c.CreateSurfaceBrush()?;
+        shadow_surface.SetStretch(CompositionStretch::Fill)?;
+        let shadow_brush = c.CreateNineGridBrush()?;
+        shadow_brush.SetSource(&shadow_surface)?;
+        shadow.SetBrush(&shadow_brush)?;
+        visual.Children()?.InsertAtTop(&shadow)?;
+        let panel = c.CreateContainerVisual()?;
+        let clip = c.CreateRoundedRectangleGeometry()?;
+        panel.SetClip(&c.CreateGeometricClipWithGeometry(&clip)?)?;
+        visual.Children()?.InsertAtTop(&panel)?;
+        // Acrylic, as on the card: the blurred desktop, then the tint, then
+        // a shade that sets it apart from the card.
+        let backdrop = c.CreateSpriteVisual()?;
+        backdrop.SetBrush(&c.CreateHostBackdropBrush()?)?;
+        backdrop.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
+        panel.Children()?.InsertAtTop(&backdrop)?;
+        let layer = |brush: &CompositionColorBrush| -> Result<()> {
+            let sprite = c.CreateSpriteVisual()?;
+            sprite.SetBrush(brush)?;
+            sprite.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
+            panel.Children()?.InsertAtTop(&sprite)
+        };
+        let (tint, shade) = (c.CreateColorBrush()?, c.CreateColorBrush()?);
+        layer(&tint)?;
+        layer(&shade)?;
+        let border = c.CreateShapeVisual()?;
+        let border_geometry = c.CreateRoundedRectangleGeometry()?;
+        let border_shape = c.CreateSpriteShapeWithGeometry(&border_geometry)?;
+        let border_brush = c.CreateColorBrush()?;
+        border_shape.SetStrokeBrush(&border_brush)?;
+        border_shape.SetStrokeThickness(1.0)?;
+        border.Shapes()?.Append(&border_shape)?;
+        visual.Children()?.InsertAtTop(&border)?;
+        let (text, text_brush) = text_sprite(c)?;
+        visual.Children()?.InsertAtTop(&text)?;
+        Ok(Badge {
+            visual,
+            shadow,
+            shadow_surface,
+            shadow_brush,
+            panel,
+            clip,
+            tint,
+            shade,
+            border,
+            border_geometry,
+            border_brush,
+            text,
+            text_brush,
+        })
+    }
+
+    pub(super) fn apply_theme(&self, renderer: &Renderer, t: &Theme, s: f32) -> Result<()> {
+        self.tint.SetColor(t.tint())?;
+        self.shade.SetColor(t.badge_shade())?;
+        self.border_brush.SetColor(t.border())?;
+        let opacity = t.shadow_opacity() * BADGE_SHADOW_OPACITY;
+        let (surface, inset) = renderer.draw_shadow(BADGE_SHADOW * s, BADGE_RADIUS * s, opacity)?;
+        self.shadow_surface.SetSurface(&surface)?;
+        self.shadow_brush.SetInsets(inset)
+    }
+
+    /// Shows it at the bottom of a card `card` pixels in size, then fades
+    /// it out again.
+    pub(super) fn flash(
+        &self,
+        anim: &Animator,
+        renderer: &Renderer,
+        theme: &Theme,
+        card: Vector2,
+        s: f32,
+    ) -> Result<()> {
+        let layout = renderer.layout_badge(COPIED_GLYPH, tr().copied)?;
+        self.text_brush
+            .SetSurface(&renderer.draw(&layout, s, theme)?)?;
+        let (w, h) = (
+            ((layout.width + 2.0 * BADGE_PAD_X) * s).round(),
+            ((layout.height + 2.0 * BADGE_PAD_Y) * s).round(),
+        );
+        let r = BADGE_RADIUS * s;
+        self.text.SetSize(v2(layout.width * s, layout.height * s))?;
+        self.text
+            .SetOffset(v3((BADGE_PAD_X * s).round(), (BADGE_PAD_Y * s).round()))?;
+        self.visual.SetSize(v2(w, h))?;
+        self.panel.SetSize(v2(w, h))?;
+        self.clip.SetSize(v2(w, h))?;
+        let spread = BADGE_SHADOW * s;
+        self.shadow
+            .SetOffset(v3(-spread, -spread + BADGE_SHADOW_DY * s))?;
+        self.shadow
+            .SetSize(v2(w + 2.0 * spread, h + 2.0 * spread))?;
+        self.clip.SetCornerRadius(v2(r, r))?;
+        // The hairline centred on the edge, inside it.
+        self.border.SetSize(v2(w, h))?;
+        self.border_geometry.SetOffset(v2(0.5, 0.5))?;
+        self.border_geometry.SetSize(v2(w - 1.0, h - 1.0))?;
+        self.border_geometry.SetCornerRadius(v2(r - 0.5, r - 0.5))?;
+        let rest = v3(
+            ((card.X - w) / 2.0).round(),
+            (card.Y - h - BADGE_BOTTOM * s).round(),
+        );
+
+        // Fades in, stays a moment and fades out, all in one: a second
+        // opacity animation would replace the first. It fades even with
+        // no motion, as it would otherwise not be seen at all.
+        let c = &anim.compositor;
+        let fade = c.CreateScalarKeyFrameAnimation()?;
+        fade.InsertKeyFrame(0.0, 0.0)?;
+        fade.InsertKeyFrameWithEasingFunction(0.12, 1.0, &anim.decelerate)?;
+        fade.InsertKeyFrame(0.78, 1.0)?;
+        fade.InsertKeyFrameWithEasingFunction(1.0, 0.0, &anim.accelerate)?;
+        fade.SetDuration(ts(BADGE_MS))?;
+        self.visual.SetOpacity(0.0)?;
+        self.visual
+            .StartAnimation(&HSTRING::from("Opacity"), &fade)?;
+        // Rises a little into place.
+        Animator::stop(&self.visual, &["Offset"]);
+        self.visual.SetOffset(v3(rest.X, rest.Y + BADGE_RISE * s))?;
+        anim.vector3(
+            &self.visual,
+            "Offset",
+            rest,
+            BADGE_RISE_MS,
+            0,
+            &anim.decelerate,
+        )
+    }
+
+    /// Hidden at once, for a new card.
+    pub(super) fn reset(&self) -> Result<()> {
+        Animator::stop(&self.visual, &["Opacity", "Offset"]);
+        self.visual.SetOpacity(0.0)
+    }
+
+    /// Lets go of the text's surface while the card is idle.
+    pub(super) fn release(&self) {
+        let _ = self.reset();
+        let _ = self.text_brush.SetSurface(None::<&ICompositionSurface>);
+    }
+}

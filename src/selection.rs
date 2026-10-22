@@ -637,6 +637,29 @@ fn read_clipboard_text(owner: HWND) -> Option<String> {
     text
 }
 
+/// Puts `text` on the clipboard, in place of what was there. Whether it did.
+pub fn set_clipboard_text(owner: HWND, text: &str) -> bool {
+    if !open_clipboard(owner) {
+        return false;
+    }
+    let wide: Vec<u8> = text
+        .encode_utf16()
+        .chain(Some(0))
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let set = unsafe {
+        let emptied = EmptyClipboard().is_ok();
+        if emptied {
+            set_data(CF_UNICODETEXT_ID, &wide);
+        }
+        emptied
+    };
+    unsafe {
+        let _ = CloseClipboard();
+    }
+    set
+}
+
 /// A copy of the memory-backed formats on the clipboard.
 ///
 /// Formats held as GDI or OLE objects, and anything past 32 MB in total,

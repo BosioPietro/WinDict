@@ -98,6 +98,7 @@ const HOTKEY_OPEN_LINK: i32 = 7;
 const HOTKEY_TRANSLATE: i32 = 8;
 const HOTKEY_SCROLL_UP: i32 = 9;
 const HOTKEY_SCROLL_DOWN: i32 = 10;
+const HOTKEY_COPY: i32 = 11;
 
 /// Hotkeys registered only while the card has a use for them, as (id,
 /// modifiers, key).
@@ -152,6 +153,11 @@ const TRANSLATE_KEY: Keys = &[(
     HOTKEY_TRANSLATE,
     HOT_KEY_MODIFIERS(MOD_CONTROL.0 | MOD_NOREPEAT.0),
     VIRTUAL_KEY(b'T' as u16),
+)];
+const COPY_KEY: Keys = &[(
+    HOTKEY_COPY,
+    HOT_KEY_MODIFIERS(MOD_CONTROL.0 | MOD_NOREPEAT.0),
+    VIRTUAL_KEY(b'C' as u16),
 )];
 
 const TIMER_HIDE: usize = 1;
@@ -429,6 +435,8 @@ pub struct App {
     open_key: KeySet,
     /// Up and Down.
     scroll_keys: KeySet,
+    /// Ctrl+C.
+    copy_key: KeySet,
     /// The search box, while the card shows one.
     search: Option<Search>,
     /// The window the search box took the keyboard from.
@@ -514,6 +522,7 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             link_keys: KeySet::new(LINK_KEYS),
             open_key: KeySet::new(OPEN_KEY),
             scroll_keys: KeySet::new(SCROLL_KEYS),
+            copy_key: KeySet::new(COPY_KEY),
             search: None,
             return_focus: None,
             installing: Vec::new(),
@@ -751,6 +760,8 @@ impl App {
                 self.open_search(tr().search_again_title, None)
             };
         }
+        // The capture may press Ctrl+C itself, which is the app's to read.
+        self.copy_key.set(self.hwnd, false);
         unsafe {
             let _ = PostThreadMessageW(
                 self.capture_thread,
@@ -928,6 +939,7 @@ impl App {
         self.set_link_keys(false, false);
         self.scroll_keys.set(self.hwnd, false);
         self.translate_key.set(self.hwnd, false);
+        self.copy_key.set(self.hwnd, false);
         self.remove_dismiss_hooks();
         self.dismiss_menu();
         self.search = None;

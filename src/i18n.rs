@@ -121,6 +121,8 @@ strings! {
     back_tip: "Back (Backspace)",
     translate_tip: "Translate (Ctrl+T)",
     swap_tip: "Swap languages",
+    /// Shown for a moment once Ctrl+C has copied a word.
+    copied: "Copied",
     /// `{word}`, `{from}`, `{to}`.
     translate_ambiguous: "\u{201C}{word}\u{201D} is a word in both {from} and {to}.",
     /// `{language}`.

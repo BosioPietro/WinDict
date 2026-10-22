@@ -68,6 +68,7 @@ pub(super) unsafe extern "system" fn main_proc(
                 HOTKEY_TRANSLATE => with_app(|app| app.toggle_translation()),
                 HOTKEY_SCROLL_UP => with_app(|app| app.scroll_line(false)),
                 HOTKEY_SCROLL_DOWN => with_app(|app| app.scroll_line(true)),
+                HOTKEY_COPY => with_app(|app| app.copy()),
                 _ => None,
             };
             LRESULT(0)

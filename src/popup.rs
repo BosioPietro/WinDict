@@ -27,7 +27,7 @@ use crate::ui::{
 use crate::win::{self, create_tooltip, set_tooltip_rect, Window};
 
 use body::Content;
-use parts::{Arrival, Header, IconButton, IconSpec, Loader};
+use parts::{Arrival, Badge, Header, IconButton, IconSpec, Loader};
 use scrolling::ScrollChrome;
 
 // Geometry, in DIPs.
@@ -62,6 +62,21 @@ const FOCUS_RADIUS: f32 = 4.0;
 /// How long the ring takes to glide to the next link, and to fade.
 const FOCUS_MS: u64 = 200;
 const FOCUS_FADE_MS: u64 = 100;
+/// "Copied" badge: room around its text, its corners, how far above the
+/// card's bottom it sits, how long it shows, and how far and long it rises.
+const BADGE_PAD_X: f32 = 14.0;
+const BADGE_PAD_Y: f32 = 7.0;
+const BADGE_RADIUS: f32 = 8.0;
+const BADGE_BOTTOM: f32 = 14.0;
+const BADGE_MS: u64 = 1100;
+const BADGE_RISE: f32 = 6.0;
+const BADGE_RISE_MS: u64 = 260;
+/// How far its shadow spreads and drops, and how dark it is next to the card's.
+const BADGE_SHADOW: f32 = 10.0;
+const BADGE_SHADOW_DY: f32 = 2.0;
+const BADGE_SHADOW_OPACITY: f32 = 0.8;
+/// "Accept" (a check mark) in Segoe Fluent Icons and Segoe MDL2 Assets.
+const COPIED_GLYPH: &str = "\u{E73E}";
 
 // Durations, in ms.
 pub const SHOW_MS: u64 = 340;
@@ -162,6 +177,7 @@ pub struct Popup {
     glide: SpriteVisual,
     glide_source: CompositionSurfaceBrush,
     glide_grid: CompositionNineGridBrush,
+    badge: Badge,
 
     theme: Theme,
     scale: f32,
@@ -269,6 +285,7 @@ impl Popup {
         glide_mask.SetMask(&glide_grid)?;
         glide.SetBrush(&glide_mask)?;
         frame.card.Children()?.InsertAtTop(&glide)?;
+        let badge = Badge::new(c, &frame.card)?;
 
         Ok(Popup {
             hwnd,
@@ -287,6 +304,7 @@ impl Popup {
             glide,
             glide_source,
             glide_grid,
+            badge,
             theme,
             scale: 1.0,
             grow_up: false,
@@ -346,6 +364,7 @@ impl Popup {
         self.content.release();
         self.back.release();
         self.translate.release();
+        self.badge.release();
         self.loader.stop();
         self.search.reset();
         self.renderer.trim();
@@ -519,6 +538,14 @@ impl Popup {
         Ok(())
     }
 
+    /// Shows for a moment, at the bottom of the card, that something was
+    /// copied.
+    pub fn show_copied(&self) -> Result<()> {
+        let card = v2(CARD_W * self.scale, self.card_h);
+        self.badge
+            .flash(&self.anim, &self.renderer, &self.theme, card, self.scale)
+    }
+
     /// Highlights the button the pointer, in window pixels, is on.
     pub fn hover(&mut self, point: Option<(i32, i32)>) -> Result<()> {
         self.pointer = point;
@@ -648,6 +675,7 @@ impl Popup {
         self.back.hide_at_once()?;
         self.translate.reset()?;
         self.search.reset();
+        self.badge.reset()?;
         // The pointer comes back to the card afresh.
         self.pointer = None;
         self.content.reset_swap()?;
@@ -725,6 +753,7 @@ impl Popup {
         self.content.apply_theme(c, &t, self.scale)?;
         self.back.apply_theme(&self.renderer, &t, self.scale)?;
         self.translate.apply_theme(&self.renderer, &t, self.scale)?;
+        self.badge.apply_theme(&self.renderer, &t, self.scale)?;
         self.scroll_chrome.apply_theme(&t)
     }
 

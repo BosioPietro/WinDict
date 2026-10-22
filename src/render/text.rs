@@ -200,6 +200,31 @@ impl Renderer {
         })
     }
 
+    /// A glyph in the accent color and a word of menu text beside it, as
+    /// wide as they are, level along their middles.
+    pub fn layout_badge(&self, glyph: &str, label: &str) -> Result<Layout> {
+        let gap = 7.0;
+        let glyph = self.text(glyph, &self.formats.icon, 100.0)?;
+        let label = self.text(label, &self.formats.menu, 400.0)?;
+        let (glyph_w, glyph_h, _) = metrics(&glyph);
+        let (label_w, label_h, _) = metrics(&label);
+        let height = glyph_h.max(label_h);
+        let mut out = Stack {
+            y: (height - glyph_h) / 2.0,
+            ..Default::default()
+        };
+        out.text(glyph, 0.0, Ink::Accent);
+        out.y = (height - label_h) / 2.0;
+        out.text(label, glyph_w + gap, Ink::Primary);
+        Ok(Layout {
+            items: out.items,
+            width: (glyph_w + gap + label_w).ceil(),
+            height,
+            links: Vec::new(),
+            caret: None,
+        })
+    }
+
     /// One unwrapped line of menu text.
     pub fn layout_line(&self, text: &str, face: Face, ink: Ink, width: f32) -> Result<Layout> {
         let format = match face {

@@ -67,6 +67,7 @@ pub const IT: Strings = Strings {
     back_tip: "Indietro (Backspace)",
     translate_tip: "Traduci (Ctrl+T)",
     swap_tip: "Inverti le lingue",
+    copied: "Copiato",
     translate_ambiguous: "\u{201C}{word}\u{201D} è una parola sia in {from} che in {to}.",
     translate_into: "Traduci in {language}",
     translating: "Traduzione in corso\u{2026}",

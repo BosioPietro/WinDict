@@ -1,4 +1,4 @@
-//! Keyboard focus on the card's links, and following them.
+//! Keyboard focus on the card's links, following them, and copying them.
 
 use super::*;
 
@@ -23,9 +23,12 @@ impl App {
         // Ctrl+T, likewise, only while there's a translation to go to or from.
         let visible = self.popup.as_ref().is_some_and(|p| p.visible);
         let translate = visible && (self.can_translate() || self.translating.is_some());
+        // And Ctrl+C only while there's something to copy.
+        let copy = popup.is_some() && self.copyable().is_some();
         self.set_link_keys(tab, enter);
         self.scroll_keys.set(self.hwnd, scroll);
         self.translate_key.set(self.hwnd, translate);
+        self.copy_key.set(self.hwnd, copy);
     }
 
     pub(super) fn set_link_keys(&mut self, tab: bool, enter: bool) {
@@ -51,6 +54,36 @@ impl App {
             .cloned();
         if let Some(target) = target {
             self.open_link(target);
+        }
+    }
+
+    /// What Ctrl+C copies: the word Tab is on, or else the translation the
+    /// card shows, or the word it defines.
+    fn copyable(&self) -> Option<String> {
+        let popup = self.popup.as_ref().filter(|p| p.visible)?;
+        if let Some(Target::Word(word)) = popup.focused_link() {
+            return Some(word.clone());
+        }
+        match &self.translating {
+            Some(t) if t.asking => None,
+            Some(t) => match &t.result {
+                Some(Ok(translation)) => Some(translation.text.clone()),
+                _ => None,
+            },
+            None => self.translatable.as_ref().map(|t| t.word.clone()),
+        }
+    }
+
+    /// Ctrl+C: copies what [`App::copyable`] says, and shows it did.
+    pub(super) fn copy(&mut self) {
+        let Some(text) = self.copyable() else {
+            return;
+        };
+        if !selection::set_clipboard_text(self.hwnd, &text) {
+            return;
+        }
+        if let Some(popup) = self.popup.as_ref() {
+            let _ = popup.show_copied();
         }
     }
 

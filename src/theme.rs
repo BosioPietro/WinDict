@@ -71,6 +71,16 @@ impl Theme {
         }
     }
 
+    /// Laid over the tint where something sits on the card: lighter in
+    /// light mode, darker in dark mode.
+    pub fn badge_shade(&self) -> Color {
+        if self.dark {
+            argb(0x33, 0x00, 0x00, 0x00)
+        } else {
+            argb(0x80, 0xFF, 0xFF, 0xFF)
+        }
+    }
+
     /// The ring around what the keyboard is on, as on Windows 11 controls.
     pub fn focus(&self) -> Color {
         if self.dark {
