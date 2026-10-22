@@ -820,6 +820,22 @@ impl App {
         }
     }
 
+    /// The left button down on the card: on the scrollbar, it grabs the
+    /// thumb or pages. Returns whether it was on it.
+    fn press_card(&mut self, x: i32, y: i32) -> bool {
+        self.popup
+            .as_mut()
+            .is_some_and(|p| p.press(x, y).unwrap_or(false))
+    }
+
+    /// The left button up on the card. Returns whether it had gone down on
+    /// the scrollbar, and so isn't a click.
+    fn release_card(&mut self) -> bool {
+        self.popup
+            .as_mut()
+            .is_some_and(|p| p.release().unwrap_or(false))
+    }
+
     /// The mouse wheel: scrolls the list of languages while it's open, or
     /// else the card.
     fn on_wheel(&mut self, delta: i32) {

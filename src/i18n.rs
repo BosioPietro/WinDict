@@ -172,7 +172,7 @@ strings! {
     animations_detail: "Starts as Windows has them; turn on to override",
     translation: "Translation",
     default_languages: "Default languages",
-    default_languages_detail: "Translated from and into when the card can\u{2019}t tell",
+    default_languages_detail: "Translated from and into when it can\u{2019}t be inferred",
     mymemory_email: "MyMemory email",
     mymemory_email_detail: "Raises the daily limit",
     lookup: "Lookup",

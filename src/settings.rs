@@ -42,7 +42,8 @@ use crate::render::{Align, Face, Ink, Layout, Picker, Renderer, Side, Target, PI
 use crate::selection;
 use crate::theme::Theme;
 use crate::ui::{
-    self, scale, ts, v2, v3, Animator, Bursts, Frame, Glide, Push, ScrollFade, Text, MARGIN,
+    self, scale, ts, v2, v3, Animator, Bursts, Frame, Glide, Push, ScrollFade, Scrollbar, Text,
+    Track, MARGIN,
 };
 use crate::win::{self, Window};
 
@@ -649,8 +650,7 @@ struct View {
     /// Shows `body`, faded at the ends it scrolls towards.
     fade: ScrollFade,
     scroller: ContainerVisual,
-    thumb: SpriteVisual,
-    thumb_clip: CompositionRoundedRectangleGeometry,
+    bar: Scrollbar,
     /// The tooltips, and what each shows over.
     tips: Vec<(Hit, TipView)>,
     /// What rises in as the window opens, and where each rests.
@@ -936,6 +936,8 @@ impl Settings {
 
     /// The pointer moved to a point in window pixels, or left.
     pub fn hover(&mut self, point: Option<(i32, i32)>) -> Result<()> {
+        // On the scrollbar, or dragging its thumb, nothing else is hovered.
+        let point = if self.hover_bar(point)? { None } else { point };
         let hit = point.and_then(|(x, y)| self.hit_at(x, y));
         self.set_hovered(hit)
     }
@@ -945,6 +947,9 @@ impl Settings {
         let hit = self.hit_at(x, y);
         // A click sends a tooltip away, as the system's do.
         self.show_tip(None)?;
+        if self.press_bar(x, y)? {
+            return Ok(None);
+        }
         // The pointer's in charge now: the ring goes until Tab brings it back.
         self.ring = false;
         self.active = true;
@@ -977,6 +982,10 @@ impl Settings {
     /// The left button came up at a point in window pixels: a click, if it's
     /// on what it went down on.
     pub fn release(&mut self, x: i32, y: i32) -> Result<Option<Change>> {
+        if self.view.as_mut().is_some_and(|view| view.bar.release()) {
+            self.hover(Some((x, y)))?;
+            return Ok(None);
+        }
         let pressed = self.pressed;
         self.set_pressed(None)?;
         match pressed {
@@ -1126,6 +1135,7 @@ impl Settings {
         self.active = false;
         self.show_editing()?;
         self.set_pressed(None)?;
+        self.lose_capture()?;
         if !self.recording {
             return Ok(None);
         }

@@ -25,7 +25,8 @@ use crate::theme::Theme;
 mod scroll;
 
 pub use scroll::{
-    max_scroll, size_thumb, stretch, stretch_limit, thumb_span, Bursts, Glide, Push, ScrollFade,
+    max_scroll, stretch, stretch_limit, thumb_span, Bursts, Glide, Push, ScrollFade, Scrollbar,
+    Track,
 };
 
 // Geometry, in DIPs.

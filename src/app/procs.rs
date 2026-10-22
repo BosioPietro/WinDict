@@ -166,8 +166,28 @@ pub(super) unsafe extern "system" fn popup_proc(
             post(WM_APP_WHEEL, WPARAM(delta), LPARAM(0));
             LRESULT(0)
         }
+        // The scrollbar: its thumb follows the pointer, even off the card,
+        // until the button comes up.
+        WM_LBUTTONDOWN => {
+            let (x, y) = win::lparam_point(lparam);
+            if with_app(|app| app.press_card(x, y)).unwrap_or(false) {
+                unsafe { SetCapture(hwnd) };
+            }
+            LRESULT(0)
+        }
         WM_LBUTTONUP => {
-            post(WM_APP_CLICK, WPARAM(0), lparam);
+            if with_app(|app| app.release_card()).unwrap_or(false) {
+                unsafe {
+                    let _ = ReleaseCapture();
+                }
+            } else {
+                post(WM_APP_CLICK, WPARAM(0), lparam);
+            }
+            LRESULT(0)
+        }
+        // Another window took the mouse: the thumb lets go.
+        WM_CAPTURECHANGED => {
+            with_app(|app| app.release_card());
             LRESULT(0)
         }
         // The mouse's back button.
@@ -297,10 +317,15 @@ pub(super) unsafe extern "system" fn settings_proc(
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            // Before the capture goes, which would let go of the thumb.
+            with_app(|app| app.in_settings(|s| s.release(x, y)));
             unsafe {
                 let _ = ReleaseCapture();
             }
-            with_app(|app| app.in_settings(|s| s.release(x, y)));
+            LRESULT(0)
+        }
+        WM_CAPTURECHANGED => {
+            with_app(|app| app.in_settings(|s| s.lose_capture().map(|_| None)));
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {

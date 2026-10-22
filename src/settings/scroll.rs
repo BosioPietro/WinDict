@@ -74,28 +74,101 @@ impl Settings {
         };
         let (anim, s) = (&self.anim, self.scale);
         let max = self.max_scroll();
+        let thumb = view.bar.visual();
         view.fade.show(anim, self.scroll, max, s, animate)?;
         if max <= 0.0 {
-            Animator::stop(&view.thumb, &["Opacity"]);
-            return view.thumb.SetOpacity(0.0);
+            Animator::stop(thumb, &["Opacity"]);
+            return thumb.SetOpacity(0.0);
         }
         let viewport = self.card.1 - view.header_h;
         let content_h = view.height(self.open);
-        let (top, thumb) = ui::thumb_span(viewport, content_h, self.scroll, max, s);
-        let x = ui::size_thumb(&view.thumb, &view.thumb_clip, self.card.0, thumb, s)?;
+        let (top, h) = ui::thumb_span(viewport, content_h, self.scroll, max, s);
+        let x = view.bar.size(self.card.0, h, s)?;
         let to = v3(x, view.header_h + top);
         let started = self.scroll_anim.filter(Glide::running);
         if let (true, Some(glide)) = (animate, started) {
-            glide.play(anim, &view.thumb, |scroll| {
+            glide.play(anim, thumb, |scroll| {
                 let (top, _) = ui::thumb_span(viewport, content_h, scroll, max, s);
                 v3(x, view.header_h + top)
             })?;
         } else if animate {
-            anim.vector3(&view.thumb, "Offset", to, SCROLL_MS, 0, &anim.decelerate)?;
+            anim.vector3(thumb, "Offset", to, SCROLL_MS, 0, &anim.decelerate)?;
         } else {
-            Animator::stop(&view.thumb, &["Offset"]);
-            view.thumb.SetOffset(to)?;
+            Animator::stop(thumb, &["Offset"]);
+            thumb.SetOffset(to)?;
         }
-        anim.scalar(&view.thumb, "Opacity", 1.0, 200, 0, &anim.decelerate)
+        anim.scalar(thumb, "Opacity", 1.0, 200, 0, &anim.decelerate)
+    }
+
+    // -----------------------------------------------------------------------
+    // The scrollbar
+
+    fn track(&self) -> Option<Track> {
+        let view = self.view.as_ref()?;
+        Some(Track {
+            viewport: self.card.1 - view.header_h,
+            content_h: view.height(self.open),
+            max: self.max_scroll(),
+            s: self.scale,
+        })
+    }
+
+    /// Whether a point in window pixels is on the scrollbar, and how far
+    /// down what scrolls it is.
+    fn bar_point(&self, x: i32, y: i32) -> Option<(bool, f32)> {
+        let (view, track) = (self.view.as_ref()?, self.track()?);
+        let (x, y) = self.card_point(x, y);
+        let y = y - view.header_h;
+        Some((Scrollbar::over(x, y, self.card.0, track), y))
+    }
+
+    /// The left button went down at a point in window pixels: on the
+    /// scrollbar, it grabs the thumb, or pages towards the point. Returns
+    /// whether it was on it.
+    pub(super) fn press_bar(&mut self, x: i32, y: i32) -> Result<bool> {
+        let (Some((true, y)), Some(track)) = (self.bar_point(x, y), self.track()) else {
+            return Ok(false);
+        };
+        let scroll = self.visible_scroll().clamp(0.0, track.max);
+        let Some(view) = self.view.as_mut() else {
+            return Ok(false);
+        };
+        let page = view.bar.press(y, scroll, track);
+        view.bar.hover(&self.anim, true)?;
+        if let Some(to) = page {
+            self.scroll_to(to)?;
+        }
+        Ok(true)
+    }
+
+    /// The pointer at a point in window pixels, or gone: widens the thumb
+    /// over the scrollbar, and drags it while it's held. Returns whether
+    /// the pointer's on the scrollbar, or dragging it.
+    pub(super) fn hover_bar(&mut self, point: Option<(i32, i32)>) -> Result<bool> {
+        let at = point.and_then(|(x, y)| self.bar_point(x, y));
+        let (over, y) = at.unwrap_or((false, 0.0));
+        let track = self.track();
+        let Some(view) = self.view.as_mut() else {
+            return Ok(false);
+        };
+        view.bar.hover(&self.anim, over)?;
+        let dragging = view.bar.dragging();
+        let to = at.zip(track).and_then(|(_, track)| view.bar.drag(y, track));
+        if let Some(to) = to {
+            self.glide_to(to, Push::None, 0)?;
+        }
+        Ok(over || dragging)
+    }
+
+    /// The window lost the mouse, or stopped being the active one: the
+    /// thumb lets go.
+    pub fn lose_capture(&mut self) -> Result<()> {
+        let Some(view) = self.view.as_mut() else {
+            return Ok(());
+        };
+        if view.bar.release() {
+            view.bar.hover(&self.anim, false)?;
+        }
+        Ok(())
     }
 }

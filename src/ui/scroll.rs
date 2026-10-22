@@ -510,20 +510,174 @@ impl ScrollFade {
     }
 }
 
-/// Sizes a scrollbar `thumb`, clipped by `clip`, `h` pixels tall. Returns
-/// its left edge in a card `card_w` pixels wide.
-pub fn size_thumb(
-    thumb: &SpriteVisual,
-    clip: &CompositionRoundedRectangleGeometry,
-    card_w: f32,
-    h: f32,
-    s: f32,
-) -> Result<f32> {
-    let w = THUMB_W * s;
-    thumb.SetSize(v2(w, h))?;
-    clip.SetSize(v2(w, h))?;
-    clip.SetCornerRadius(v2(w / 2.0, w / 2.0))?;
-    Ok(card_w - THUMB_RIGHT * s)
+/// Where content scrolls to for the thumb's top to be at `top`, below the
+/// viewport's: the other way round from [`thumb_span`].
+pub fn scroll_for_thumb(track: Track, top: f32) -> f32 {
+    let Track {
+        viewport,
+        content_h,
+        max,
+        s,
+    } = track;
+    let (_, h) = thumb_span(viewport, content_h, 0.0, max, s);
+    let room = viewport - (THUMB_PAD + THUMB_END) * s - h;
+    if room <= 0.0 {
+        return 0.0;
+    }
+    ((top - THUMB_PAD * s) / room).clamp(0.0, 1.0) * max
+}
+
+/// What a scrollbar runs down, in pixels at `s` per DIP: a viewport that
+/// tall, over content `content_h` tall that scrolls `0..=max`.
+#[derive(Clone, Copy)]
+pub struct Track {
+    pub viewport: f32,
+    pub content_h: f32,
+    pub max: f32,
+    pub s: f32,
+}
+
+/// How far in from the card's right edge, in DIPs, the pointer is over the
+/// scrollbar.
+const BAR_HIT: f32 = 12.0;
+/// How wide the thumb gets under the pointer.
+const THUMB_WIDE: f32 = 6.0;
+/// How long the thumb takes to widen or narrow, and how long it stays wide
+/// once the pointer's gone, as Windows' does, in ms.
+const WIDEN_MS: u64 = 120;
+const NARROW_DELAY_MS: u64 = 500;
+/// How much of the viewport a press on the track above or below the thumb
+/// scrolls by.
+const PAGE: f32 = 0.875;
+
+/// A scrollbar's thumb: a thin line that widens, as Windows 11's does, while
+/// the pointer's over it, and that can be dragged.
+pub struct Scrollbar {
+    thumb: SpriteVisual,
+    /// How far between thin (0) and wide (1) the thumb is, which its clip
+    /// follows, and the two widths, in pixels.
+    props: CompositionPropertySet,
+    wide: bool,
+    /// Whether the left button went down on it, and, while the thumb's
+    /// dragged, how far below its top it was grabbed.
+    held: bool,
+    grab: Option<f32>,
+}
+
+impl Scrollbar {
+    /// A hidden thumb painted with `brush`, at the top of `parent`.
+    pub fn new(c: &Compositor, parent: &ContainerVisual, brush: &CompositionBrush) -> Result<Self> {
+        let thumb = c.CreateSpriteVisual()?;
+        thumb.SetBrush(brush)?;
+        thumb.SetOpacity(0.0)?;
+        let props = thumb.Properties()?;
+        for name in ["Thin", "Wide", "Hover"] {
+            props.InsertScalar(&HSTRING::from(name), 0.0)?;
+        }
+        // The visual is as wide as the thumb gets; the clip shows as much of
+        // it as it is now, along its right edge.
+        let clip = c.CreateRoundedRectangleGeometry()?;
+        let w = "Lerp(p.Thin, p.Wide, p.Hover)";
+        for (property, expression) in [
+            ("Size", format!("Vector2({w}, v.Size.Y)")),
+            ("Offset", format!("Vector2(v.Size.X - {w}, 0)")),
+            ("CornerRadius", format!("Vector2({w} / 2, {w} / 2)")),
+        ] {
+            let e = c.CreateExpressionAnimationWithExpression(&HSTRING::from(expression))?;
+            e.SetReferenceParameter(&HSTRING::from("p"), &props)?;
+            e.SetReferenceParameter(&HSTRING::from("v"), &thumb)?;
+            clip.StartAnimation(&HSTRING::from(property), &e)?;
+        }
+        thumb.SetClip(&c.CreateGeometricClipWithGeometry(&clip)?)?;
+        parent.Children()?.InsertAtTop(&thumb)?;
+        Ok(Scrollbar {
+            thumb,
+            props,
+            wide: false,
+            held: false,
+            grab: None,
+        })
+    }
+
+    pub fn visual(&self) -> &SpriteVisual {
+        &self.thumb
+    }
+
+    /// Sizes the thumb `h` pixels tall, at `s` pixels per DIP. Returns its
+    /// left edge in a card `card_w` pixels wide.
+    pub fn size(&self, card_w: f32, h: f32, s: f32) -> Result<f32> {
+        self.props
+            .InsertScalar(&HSTRING::from("Thin"), THUMB_W * s)?;
+        self.props
+            .InsertScalar(&HSTRING::from("Wide"), THUMB_WIDE * s)?;
+        self.thumb.SetSize(v2(THUMB_WIDE * s, h))?;
+        // Widening, it grows to the left: its right edge stays put.
+        Ok(card_w - (THUMB_RIGHT - THUMB_W + THUMB_WIDE) * s)
+    }
+
+    /// Whether a point `x` across a card `card_w` wide and `y` down the
+    /// viewport is on the strip the thumb runs down, when there's anything
+    /// to scroll.
+    pub fn over(x: f32, y: f32, card_w: f32, track: Track) -> bool {
+        track.max > 0.0
+            && x >= card_w - BAR_HIT * track.s
+            && x < card_w
+            && y >= 0.0
+            && y < track.viewport
+    }
+
+    /// Widens the thumb while the pointer is `over` it, or it's dragged,
+    /// and narrows it a while after.
+    pub fn hover(&mut self, anim: &Animator, over: bool) -> Result<()> {
+        let wide = over || self.grab.is_some();
+        if wide == self.wide {
+            return Ok(());
+        }
+        self.wide = wide;
+        let (to, delay) = if wide {
+            (1.0, 0)
+        } else {
+            (0.0, NARROW_DELAY_MS)
+        };
+        anim.scalar(&self.props, "Hover", to, WIDEN_MS, delay, &anim.decelerate)
+    }
+
+    /// The left button went down `y` down the viewport, on the strip, with
+    /// the content scrolled `scroll`. On the thumb, it grabs it; above or
+    /// below, it returns where to scroll to, a page that way.
+    pub fn press(&mut self, y: f32, scroll: f32, track: Track) -> Option<f32> {
+        self.held = true;
+        let (top, h) = thumb_span(track.viewport, track.content_h, scroll, track.max, track.s);
+        if (top..top + h).contains(&y) {
+            self.grab = Some(y - top);
+            return None;
+        }
+        let page = track.viewport * PAGE;
+        let to = if y < top {
+            scroll - page
+        } else {
+            scroll + page
+        };
+        Some(to.clamp(0.0, track.max))
+    }
+
+    /// Where to scroll to, while the thumb's dragged, for the pointer `y`
+    /// down the viewport.
+    pub fn drag(&self, y: f32, track: Track) -> Option<f32> {
+        self.grab
+            .map(|grab| scroll_for_thumb(track, y - grab).round())
+    }
+
+    pub fn dragging(&self) -> bool {
+        self.grab.is_some()
+    }
+
+    /// The left button came up, or the window lost it. Returns whether it
+    /// had gone down on the scrollbar.
+    pub fn release(&mut self) -> bool {
+        self.grab = None;
+        std::mem::take(&mut self.held)
+    }
 }
 
 #[cfg(test)]
@@ -550,6 +704,25 @@ mod tests {
         assert!((h - (viewport - (THUMB_PAD + THUMB_END) * s) / 4.0).abs() < 1e-3);
         let (_, tiny) = thumb_span(viewport, 100_000.0, 0.0, 1.0, s);
         assert_eq!(tiny, THUMB_MIN_H * s);
+    }
+
+    #[test]
+    fn dragging_the_thumb_scrolls_to_where_it_is() {
+        let (viewport, content_h, s) = (200.0, 800.0, 1.5);
+        let max = max_scroll(content_h, viewport, s);
+        let track = Track {
+            viewport,
+            content_h,
+            max,
+            s,
+        };
+        for scroll in [0.0, 120.0, max / 2.0, max] {
+            let (top, _) = thumb_span(viewport, content_h, scroll, max, s);
+            assert!((scroll_for_thumb(track, top) - scroll).abs() < 1e-2);
+        }
+        // Dragged past either end, it stops there.
+        assert_eq!(scroll_for_thumb(track, -50.0), 0.0);
+        assert_eq!(scroll_for_thumb(track, 10_000.0), max);
     }
 
     #[test]

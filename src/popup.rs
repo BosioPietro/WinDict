@@ -22,7 +22,7 @@ use crate::searchbox::SearchBox;
 use crate::theme::Theme;
 use crate::ui::{
     self, attach, blink, monitor_at, scale, text_sprite, ts, v2, v3, Animator, Bursts, Frame,
-    Glide, Push, ScrollFade, MARGIN, RESIZE_MS,
+    Glide, Push, ScrollFade, Scrollbar, Track, MARGIN, RESIZE_MS,
 };
 use crate::win::{self, create_tooltip, set_tooltip_rect, Window};
 
@@ -522,6 +522,8 @@ impl Popup {
     /// Highlights the button the pointer, in window pixels, is on.
     pub fn hover(&mut self, point: Option<(i32, i32)>) -> Result<()> {
         self.pointer = point;
+        // On the scrollbar, or dragging its thumb, nothing else is hovered.
+        let point = if self.hover_bar(point)? { None } else { point };
         if self.search.active {
             let point = point.map(|(x, y)| self.card_point(x, y));
             return self.search.hover(&self.anim, point);

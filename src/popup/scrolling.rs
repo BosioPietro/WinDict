@@ -61,55 +61,101 @@ impl Popup {
         let s = self.scale;
         let max = self.max_scroll();
         let anim = &self.anim;
-        let chrome = &self.scroll_chrome;
+        let thumb = self.scroll_chrome.bar.visual();
         self.content
             .show_fades(anim, self.scroll, max, s, animate)?;
 
         if max <= 0.0 {
-            Animator::stop(&chrome.thumb, &["Opacity"]);
-            chrome.thumb.SetOpacity(0.0)?;
+            Animator::stop(thumb, &["Opacity"]);
+            thumb.SetOpacity(0.0)?;
             return Ok(());
         }
         let viewport = self.card_h - self.header_h;
         let thumb_y =
             |scroll: f32| self.header_h + ui::thumb_span(viewport, self.body_h, scroll, max, s).0;
-        let (_, thumb) = ui::thumb_span(viewport, self.body_h, self.scroll, max, s);
+        let (_, h) = ui::thumb_span(viewport, self.body_h, self.scroll, max, s);
         let y = thumb_y(self.scroll);
-        let x = ui::size_thumb(&chrome.thumb, &chrome.thumb_clip, CARD_W * s, thumb, s)?;
+        let x = self.scroll_chrome.bar.size(CARD_W * s, h, s)?;
         let glide = self.scroll_anim.filter(|glide| animate && glide.running());
         if let Some(glide) = glide {
             // Track the content exactly, from where the thumb is now.
-            glide.play(anim, &chrome.thumb, |scroll| v3(x, thumb_y(scroll)))?;
+            glide.play(anim, thumb, |scroll| v3(x, thumb_y(scroll)))?;
         } else {
-            Animator::stop(&chrome.thumb, &["Offset"]);
-            chrome.thumb.SetOffset(v3(x, y))?;
+            Animator::stop(thumb, &["Offset"]);
+            thumb.SetOffset(v3(x, y))?;
         }
-        anim.scalar(&chrome.thumb, "Opacity", 1.0, 200, 150, &anim.decelerate)
+        anim.scalar(thumb, "Opacity", 1.0, 200, 150, &anim.decelerate)
+    }
+
+    fn track(&self) -> Track {
+        Track {
+            viewport: self.card_h - self.header_h,
+            content_h: self.body_h,
+            max: self.max_scroll(),
+            s: self.scale,
+        }
+    }
+
+    /// Whether a point in window pixels is on the scrollbar, and how far
+    /// down the body it is.
+    fn bar_point(&self, x: i32, y: i32) -> (bool, f32) {
+        let (x, y) = self.card_point(x, y);
+        let y = y - self.header_h;
+        (Scrollbar::over(x, y, CARD_W * self.scale, self.track()), y)
+    }
+
+    /// The left button went down at a point in window pixels: on the
+    /// scrollbar, it grabs the thumb, or pages towards the point. Returns
+    /// whether it was on it.
+    pub fn press(&mut self, x: i32, y: i32) -> Result<bool> {
+        let (over, y) = self.bar_point(x, y);
+        if !over {
+            return Ok(false);
+        }
+        let (scroll, track) = (self.visible_scroll(), self.track());
+        let page = self.scroll_chrome.bar.press(y, scroll, track);
+        self.scroll_chrome.bar.hover(&self.anim, true)?;
+        if let Some(to) = page {
+            self.scroll_to(to, Push::None, SCROLL_MS)?;
+        }
+        Ok(true)
+    }
+
+    /// The left button came up. Returns whether it had gone down on the
+    /// scrollbar.
+    pub fn release(&mut self) -> Result<bool> {
+        let held = self.scroll_chrome.bar.release();
+        if held {
+            self.hover_bar(self.pointer)?;
+        }
+        Ok(held)
+    }
+
+    /// The pointer at a point in window pixels, or gone: widens the thumb
+    /// over the scrollbar, and drags it while it's held. Returns whether
+    /// the pointer's on the scrollbar, or dragging it.
+    pub(super) fn hover_bar(&mut self, point: Option<(i32, i32)>) -> Result<bool> {
+        let (over, y) = point.map_or((false, 0.0), |(x, y)| self.bar_point(x, y));
+        self.scroll_chrome.bar.hover(&self.anim, over)?;
+        let to = point.and_then(|_| self.scroll_chrome.bar.drag(y, self.track()));
+        if let Some(to) = to.filter(|&to| to != self.scroll) {
+            self.scroll_to(to, Push::None, 0)?;
+        }
+        Ok(over || self.scroll_chrome.bar.dragging())
     }
 }
 
-/// The scrollbar thumb, shown only when the content scrolls.
+/// The scrollbar, shown only when the content scrolls.
 pub(super) struct ScrollChrome {
-    thumb: SpriteVisual,
-    thumb_clip: CompositionRoundedRectangleGeometry,
+    bar: Scrollbar,
     thumb_brush: CompositionColorBrush,
 }
 
 impl ScrollChrome {
     pub(super) fn new(c: &Compositor, card: &ContainerVisual) -> Result<ScrollChrome> {
-        let thumb = c.CreateSpriteVisual()?;
-        let thumb_clip = c.CreateRoundedRectangleGeometry()?;
-        thumb.SetClip(&c.CreateGeometricClipWithGeometry(&thumb_clip)?)?;
         let thumb_brush = c.CreateColorBrush()?;
-        thumb.SetBrush(&thumb_brush)?;
-        thumb.SetOpacity(0.0)?;
-        card.Children()?.InsertAtTop(&thumb)?;
-
-        Ok(ScrollChrome {
-            thumb,
-            thumb_clip,
-            thumb_brush,
-        })
+        let bar = Scrollbar::new(c, card, &thumb_brush.cast()?)?;
+        Ok(ScrollChrome { bar, thumb_brush })
     }
 
     pub(super) fn apply_theme(&self, t: &Theme) -> Result<()> {

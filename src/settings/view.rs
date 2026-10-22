@@ -428,7 +428,12 @@ impl Settings {
 
         let (ring, ring_source, ring_grid) = self.build_ring(&scroller)?;
 
-        let (thumb, thumb_clip) = self.build_thumb(&content)?;
+        let (c, t) = (&self.anim.compositor, &self.theme);
+        let bar = Scrollbar::new(
+            c,
+            &content,
+            &c.CreateColorBrushWithColor(t.thumb())?.cast()?,
+        )?;
         let tips = vec![
             (Hit::Info, self.build_tip(&content, i18n::tr().email_tip)?),
             (Hit::Swap, self.build_tip(&content, i18n::tr().swap_tip)?),
@@ -443,8 +448,7 @@ impl Settings {
             body,
             fade,
             scroller,
-            thumb,
-            thumb_clip,
+            bar,
             tips,
             reveal,
             shortcut: parts.shortcut.ok_or_else(missing)?,
@@ -565,21 +569,6 @@ impl Settings {
         ring.SetBrush(&ring_mask)?;
         scroller.Children()?.InsertAtTop(&ring)?;
         Ok((ring, ring_source, ring_grid))
-    }
-
-    /// The scrollbar's thumb, in `content`, and its rounded clip.
-    fn build_thumb(
-        &self,
-        content: &ContainerVisual,
-    ) -> Result<(SpriteVisual, CompositionRoundedRectangleGeometry)> {
-        let (c, t) = (&self.anim.compositor, &self.theme);
-        let thumb = c.CreateSpriteVisual()?;
-        thumb.SetBrush(&c.CreateColorBrushWithColor(t.thumb())?)?;
-        let thumb_clip = c.CreateRoundedRectangleGeometry()?;
-        thumb.SetClip(&c.CreateGeometricClipWithGeometry(&thumb_clip)?)?;
-        thumb.SetOpacity(0.0)?;
-        content.Children()?.InsertAtTop(&thumb)?;
-        Ok((thumb, thumb_clip))
     }
 
     /// The shortcut row's edit symbol and keys, and the ring that breathes
