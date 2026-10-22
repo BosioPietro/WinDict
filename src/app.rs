@@ -398,30 +398,7 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
     ui::set_motion(config.animated());
     unsafe {
         let instance = HINSTANCE(GetModuleHandleW(None)?.0);
-        let arrow = LoadCursorW(None, IDC_ARROW)?;
-        let icon = LoadIconW(Some(instance), PCWSTR(tray::ICON_ID as usize as *const u16))
-            .unwrap_or_default();
-        let classes: [(PCWSTR, WNDPROC, HCURSOR, HICON); 4] = [
-            (
-                MAIN_CLASS,
-                Some(main_proc),
-                HCURSOR::default(),
-                HICON::default(),
-            ),
-            (POPUP_CLASS, Some(popup_proc), arrow, HICON::default()),
-            (MENU_CLASS, Some(menu_proc), arrow, HICON::default()),
-            (SETTINGS_CLASS, Some(settings_proc), arrow, icon),
-        ];
-        for (name, proc, cursor, icon) in classes {
-            RegisterClassW(&WNDCLASSW {
-                lpfnWndProc: proc,
-                hInstance: instance,
-                hCursor: cursor,
-                hIcon: icon,
-                lpszClassName: name,
-                ..Default::default()
-            });
-        }
+        register_classes(instance)?;
 
         // A hidden top-level window (not message-only: it must receive the
         // TaskbarCreated broadcast).
@@ -444,36 +421,12 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
         let tray = Tray::new(hwnd, WM_APP_TRAY);
         let taskbar_created = RegisterWindowMessageW(w!("TaskbarCreated"));
 
-        // Selection capture runs on its own thread: it sleeps while waiting
-        // for keys to be released and for the clipboard to change. That
-        // thread also owns the clipboard after a restore, so it must pump
-        // messages (other apps send WM_DESTROYCLIPBOARD to the owner).
-        let (ready, thread_id) = channel::<u32>();
         let (tx, inbox) = channel();
         let events = Events {
             tx,
             hwnd: hwnd.0 as isize,
         };
-        let capture_events = events.clone();
-        std::thread::spawn(move || {
-            let capturer = Capturer::new();
-            let mut msg = MSG::default();
-            // Create the message queue before announcing ourselves.
-            let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
-            let _ = ready.send(GetCurrentThreadId());
-            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-                if msg.hwnd.is_invalid() && msg.message == WM_APP_CAPTURE {
-                    let id = msg.wParam.0 as u64;
-                    let use_ui_automation = msg.lParam.0 != 0;
-                    let selection = capturer.capture(use_ui_automation);
-                    capture_events.send(Event::Captured(Captured { id, selection }));
-                } else {
-                    let _ = TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
-                }
-            }
-        });
-        let capture_thread = thread_id.recv().unwrap_or(0);
+        let capture_thread = spawn_capture_thread(events.clone());
 
         let mut app = App {
             config,
@@ -548,6 +501,64 @@ pub fn run(compositor: Compositor) -> windows::core::Result<()> {
         });
     }
     Ok(())
+}
+
+/// Registers the window classes of the main, card, menu and settings windows.
+unsafe fn register_classes(instance: HINSTANCE) -> windows::core::Result<()> {
+    let arrow = LoadCursorW(None, IDC_ARROW)?;
+    let icon =
+        LoadIconW(Some(instance), PCWSTR(tray::ICON_ID as usize as *const u16)).unwrap_or_default();
+    let classes: [(PCWSTR, WNDPROC, HCURSOR, HICON); 4] = [
+        (
+            MAIN_CLASS,
+            Some(main_proc),
+            HCURSOR::default(),
+            HICON::default(),
+        ),
+        (POPUP_CLASS, Some(popup_proc), arrow, HICON::default()),
+        (MENU_CLASS, Some(menu_proc), arrow, HICON::default()),
+        (SETTINGS_CLASS, Some(settings_proc), arrow, icon),
+    ];
+    for (name, proc, cursor, icon) in classes {
+        RegisterClassW(&WNDCLASSW {
+            lpfnWndProc: proc,
+            hInstance: instance,
+            hCursor: cursor,
+            hIcon: icon,
+            lpszClassName: name,
+            ..Default::default()
+        });
+    }
+    Ok(())
+}
+
+/// Starts the thread that captures selections, and returns its id.
+///
+/// Selection capture runs on its own thread: it sleeps while waiting
+/// for keys to be released and for the clipboard to change. That
+/// thread also owns the clipboard after a restore, so it must pump
+/// messages (other apps send WM_DESTROYCLIPBOARD to the owner).
+fn spawn_capture_thread(events: Events) -> u32 {
+    let (ready, thread_id) = channel::<u32>();
+    std::thread::spawn(move || unsafe {
+        let capturer = Capturer::new();
+        let mut msg = MSG::default();
+        // Create the message queue before announcing ourselves.
+        let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+        let _ = ready.send(GetCurrentThreadId());
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            if msg.hwnd.is_invalid() && msg.message == WM_APP_CAPTURE {
+                let id = msg.wParam.0 as u64;
+                let use_ui_automation = msg.lParam.0 != 0;
+                let selection = capturer.capture(use_ui_automation);
+                events.send(Event::Captured(Captured { id, selection }));
+            } else {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+    });
+    thread_id.recv().unwrap_or(0)
 }
 
 /// Runs `f` on the app state. Returns `None`, dropping the event, if the state
