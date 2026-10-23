@@ -24,8 +24,10 @@ use crate::theme::Theme;
 
 mod list;
 mod scroll;
+mod shapes;
 
 pub use list::List;
+pub use shapes::{container, outline, rounded, Rect};
 
 pub use scroll::{
     max_scroll, stretch, stretch_limit, thumb_span, Bursts, Glide, Push, ScrollFade, Scrollbar,

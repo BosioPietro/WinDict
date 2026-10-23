@@ -44,8 +44,8 @@ use crate::render::{
 use crate::selection;
 use crate::theme::Theme;
 use crate::ui::{
-    self, scale, ts, v2, v3, Animator, Bursts, Frame, Glide, List, Push, ScrollFade, Scrollbar,
-    Text, Track, MARGIN,
+    self, scale, ts, v2, v3, Animator, Bursts, Frame, Glide, List, Push, Rect, ScrollFade,
+    Scrollbar, Text, Track, MARGIN,
 };
 use crate::win::{self, Window};
 
@@ -547,46 +547,6 @@ const SECTIONS: &[(Label, &[Row])] = &[
         ],
     ),
 ];
-
-/// A rectangle, in pixels.
-#[derive(Clone, Copy, Default, Debug)]
-struct Rect {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-}
-
-impl Rect {
-    fn contains(&self, x: f32, y: f32) -> bool {
-        x >= self.x && x < self.x + self.w && y >= self.y && y < self.y + self.h
-    }
-
-    fn outset(&self, d: f32) -> Rect {
-        Rect {
-            x: self.x - d,
-            y: self.y - d,
-            w: self.w + 2.0 * d,
-            h: self.h + 2.0 * d,
-        }
-    }
-
-    fn offset(&self, by: Vector3) -> Rect {
-        Rect {
-            x: self.x + by.X,
-            y: self.y + by.Y,
-            ..*self
-        }
-    }
-
-    fn at(&self) -> Vector3 {
-        v3(self.x, self.y)
-    }
-
-    fn size(&self) -> Vector2 {
-        v2(self.w, self.h)
-    }
-}
 
 /// The scale of the window zoomed to `zoom` on a monitor of `scale` pixels
 /// per DIP: no wider than fits in the `work` area, unless even the unzoomed

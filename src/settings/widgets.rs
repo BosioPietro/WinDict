@@ -8,6 +8,7 @@ use windows::UI::Composition::*;
 use windows_numerics::Vector3;
 
 use crate::theme::rgb;
+pub(super) use crate::ui::{container, outline, rounded};
 
 use super::*;
 
@@ -347,76 +348,6 @@ impl Settings {
         };
         Ok((view, at, rects))
     }
-}
-
-pub(super) fn container(
-    c: &Compositor,
-    parent: &ContainerVisual,
-    at: Vector3,
-) -> Result<ContainerVisual> {
-    let visual = c.CreateContainerVisual()?;
-    visual.SetOffset(at)?;
-    parent.Children()?.InsertAtTop(&visual)?;
-    Ok(visual)
-}
-
-/// A rectangle of `color` with corners of `radius` pixels, in `parent`.
-pub(super) fn rounded(
-    c: &Compositor,
-    r: &Renderer,
-    parent: &ContainerVisual,
-    rect: Rect,
-    radius: f32,
-    color: Color,
-) -> Result<(SpriteVisual, CompositionColorBrush)> {
-    let visual = c.CreateSpriteVisual()?;
-    let brush = c.CreateColorBrushWithColor(color)?;
-    visual.SetOffset(rect.at())?;
-    visual.SetSize(rect.size())?;
-    if radius > 0.0 {
-        let mask = r.draw_rounded(rect.w, rect.h, radius, None)?;
-        visual.SetBrush(&masked(c, &brush, &mask)?)?;
-    } else {
-        visual.SetBrush(&brush)?;
-    }
-    parent.Children()?.InsertAtTop(&visual)?;
-    Ok((visual, brush))
-}
-
-/// A hairline just inside a rounded rectangle, in `parent`.
-pub(super) fn outline(
-    c: &Compositor,
-    r: &Renderer,
-    parent: &ContainerVisual,
-    rect: Rect,
-    radius: f32,
-    color: Color,
-) -> Result<SpriteVisual> {
-    let visual = c.CreateSpriteVisual()?;
-    let brush = c.CreateColorBrushWithColor(color)?;
-    let mask = r.draw_rounded(rect.w, rect.h, radius, Some(1.0))?;
-    visual.SetBrush(&masked(c, &brush, &mask)?)?;
-    visual.SetOffset(rect.at())?;
-    visual.SetSize(rect.size())?;
-    parent.Children()?.InsertAtTop(&visual)?;
-    Ok(visual)
-}
-
-/// `brush` showing only through `mask`, drawn pixel for pixel. The round
-/// edges of the controls are drawn this way rather than as shapes or clips:
-/// what scrolls is drawn again through a visual surface to fade its ends,
-/// and that leaves shapes and clips jagged, but not what's drawn already.
-fn masked(
-    c: &Compositor,
-    brush: &CompositionColorBrush,
-    mask: &CompositionDrawingSurface,
-) -> Result<CompositionMaskBrush> {
-    let shape = c.CreateSurfaceBrushWithSurface(mask)?;
-    shape.SetStretch(CompositionStretch::Fill)?;
-    let masked = c.CreateMaskBrush()?;
-    masked.SetSource(brush)?;
-    masked.SetMask(&shape)?;
-    Ok(masked)
 }
 
 /// A hairline just inside a rounded rectangle, in `parent`, that can be
