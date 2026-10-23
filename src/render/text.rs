@@ -265,7 +265,26 @@ impl Renderer {
 
     /// One unwrapped line of menu text.
     pub fn layout_line(&self, text: &str, face: Face, ink: Ink, width: f32) -> Result<Layout> {
-        let format = match face {
+        let mut out = Stack::default();
+        let (_, height) = out.text(self.text(text, self.face(face), width)?, 0.0, ink);
+        Ok(Layout {
+            items: out.items,
+            width,
+            height,
+            links: Vec::new(),
+            caret: None,
+            list: None,
+        })
+    }
+
+    /// How wide `text` is in `face`, on one line, in DIPs.
+    pub fn line_width(&self, text: &str, face: Face) -> Result<f32> {
+        let line = self.text(text, self.face(face), f32::from(u16::MAX))?;
+        Ok(metrics(&line).0)
+    }
+
+    fn face(&self, face: Face) -> &IDWriteTextFormat {
+        match face {
             Face::Menu => &self.formats.menu,
             Face::Small => &self.formats.footer,
             Face::Icon => &self.formats.icon,
@@ -278,17 +297,7 @@ impl Renderer {
             Face::Setting => &self.formats.setting,
             Face::Value => &self.formats.value,
             Face::Chrome => &self.formats.chrome,
-        };
-        let mut out = Stack::default();
-        let (_, height) = out.text(self.text(text, format, width)?, 0.0, ink);
-        Ok(Layout {
-            items: out.items,
-            width,
-            height,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        })
+        }
     }
 
     /// Like [`Renderer::layout_line`], `align`ed in `width`.

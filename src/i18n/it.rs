@@ -18,6 +18,12 @@ pub const IT: Strings = Strings {
     updating: "Aggiornamento di WinDict",
     updating_detail: "Installazione della versione {version}. WinDict si riavvierà da solo.",
     update_failed: "Impossibile aggiornare WinDict",
+    ui_access_on: "WinDict appare sopra Start",
+    ui_access_on_detail: "Ora la scheda si apre sopra Start e Cerca.",
+    ui_access_off: "WinDict non appare più sopra Start",
+    ui_access_off_detail: "WinDict chiude Start e Cerca prima di mostrare la scheda.",
+    ui_access_unchanged: "L\u{2019}accesso all\u{2019}interfaccia non è cambiato",
+    ui_access_unchanged_detail: "WinDict si è riavviato, ma Windows l\u{2019}ha avviato come prima.",
     draw_window_failed: "WinDict non è riuscito a disegnare la finestra",
     draw_menu_failed: "WinDict non è riuscito a disegnare il menu",
     draw_settings_failed: "WinDict non è riuscito a disegnare le sue impostazioni",
@@ -105,7 +111,7 @@ pub const IT: Strings = Strings {
     intro_translate_detail: "Seleziona una parola, una frase o un intero passaggio e \
         premi {hotkey}: la scheda si apre sulla traduzione. Su una definizione, \
         {card_hotkey} traduce la parola.",
-    intro_above_start: "Mostra la scheda sopra Start",
+    intro_above_start: "Mostra sopra Start",
     intro_above_start_detail: "Windows tiene Start e Cerca sopra ogni altra finestra, \
         quindi WinDict li chiude prima di mostrare una definizione. Con l\u{2019}accesso \
         all\u{2019}interfaccia, la scheda appare sopra di loro. Windows chiede il \
@@ -114,6 +120,13 @@ pub const IT: Strings = Strings {
     intro_ready_detail: "WinDict resta nell\u{2019}area di notifica, accanto \
         all\u{2019}orologio. Fai clic sulla sua icona per le impostazioni, e per gli \
         aggiornamenti quando ce n\u{2019}è uno.",
+    intro_show_me: "Mostra",
+    intro_shortcut_taken: "Un\u{2019}altra app usa già questa scorciatoia.",
+    intro_choose_shortcut: "Scegline un\u{2019}altra",
+    intro_ui_access: "Mostra sopra Start",
+    intro_ui_access_waiting: "In attesa di Windows\u{2026}",
+    intro_ui_access_cancelled: "Windows non ha avuto il permesso: non è cambiato nulla.",
+    intro_ui_access_failed: "Non ha funzionato: {error}",
 
     // Settings: the window.
     settings: "Impostazioni",
@@ -145,12 +158,12 @@ pub const IT: Strings = Strings {
     start_with_windows: "Avvia con Windows",
     start_with_windows_detail: "Avvia WinDict insieme al PC",
     check_updates: "Cerca aggiornamenti",
-    check_updates_detail: "Una volta al giorno; l\u{2019}icona mostra un pallino se ce n\u{2019}è uno",
+    check_updates_detail: "Avviene una volta al giorno",
     card: "Scheda",
     theme: "Tema",
     theme_detail: "Colori dell\u{2019}applicazione",
     text_size: "Dimensione testo",
-    text_size_detail: "Anche Ctrl+più, Ctrl+meno o Ctrl+rotellina sulla scheda",
+    text_size_detail: "Anche Ctrl+più, Ctrl+meno o Ctrl+rotellina",
     definitions: "Definizioni",
     definitions_detail: "Significati mostrati per parola",
     synonyms: "Sinonimi",

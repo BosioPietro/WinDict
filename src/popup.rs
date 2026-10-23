@@ -157,6 +157,39 @@ pub fn centred_anchor(near: POINT, zoom: f32) -> RECT {
     centred_in(work, zoomed(work, scale, zoom))
 }
 
+/// An anchor that opens a card beside `window` (screen pixels), level with
+/// its top: on its right, or on its left when there's no room there, for a
+/// card zoomed to `zoom`.
+pub fn anchor_beside(window: RECT, zoom: f32) -> RECT {
+    let near = POINT {
+        x: (window.left + window.right) / 2,
+        y: window.top,
+    };
+    let (work, scale) = monitor_at(near);
+    let s = zoomed(work, scale, zoom);
+    let px = |dip: f32| (dip * s).round() as i32;
+    let (card_w, gap) = (px(CARD_W), px(BESIDE_GAP));
+    let card_x = if window.right + gap + card_w <= work.right - px(SCREEN_GAP) {
+        window.right + gap
+    } else {
+        window.left - gap - card_w
+    };
+    // `placement` puts the card's top that far under the anchor, and its
+    // left that far left of it.
+    let bottom = window.top - px(ANCHOR_GAP);
+    RECT {
+        left: card_x + px(PAD_X),
+        top: bottom - px(BESIDE_LINE),
+        right: card_x + px(PAD_X) + 1,
+        bottom,
+    }
+}
+
+/// Between a window and a card opened beside it, and how tall the line the
+/// card's anchored to is, in DIPs.
+const BESIDE_GAP: f32 = 12.0;
+const BESIDE_LINE: f32 = 18.0;
+
 /// The scale of a card zoomed to `zoom` on a monitor of `scale` pixels per
 /// DIP: no larger than fits the tallest card in the `work` area, unless
 /// even the unzoomed one doesn't.

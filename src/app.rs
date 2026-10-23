@@ -41,6 +41,7 @@ use crate::dictionary::{self, Definition, Detail, Lookup, NormalizeError};
 use crate::dicts;
 use crate::hotkey;
 use crate::i18n::{self, fill, tr};
+use crate::installed;
 use crate::lang::LangCode;
 use crate::menu::{Command, Menu};
 use crate::offline;
@@ -396,6 +397,9 @@ enum Event {
     UpdateChecked(Result<Option<Release>, String>),
     /// The update was started, or why it couldn't be.
     Updated(Result<(), String>),
+    /// Why UI access couldn't be turned on or off: had it been, WinDict
+    /// would be restarting.
+    UiAccess(installed::UiAccessError),
 }
 
 /// Sends [`Event`]s to the UI thread. They go through a channel, and an
@@ -669,6 +673,8 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             app.tray.notify(tr().settings_not_loaded, &e);
         } else if let Some(e) = dictionary_error {
             app.tray.notify(tr().dictionary_not_loaded, &e);
+        } else if let Some(on) = app.config.ui_access_asked {
+            app.after_ui_access(on);
         } else if updated {
             app.tray.notify(
                 tr().updated,
@@ -934,6 +940,7 @@ impl App {
                 }
                 Event::UpdateChecked(result) => self.on_update_checked(result),
                 Event::Updated(result) => self.on_updated(result),
+                Event::UiAccess(error) => self.on_ui_access_failed(error),
             }
         }
     }
@@ -1251,6 +1258,7 @@ impl App {
             Command::Autostart => {
                 autostart::set(!autostart::is_enabled());
                 self.refresh_settings();
+                self.refresh_intro();
             }
             Command::Settings => self.open_settings(),
             Command::Reload => {

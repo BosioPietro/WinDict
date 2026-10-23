@@ -63,6 +63,13 @@ strings! {
     /// `{version}`.
     updating_detail: "Installing version {version}. WinDict will start again by itself.",
     update_failed: "WinDict couldn\u{2019}t update",
+    /// Once WinDict has restarted for UI access to be turned on or off.
+    ui_access_on: "WinDict shows above Start",
+    ui_access_on_detail: "The card now opens on top of Start and Search.",
+    ui_access_off: "WinDict no longer shows above Start",
+    ui_access_off_detail: "WinDict closes Start and Search before it shows the card.",
+    ui_access_unchanged: "UI access didn\u{2019}t change",
+    ui_access_unchanged_detail: "WinDict restarted, but Windows started it as it was.",
     draw_window_failed: "WinDict couldn\u{2019}t draw its window",
     draw_menu_failed: "WinDict couldn\u{2019}t draw its menu",
     draw_settings_failed: "WinDict couldn\u{2019}t draw its settings",
@@ -176,6 +183,17 @@ strings! {
     intro_ready: "You\u{2019}re all set",
     intro_ready_detail: "WinDict waits in the notification area, by the clock. Click \
         its icon for the settings, and for updates when there\u{2019}s one.",
+    /// Opens a card on an example, as the step's shortcut would.
+    intro_show_me: "Show me",
+    /// Over "Choose another", when the lookup shortcut couldn't be had.
+    intro_shortcut_taken: "Another app is using this shortcut.",
+    intro_choose_shortcut: "Choose another",
+    /// The switch that turns UI access on.
+    intro_ui_access: "Show above Start",
+    intro_ui_access_waiting: "Waiting for Windows\u{2026}",
+    intro_ui_access_cancelled: "Windows didn\u{2019}t get permission, so nothing changed.",
+    /// `{error}`.
+    intro_ui_access_failed: "That didn\u{2019}t work: {error}",
 
     // Settings: the window.
     settings: "Settings",

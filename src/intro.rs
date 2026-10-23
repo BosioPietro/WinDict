@@ -7,6 +7,9 @@
 //! the new slides in after it, line after line, while the accent dot
 //! stretches over to the step it's on.
 //!
+//! Under what a step says is what can be done there: a card opened on an
+//! example, or a switch for UI access, or for starting with Windows.
+//!
 //! The pictures are close-ups of WinDict on the Windows desktop, in light
 //! and dark: the one for the system's theme shows.
 
@@ -56,9 +59,28 @@ const BADGE_RADIUS: f32 = 8.0;
 const BADGE_GAP: f32 = 14.0;
 /// Between a step's title and what it says.
 const TITLE_GAP: f32 = 14.0;
+/// Between what a step says and what can be done there, and under the
+/// line saying the shortcut is taken.
+const ACTIONS_GAP: f32 = 20.0;
+const WARNING_GAP: f32 = 10.0;
+/// A step's switch, on a row like the settings window's, and the line
+/// under it saying how turning it on went.
+const ROW_H: f32 = 56.0;
+const ROW_PAD: f32 = 16.0;
+const ROW_RADIUS: f32 = 8.0;
+const SWITCH_W: f32 = 40.0;
+const SWITCH_H: f32 = 20.0;
+const KNOB: f32 = 12.0;
+const KNOB_HOVER: f32 = 14.0;
+const NOTE_GAP: f32 = 10.0;
+/// How dim the switch is while Windows asks.
+const WAITING_OPACITY: f32 = 0.5;
 /// From the buttons to the bottom of the card.
 const PAD_BOTTOM: f32 = 28.0;
+/// A button is at least this wide, and has this much room either side of
+/// a longer label.
 const BUTTON_W: f32 = 96.0;
+const BUTTON_PAD: f32 = 16.0;
 const BUTTON_H: f32 = 32.0;
 const BUTTON_GAP: f32 = 8.0;
 const BUTTON_RADIUS: f32 = 4.0;
@@ -87,6 +109,8 @@ const HOVER_MS: u64 = 100;
 const PRESS_MS: u64 = 90;
 const FOCUS_MS: u64 = 150;
 const THEME_MS: u64 = 300;
+const KNOB_MS: u64 = 300;
+const SWITCH_FILL_MS: u64 = 160;
 /// Once what's going has faded, it's taken away.
 const GONE_MS: u32 = SETTLE_MS as u32 + 30;
 const TIMER_GONE: usize = 1;
@@ -188,11 +212,32 @@ pub struct Shortcuts {
     pub translate: String,
 }
 
+/// What the steps offer, as things stand.
+#[derive(Clone, Copy, Default)]
+pub struct Options {
+    /// Another app has the lookup shortcut.
+    pub shortcut_taken: bool,
+    /// Translations can be had: they come from the internet, like the
+    /// online answers.
+    pub online: bool,
+    /// The card shows above Start and Search.
+    pub ui_access: bool,
+    pub autostart: bool,
+}
+
 /// Something done in the window, for the app to carry out.
 #[derive(Debug, PartialEq)]
 pub enum Action {
     /// Done, or closed: either way, it's been seen.
     Close,
+    /// A card on an example, as the step's shortcut would open it.
+    ShowMe(Step),
+    /// The settings, to choose another lookup shortcut.
+    ChooseShortcut,
+    /// Turn UI access on or off. The switch waits, until
+    /// [`Intro::settle_ui_access`].
+    UiAccess(bool),
+    Autostart(bool),
 }
 
 /// What's under the pointer, or has the keyboard.
@@ -201,6 +246,10 @@ enum Hit {
     Close,
     Back,
     Next,
+    ShowMe,
+    ChooseShortcut,
+    /// The step's switch, and its row.
+    Switch,
 }
 
 struct ButtonView {
@@ -209,6 +258,31 @@ struct ButtonView {
     /// Round it while it has the keyboard.
     ring: SpriteVisual,
     at: Rect,
+}
+
+/// A step's switch.
+struct SwitchView {
+    /// Dimmed while Windows asks.
+    root: ContainerVisual,
+    /// The accent fill of a switch that's on, over the outline of one that's off.
+    on: SpriteVisual,
+    off: ContainerVisual,
+    knob: SpriteVisual,
+    knob_brush: CompositionColorBrush,
+    /// The knob's place when off and when on.
+    rest: [Vector3; 2],
+}
+
+/// What a step shows on the right of the card, which slides as the step
+/// changes.
+struct StepView {
+    /// Its title, what it says and what can be done there.
+    text: ContainerVisual,
+    /// What can be clicked in it: buttons, or the switch's row.
+    controls: Vec<(Hit, ButtonView)>,
+    switch: Option<SwitchView>,
+    /// Under the switch for UI access: how turning it on is going.
+    note: Option<Text>,
 }
 
 /// A dot for a step.
@@ -223,9 +297,7 @@ struct View {
     /// Holds the picture, which fills it.
     pane: ContainerVisual,
     picture: SpriteVisual,
-    /// The step's title, what it says and its keys, which slide as the step
-    /// changes.
-    text: ContainerVisual,
+    step: StepView,
     close_at: Rect,
     close_hover: SpriteVisual,
     dots: Vec<DotView>,
@@ -250,6 +322,11 @@ pub struct Intro {
     /// Which of them shows.
     at: usize,
     shortcuts: Shortcuts,
+    options: Options,
+    /// Windows is asking whether UI access may change.
+    waiting: bool,
+    /// How turning UI access on went, and whether it failed.
+    note: Option<(String, bool)>,
     theme: Theme,
     scale: f32,
     hovered: Option<Hit>,
@@ -282,6 +359,9 @@ impl Intro {
             steps: Step::all(false),
             at: 0,
             shortcuts: Shortcuts::default(),
+            options: Options::default(),
+            waiting: false,
+            note: None,
             theme,
             scale: 1.0,
             hovered: None,
@@ -296,19 +376,23 @@ impl Intro {
     // -----------------------------------------------------------------------
     // Public API
 
-    /// Opens the window on its first step, in the middle of the screen
-    /// `near` (screen pixels) is on.
+    /// Opens the window on `start`, or else its first step, in the middle
+    /// of the screen `near` (screen pixels) is on.
     pub fn show(
         &mut self,
         near: POINT,
         theme: Theme,
         steps: Vec<Step>,
+        start: Step,
         shortcuts: Shortcuts,
+        options: Options,
     ) -> Result<()> {
         let (work, s) = ui::monitor_at(near);
         let s = fitted(work, s);
+        self.at = steps.iter().position(|&step| step == start).unwrap_or(0);
         (self.theme, self.scale, self.steps, self.shortcuts) = (theme, s, steps, shortcuts);
-        (self.at, self.hovered, self.pressed, self.focus) = (0, None, None, None);
+        (self.options, self.waiting, self.note) = (options, false, None);
+        (self.hovered, self.pressed, self.focus) = (None, None, None);
         self.ring = false;
         self.retitle();
         self.frame.apply_theme(&self.renderer, &theme, s)?;
@@ -331,9 +415,50 @@ impl Intro {
         self.visible = true;
         self.anim.fade_in(root, ui::FADE_IN_MS, SHOW_MS)?;
         if let Some(view) = &self.view {
-            self.bring_in(&view.text, v3(0.0, SLIDE / 3.0 * s), ui::FADE_IN_MS)?;
+            self.bring_in(&view.step.text, v3(0.0, SLIDE / 3.0 * s), ui::FADE_IN_MS)?;
         }
         Ok(())
+    }
+
+    /// The shortcuts or what the steps offer changed, while the window's
+    /// open: it shows them, as it does the language now current.
+    pub fn update(&mut self, shortcuts: Shortcuts, options: Options) -> Result<()> {
+        // What the switch was turned to holds while Windows asks.
+        let ui_access = if self.waiting {
+            self.options.ui_access
+        } else {
+            options.ui_access
+        };
+        self.shortcuts = shortcuts;
+        self.options = Options {
+            ui_access,
+            ..options
+        };
+        self.retitle();
+        self.replace_view(false)
+    }
+
+    /// UI access is `on`, as turning it on or off left it, and `note` says
+    /// how that went, and whether it failed.
+    pub fn settle_ui_access(&mut self, on: bool, note: Option<(String, bool)>) -> Result<()> {
+        (self.options.ui_access, self.waiting, self.note) = (on, false, note);
+        self.show_switch(true)?;
+        self.show_note()
+    }
+
+    /// The card, in screen pixels.
+    pub fn card_rect(&self) -> RECT {
+        let mut rect = RECT::default();
+        unsafe {
+            let _ = GetWindowRect(self.hwnd, &mut rect);
+        }
+        let m = (MARGIN * self.scale).round() as i32;
+        RECT {
+            left: rect.left + m,
+            top: rect.top + m,
+            right: rect.right - m,
+            bottom: rect.bottom - m,
+        }
     }
 
     /// Fades the window out. The caller hides it after [`ui::HIDE_MS`].
@@ -485,8 +610,41 @@ impl Intro {
             Hit::Next if self.at + 1 < self.steps.len() => self.go(self.at + 1)?,
             Hit::Next => return Ok(Some(Action::Close)),
             Hit::Back => {}
+            Hit::ShowMe => return Ok(Some(Action::ShowMe(self.steps[self.at]))),
+            Hit::ChooseShortcut => return Ok(Some(Action::ChooseShortcut)),
+            Hit::Switch => return self.flip(),
         }
         Ok(None)
+    }
+
+    /// Turns the step's switch over. The one for UI access waits for
+    /// Windows to ask, and can't be turned again until it has.
+    fn flip(&mut self) -> Result<Option<Action>> {
+        let action = match self.steps[self.at] {
+            Step::AboveStart if !self.waiting => {
+                self.options.ui_access = !self.options.ui_access;
+                self.waiting = true;
+                self.note = Some((tr().intro_ui_access_waiting.into(), false));
+                Action::UiAccess(self.options.ui_access)
+            }
+            Step::Ready => {
+                self.options.autostart = !self.options.autostart;
+                Action::Autostart(self.options.autostart)
+            }
+            _ => return Ok(None),
+        };
+        self.show_switch(true)?;
+        self.show_note()?;
+        Ok(Some(action))
+    }
+
+    /// Whether the step's switch is on.
+    fn switch_on(&self) -> bool {
+        match self.steps[self.at] {
+            Step::AboveStart => self.options.ui_access,
+            Step::Ready => self.options.autostart,
+            Step::Lookup | Step::Translate => false,
+        }
     }
 
     /// Shows step `to`: its picture fades in over the old one as it settles,
@@ -501,7 +659,7 @@ impl Intro {
         let (anim, s) = (&self.anim, self.scale);
         let dx = if forward { SLIDE * s } else { -SLIDE * s };
 
-        let old = view.text.clone();
+        let old = view.step.text.clone();
         Animator::stop(&old, &["Opacity", "Offset"]);
         anim.scalar(&old, "Opacity", 0.0, LEAVE_MS, 0, &anim.accelerate)?;
         anim.vector3(&old, "Offset", v3(-dx, 0.0), LEAVE_MS, 0, &anim.accelerate)?;
@@ -522,29 +680,35 @@ impl Intro {
             0,
             &anim.decelerate,
         )?;
-        let text = self.build_text(&view.content)?;
-        self.bring_in(&text, v3(dx, 0.0), LEAVE_MS)?;
+        let step = self.build_step(&view.content)?;
+        self.bring_in(&step.text, v3(dx, 0.0), LEAVE_MS)?;
         self.show_dots(&view.dots, true)?;
 
         // Back comes and goes, and Next turns to Done.
         view.content.Children()?.Remove(&view.footer)?;
         let (footer, buttons) = self.build_footer(&view.content)?;
-        // What had the keyboard may be gone: Next has it then.
-        if self
-            .focus
-            .is_some_and(|f| !buttons.iter().any(|(hit, _)| *hit == f))
-        {
-            self.focus = Some(Hit::Next);
-        }
         self.view = Some(View {
             picture,
-            text,
+            step,
             footer,
             buttons,
             ..view
         });
+        self.keep_focus();
+        self.show_switch(false)?;
+        self.show_note()?;
         self.show_hover(self.hovered)?;
         self.show_focus()
+    }
+
+    /// What had the keyboard may be gone: Next has it then.
+    fn keep_focus(&mut self) {
+        if self
+            .focus
+            .is_some_and(|f| !self.targets().any(|(hit, _)| *hit == f))
+        {
+            self.focus = Some(Hit::Next);
+        }
     }
 
     /// Brings each line of `text` in from `from` away, a beat after the one
@@ -568,7 +732,12 @@ impl Intro {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let stops: Vec<Hit> = view.buttons.iter().map(|(hit, _)| *hit).collect();
+        // What the step offers, then the buttons from the left.
+        let mut footer: Vec<&(Hit, ButtonView)> = view.buttons.iter().collect();
+        footer.sort_by(|a, b| a.1.at.x.total_cmp(&b.1.at.x));
+        let stops: Vec<Hit> = (view.step.controls.iter().chain(footer))
+            .map(|(hit, _)| *hit)
+            .collect();
         let n = stops.len();
         let at = self.focus.and_then(|f| stops.iter().position(|&s| s == f));
         // The first Tab shows where the focus is, if the pointer put it somewhere.
@@ -619,9 +788,29 @@ impl Intro {
                 None => return Ok(()),
             },
         };
-        let to = if self.hovered == Some(hit) { 1.0 } else { 0.0 };
+        let on = self.hovered == Some(hit);
         let anim = &self.anim;
-        anim.scalar(hover, "Opacity", to, HOVER_MS, 0, &anim.decelerate)
+        anim.scalar(
+            hover,
+            "Opacity",
+            f32::from(u8::from(on)),
+            HOVER_MS,
+            0,
+            &anim.decelerate,
+        )?;
+        // The knob grows under the pointer.
+        if let Some(switch) = view.step.switch.as_ref().filter(|_| hit == Hit::Switch) {
+            let k = if on { KNOB_HOVER / KNOB } else { 1.0 };
+            anim.vector3(
+                &switch.knob,
+                "Scale",
+                scale(k),
+                KNOB_MS / 2,
+                0,
+                &anim.decelerate,
+            )?;
+        }
+        Ok(())
     }
 
     fn show_focus(&self) -> Result<()> {
@@ -629,11 +818,62 @@ impl Intro {
             return Ok(());
         };
         let anim = &self.anim;
-        for (hit, button) in &view.buttons {
+        for (hit, button) in view.step.controls.iter().chain(&view.buttons) {
             let on = self.ring && self.focus == Some(*hit);
             let to = if on { 1.0 } else { 0.0 };
             anim.scalar(&button.ring, "Opacity", to, FOCUS_MS, 0, &anim.decelerate)?;
         }
+        Ok(())
+    }
+
+    /// Turns the step's switch on or off, as it is, dimmed while Windows
+    /// asks.
+    fn show_switch(&self, animate: bool) -> Result<()> {
+        let Some(v) = self
+            .view
+            .as_ref()
+            .and_then(|view| view.step.switch.as_ref())
+        else {
+            return Ok(());
+        };
+        let on = self.switch_on();
+        let anim = &self.anim;
+        let rest = v.rest[usize::from(on)];
+        let (fill, color) = (f32::from(u8::from(on)), self.theme.knob(on));
+        let waiting = self.waiting && self.steps[self.at] == Step::AboveStart;
+        let opacity = if waiting { WAITING_OPACITY } else { 1.0 };
+        if animate {
+            let ms = SWITCH_FILL_MS;
+            anim.vector3(&v.knob, "Offset", rest, KNOB_MS, 0, &anim.overshoot)?;
+            anim.scalar(&v.on, "Opacity", fill, ms, 0, &anim.decelerate)?;
+            anim.scalar(&v.off, "Opacity", 1.0 - fill, ms, 0, &anim.decelerate)?;
+            anim.scalar(&v.root, "Opacity", opacity, ms, 0, &anim.decelerate)?;
+            anim.color(&v.knob_brush, v.knob_brush.Color()?, color, ms)
+        } else {
+            v.knob.SetOffset(rest)?;
+            v.on.SetOpacity(fill)?;
+            v.off.SetOpacity(1.0 - fill)?;
+            v.root.SetOpacity(opacity)?;
+            v.knob_brush.SetColor(color)
+        }
+    }
+
+    /// Says under the switch for UI access how turning it on is going.
+    fn show_note(&self) -> Result<()> {
+        let Some(text) = self.view.as_ref().and_then(|view| view.step.note.as_ref()) else {
+            return Ok(());
+        };
+        let Some((note, failed)) = &self.note else {
+            text.clear();
+            return Ok(());
+        };
+        let ink = if *failed {
+            Ink::Critical
+        } else {
+            Ink::Secondary
+        };
+        let line = self.renderer.layout_line(note, Face::Small, ink, TEXT_W)?;
+        text.show(&self.renderer, &line, self.scale, &self.theme)?;
         Ok(())
     }
 
@@ -668,8 +908,15 @@ impl Intro {
     }
 
     fn button(&self, hit: Hit) -> Option<&ButtonView> {
-        let view = self.view.as_ref()?;
-        view.buttons.iter().find(|(h, _)| *h == hit).map(|(_, b)| b)
+        self.targets().find(|(h, _)| *h == hit).map(|(_, b)| b)
+    }
+
+    /// What can be clicked, but for the close button: what the step offers,
+    /// and the buttons that go through the steps.
+    fn targets(&self) -> impl Iterator<Item = &(Hit, ButtonView)> {
+        self.view
+            .iter()
+            .flat_map(|view| view.step.controls.iter().chain(&view.buttons))
     }
 
     // -----------------------------------------------------------------------
@@ -697,6 +944,9 @@ impl Intro {
             }
             self.show_dots(&view.dots, false)?;
         }
+        self.keep_focus();
+        self.show_switch(false)?;
+        self.show_note()?;
         self.show_hover(self.hovered)?;
         self.show_focus()
     }
@@ -757,14 +1007,14 @@ impl Intro {
             .visual
             .SetOffset(v3(0.0, ((size - glyph_size.Y) / 2.0).round()))?;
 
-        let text = self.build_text(&content)?;
+        let step = self.build_step(&content)?;
         let dots = self.build_dots(&content)?;
         let (footer, buttons) = self.build_footer(&content)?;
         Ok(View {
             content,
             pane,
             picture,
-            text,
+            step,
             close_at,
             close_hover,
             dots,
@@ -791,9 +1041,9 @@ impl Intro {
         Ok(picture)
     }
 
-    /// The step's symbol, its title and what it says, each a visual of its
-    /// own in what's returned, in `content`.
-    fn build_text(&self, content: &ContainerVisual) -> Result<ContainerVisual> {
+    /// The step's symbol, its title, what it says and what can be done
+    /// there, each a visual of its own in the text returned, in `content`.
+    fn build_step(&self, content: &ContainerVisual) -> Result<StepView> {
         let (c, r, t, s) = (
             &self.anim.compositor,
             &self.renderer,
@@ -838,9 +1088,165 @@ impl Intro {
         let detail = Text::new(c, &text)?;
         let (said, keys) = step.detail(&self.shortcuts);
         let paragraph = r.layout_paragraph(said, &keys, Ink::Secondary, TEXT_W)?;
-        detail.show(r, &paragraph, s, t)?;
+        let size = detail.show(r, &paragraph, s, t)?;
         detail.visual.SetOffset(v3(x, y))?;
-        Ok(text)
+        y += size.Y + px(ACTIONS_GAP);
+
+        let mut view = StepView {
+            text,
+            controls: Vec::new(),
+            switch: None,
+            note: None,
+        };
+        match step {
+            Step::Lookup | Step::Translate => {
+                let taken = step == Step::Lookup && self.options.shortcut_taken;
+                if taken {
+                    let warning = Text::new(c, &view.text)?;
+                    let line = r.layout_line(
+                        tr().intro_shortcut_taken,
+                        Face::Menu,
+                        Ink::Critical,
+                        TEXT_W,
+                    )?;
+                    let size = warning.show(r, &line, s, t)?;
+                    warning.visual.SetOffset(v3(x, y))?;
+                    y += size.Y + px(WARNING_GAP);
+                }
+                let mut offers = Vec::new();
+                if taken {
+                    offers.push((Hit::ChooseShortcut, tr().intro_choose_shortcut));
+                }
+                // Translations need the internet.
+                if step == Step::Lookup || self.options.online {
+                    offers.push((Hit::ShowMe, tr().intro_show_me));
+                }
+                let mut left = x;
+                for (hit, label) in offers {
+                    let w = (r.line_width(label, Face::Menu)? + 2.0 * BUTTON_PAD).max(BUTTON_W);
+                    let at = Rect {
+                        x: left,
+                        y,
+                        w: px(w),
+                        h: px(BUTTON_H),
+                    };
+                    left += at.w + px(BUTTON_GAP);
+                    let button = self.build_button(&view.text, at, label, false)?;
+                    view.controls.push((hit, button));
+                }
+            }
+            Step::AboveStart | Step::Ready => {
+                let label = if step == Step::AboveStart {
+                    tr().intro_ui_access
+                } else {
+                    tr().start_with_windows
+                };
+                let row = Rect {
+                    x,
+                    y,
+                    w: px(TEXT_W),
+                    h: px(ROW_H),
+                };
+                let (button, switch) = self.build_switch_row(&view.text, row, label)?;
+                view.controls.push((Hit::Switch, button));
+                view.switch = Some(switch);
+                if step == Step::AboveStart {
+                    let note = Text::new(c, &view.text)?;
+                    note.visual.SetOffset(v3(x, y + row.h + px(NOTE_GAP)))?;
+                    view.note = Some(note);
+                }
+            }
+        }
+        Ok(view)
+    }
+
+    /// A row like a setting's at `at` in `parent`, saying `label`, with a
+    /// switch at its right. Returns the row, which is what's clicked, and
+    /// the switch.
+    fn build_switch_row(
+        &self,
+        parent: &ContainerVisual,
+        at: Rect,
+        label: &str,
+    ) -> Result<(ButtonView, SwitchView)> {
+        let (c, r, t, s) = (
+            &self.anim.compositor,
+            &self.renderer,
+            &self.theme,
+            self.scale,
+        );
+        let px = |dip: f32| (dip * s).round();
+        let root = container(c, parent, at.at())?;
+        let face = Rect {
+            w: at.w,
+            h: at.h,
+            ..Rect::default()
+        };
+        let radius = px(ROW_RADIUS);
+        rounded(c, r, &root, face, radius, t.group())?;
+        let (hover, _) = rounded(c, r, &root, face, radius, t.highlight())?;
+        hover.SetOpacity(0.0)?;
+        outline(c, r, &root, face, radius, t.group_stroke())?;
+
+        let (w, h) = (px(SWITCH_W), px(SWITCH_H));
+        let track_at = v3(at.w - px(ROW_PAD) - w, ((at.h - h) / 2.0).round());
+        let switch = container(c, &root, track_at)?;
+        let track = Rect {
+            w,
+            h,
+            ..Rect::default()
+        };
+        let off = container(c, &switch, v3(0.0, 0.0))?;
+        rounded(c, r, &off, track, h / 2.0, t.sunken())?;
+        outline(c, r, &off, track, h / 2.0, t.strong_stroke())?;
+        let (on, _) = rounded(c, r, &switch, track, h / 2.0, t.accent)?;
+        let knob = px(KNOB);
+        let dot = Rect {
+            w: knob,
+            h: knob,
+            ..Rect::default()
+        };
+        let (knob_visual, knob_brush) = rounded(c, r, &switch, dot, knob / 2.0, t.knob(false))?;
+        knob_visual.SetCenterPoint(Vector3 {
+            X: knob / 2.0,
+            Y: knob / 2.0,
+            Z: 0.0,
+        })?;
+        let inset = ((h - knob) / 2.0).round();
+
+        let text = Text::new(c, &root)?;
+        let room = (TEXT_W - SWITCH_W - 3.0 * ROW_PAD).max(1.0);
+        let line = r.layout_line(label, Face::Setting, Ink::Primary, room)?;
+        let size = text.show(r, &line, s, t)?;
+        text.visual
+            .SetOffset(v3(px(ROW_PAD), ((at.h - size.Y) / 2.0).round()))?;
+
+        let outset = px(FOCUS_OUTSET);
+        let ring = ring(
+            c,
+            r,
+            &root,
+            face.outset(outset),
+            radius + outset,
+            ui::FOCUS_STROKE * s,
+            t.focus(),
+        )?;
+        ring.SetOpacity(0.0)?;
+        let row = ButtonView {
+            root,
+            hover,
+            ring,
+            at,
+        };
+        let switch = SwitchView {
+            root: switch,
+            on,
+            off,
+            knob: knob_visual,
+            knob_brush,
+            rest: [v3(inset, inset), v3(w - inset - knob, inset)],
+        };
+        Ok((row, switch))
     }
 
     /// A dot for each step, along the bottom of `content`, level with the
@@ -942,7 +1348,7 @@ impl Intro {
         let (hover, _) = rounded(c, r, &root, face, radius, t.highlight())?;
         hover.SetOpacity(0.0)?;
         let text = Text::new(c, &root)?;
-        let line = r.layout_aligned(label, Face::Menu, Ink::Primary, BUTTON_W, Align::Center)?;
+        let line = r.layout_aligned(label, Face::Menu, Ink::Primary, at.w / s, Align::Center)?;
         let size = text.show(r, &line, s, &ink)?;
         text.visual
             .SetOffset(v3(0.0, ((at.h - size.Y) / 2.0).round()))?;
@@ -1001,8 +1407,7 @@ impl Intro {
         if view.close_at.contains(x, y) {
             return Some(Hit::Close);
         }
-        view.buttons
-            .iter()
+        self.targets()
             .find(|(_, b)| b.at.contains(x, y))
             .map(|(hit, _)| *hit)
     }

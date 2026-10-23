@@ -92,6 +92,10 @@ pub struct Config {
     /// already: they don't get it.
     #[serde(default = "already_onboarded")]
     pub onboarded: bool,
+    /// UI access was being turned on, or off, and WinDict restarts for it:
+    /// once it has, it says how that went (see `app::onboarding`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_access_asked: Option<bool>,
     /// The version of WinDict that ran last: when another one starts, it
     /// says it was updated. Missing, it was a version from before there
     /// was this setting.
@@ -163,6 +167,7 @@ impl Default for Config {
             animations: None,
             check_updates: true,
             onboarded: false,
+            ui_access_asked: None,
             version: env!("CARGO_PKG_VERSION").into(),
         }
     }

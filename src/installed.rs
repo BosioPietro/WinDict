@@ -41,13 +41,11 @@ pub fn ui_access_available() -> bool {
 }
 
 /// Whether UI access is on.
-#[allow(dead_code)] // For the introduction's next step.
 pub fn ui_access_on() -> bool {
     read_dword(w!("UIAccess")) == Some(1)
 }
 
 /// Why UI access couldn't be turned on or off.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub enum UiAccessError {
     /// This isn't the installed copy.
@@ -63,7 +61,6 @@ pub enum UiAccessError {
 /// script restarts WinDict, which ends this process; so this only returns
 /// to say what went wrong, unless the restart is slow. It waits for the
 /// script: call it off the UI thread.
-#[allow(dead_code)]
 pub fn set_ui_access(on: bool) -> Result<(), UiAccessError> {
     let dir = dir().ok_or(UiAccessError::NotInstalled)?;
     let system = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());

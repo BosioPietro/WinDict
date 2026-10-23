@@ -104,6 +104,23 @@ impl App {
 
     /// Carries out a change made in the settings window, and saves it.
     pub(super) fn on_setting(&mut self, change: Change) {
+        // What the introduction shows: the shortcuts, whether translations
+        // can be had, starting with Windows, and its language.
+        let shown = matches!(
+            change,
+            Change::Hotkey(..)
+                | Change::RecordingStopped
+                | Change::OnlineLookup(_)
+                | Change::Autostart(_)
+                | Change::Interface(_)
+        );
+        self.apply_setting(change);
+        if shown {
+            self.refresh_intro();
+        }
+    }
+
+    fn apply_setting(&mut self, change: Change) {
         match change {
             Change::Close => return self.close_settings(),
             Change::OpenConfig => return open_config_file(),
