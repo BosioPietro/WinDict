@@ -95,6 +95,8 @@ const SLIDE: f32 = 24.0;
 const ZOOM: f32 = 1.04;
 /// The least room kept between the window and the screen's edges.
 const SCREEN_GAP: f32 = 16.0;
+/// How much larger than its size in DIPs the window opens, all of it alike.
+const ENLARGE: f32 = 1.33;
 
 // Durations, in ms.
 const SHOW_MS: u64 = 360;
@@ -1434,12 +1436,12 @@ impl Intro {
     }
 }
 
-/// The scale of the window on a monitor of `scale` pixels per DIP: smaller,
-/// should it not fit in the `work` area.
+/// The scale of the window on a monitor of `scale` pixels per DIP, enlarged
+/// by `ENLARGE`: smaller, should it not fit in the `work` area.
 fn fitted(work: RECT, scale: f32) -> f32 {
     let w = (work.right - work.left) as f32 / (CARD_W + 2.0 * SCREEN_GAP);
     let h = (work.bottom - work.top) as f32 / (CARD_H + 2.0 * SCREEN_GAP);
-    scale.min(w).min(h)
+    (scale * ENLARGE).min(w).min(h)
 }
 
 /// A ring `stroke` pixels thick just inside `rect`, in `parent`, as round

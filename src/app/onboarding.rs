@@ -11,7 +11,7 @@ use crate::intro::{Action, Intro, Options, Shortcuts, Step};
 /// noun and a verb, with synonyms and examples for both. And what it
 /// translates, short enough for one line.
 const EXAMPLE_WORD: &str = "gleam";
-const EXAMPLE_PASSAGE: &str = "Nice to meet you";
+const EXAMPLE_PASSAGE: &str = "I'll keep you in the loop";
 
 impl App {
     /// At start, when the introduction hasn't been shown yet.
