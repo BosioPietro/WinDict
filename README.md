@@ -4,20 +4,27 @@ A Windows tray app for looking up and translating words. Select a word in any ap
 **Alt+D**: its definition opens in a card next to the selection. Esc or a
 click elsewhere closes it.
 
-It's meant to stay out of the way: a single executable with no installer, it
-uses about 3 MB of memory while idle, and English lookups work offline.
+It's meant to stay out of the way: it uses about 3 MB of memory while idle,
+and English lookups work offline.
 
 ## Installing
 
-Download `WinDict-<version>.exe` from the
+Download `WinDict-<version>-setup.exe` from the
 [latest release](https://github.com/BosioPietro/WinDict/releases/latest) and
-run it.
+run it. It installs WinDict to `C:\Program Files\WinDict`, which it needs to
+show the card above the Start menu (see below), and adds it to Start and to
+Settings → Apps, where it can be uninstalled.
+
+To try it without installing, download `WinDict-<version>.exe` instead and
+run it from anywhere: it's the whole app in a single executable.
 
 The app isn't commercially signed, so the first time Windows SmartScreen may
 ask for confirmation: choose **More info**, then **Run anyway**.
 
 Once it's running, the tray icon's menu has **Start with Windows**,
-**Settings…** and **Quit**.
+**Settings…** and **Quit**. When there's a new version, **Update app**
+appears there too; the installed copy updates without asking for
+permission.
 
 ## Using it
 
@@ -94,26 +101,23 @@ by hand, use **Open config.json** at the bottom of the settings window, then
 
 Windows keeps Start and Search above every ordinary window, so by default
 WinDict closes them before showing a definition. To have the card appear on
-top of them instead, you need the UI access edition. Windows only grants that
-permission to signed apps installed in a protected folder, and a script takes
-care of both.
+top of them instead, WinDict needs "UI access", which Windows only grants to
+signed apps installed in a protected folder.
 
-Download `install-uiaccess.ps1` from the
-[latest release](https://github.com/BosioPietro/WinDict/releases/latest) and
-run it from an administrator PowerShell:
+The setup installs a second build of WinDict that asks for UI access, but
+leaves it unsigned. To turn UI access on, run this from an administrator
+PowerShell:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File install-uiaccess.ps1
+powershell -ExecutionPolicy Bypass -File "C:\Program Files\WinDict\uiaccess.ps1" -Enable -Restart
 ```
 
-The script downloads the latest UI access build, creates a certificate that's
-trusted on this machine only, signs WinDict with it, installs it to
-`C:\Program Files\WinDict` and starts it. The certificate's private key is
-deleted right after signing, so it can't be used to sign anything else. Run
-the script again to update, or with `-Uninstall` to remove it.
-
-To install your own build from a clone of this repository instead, run
-`scripts\install-uiaccess-local.ps1`, which builds it with Cargo first.
+The script creates a certificate that's trusted on this machine only, signs
+WinDict with it and restarts WinDict. The certificate's private key is
+deleted right after signing, so it can't be used to sign anything else.
+Updates sign the new version the same way. Run the script with `-Disable
+-Restart` to turn UI access off and remove the certificate; uninstalling
+WinDict does that too.
 
 ## Building from source
 
@@ -123,6 +127,18 @@ WinDict needs Windows and a Rust toolchain (1.88 or newer).
 cargo build --release        # target\release\windict.exe
 cargo test                   # unit tests, including the bundled dictionary
 cargo clippy --all-targets -- -D warnings
+```
+
+The setup is built with [Inno Setup](https://jrsoftware.org/isinfo.php) from
+both builds, put in `dist`:
+
+```powershell
+mkdir dist
+cargo build --release
+copy target\release\windict.exe dist\WinDict.exe
+cargo build --release --features uiaccess
+copy target\release\windict.exe dist\WinDict-uiaccess.exe
+iscc /DVersion=0.26.0 installer\windict.iss   # dist\WinDict-v0.26.0-setup.exe
 ```
 
 ## Credits

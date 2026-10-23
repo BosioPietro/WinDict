@@ -31,7 +31,6 @@ AppPublisherURL=https://github.com/BosioPietro/WinDict
 AppSupportURL=https://github.com/BosioPietro/WinDict/issues
 AppUpdatesURL=https://github.com/BosioPietro/WinDict/releases
 VersionInfoVersion={#Version}
-; Where the earlier script installed it too, so it takes that install over.
 DefaultDirName={autopf}\WinDict
 DisableDirPage=yes
 DisableProgramGroupPage=yes
@@ -60,13 +59,9 @@ Source: "{#Dist}\WinDict-uiaccess.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "uiaccess.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "update.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
-[InstallDelete]
-; Left by the script that installed WinDict before there was a setup.
-Type: files; Name: "{app}\install-uiaccess.ps1"
-
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\.download-*"
-; Inno only removes folders it created, and the earlier script created this.
+; Inno only removes folders it created itself.
 Type: dirifempty; Name: "{app}"
 
 [Registry]
@@ -79,7 +74,7 @@ Name: "{autoprograms}\WinDict"; Filename: "{app}\WinDict.exe"
 [Run]
 ; In order, before WinDict starts again: the new WinDict-uiaccess.exe isn't
 ; signed yet. If signing fails, WinDict.exe runs without UI access instead.
-Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\uiaccess.ps1"" {code:SignMode}"; Flags: runhidden
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\uiaccess.ps1"" -Resign"; Flags: runhidden
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\update.ps1"" -Register"; Flags: runhidden
 ; Through Explorer, so WinDict runs as the user, not elevated like Setup.
 Filename: "{win}\explorer.exe"; Parameters: """{app}\WinDict.exe"""; Description: "{cm:LaunchProgram,WinDict}"; Flags: postinstall nowait skipifsilent
@@ -88,7 +83,6 @@ Filename: "{win}\explorer.exe"; Parameters: """{app}\WinDict.exe"""; Flags: nowa
 [Code]
 var
   Running: Boolean;
-  FromScript: Boolean;
 
 function WasRunning: Boolean;
 begin
@@ -128,19 +122,8 @@ end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
-  { The script's install was always the UI access edition. }
-  FromScript := FileExists(ExpandConstant('{app}\install-uiaccess.ps1'));
   Running := StopWinDict;
   Result := '';
-end;
-
-{ How [Run] calls uiaccess.ps1. }
-function SignMode(Param: String): String;
-begin
-  if FromScript then
-    Result := '-Enable'
-  else
-    Result := '-Resign';
 end;
 
 { Removes "Start with Windows", if it starts this copy. }

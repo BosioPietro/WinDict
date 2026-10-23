@@ -16,7 +16,7 @@ test = false
 
 [features]
 # Builds the variant that can show the card above Start/Search. It must be
-# signed and installed with scripts/install-uiaccess.ps1 to run.
+# installed by the setup and signed by installer/uiaccess.ps1 to run.
 uiaccess = []
 
 [dependencies]

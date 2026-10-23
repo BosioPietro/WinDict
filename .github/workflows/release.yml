@@ -29,17 +29,16 @@ jobs:
       - name: Name the executable after the version
         shell: pwsh
         run: Copy-Item target/release/windict.exe "WinDict-$env:TAG.exe"
-      # The variant that can appear above Start; see scripts/install-uiaccess.ps1.
-      - run: cargo build --release --features uiaccess
-      - shell: pwsh
-        run: Copy-Item target/release/windict.exe "WinDict-$env:TAG-uiaccess.exe"
-      # The setup WinGet and "Update app" install; see installer/windict.iss.
+      # The setup WinGet and "Update app" install, with the variant that can
+      # appear above Start; see installer/windict.iss.
       - name: Build the setup
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item "WinDict-$env:TAG.exe" dist/WinDict.exe
-          Copy-Item "WinDict-$env:TAG-uiaccess.exe" dist/WinDict-uiaccess.exe
+          cargo build --release --features uiaccess
+          if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
+          Copy-Item target/release/windict.exe dist/WinDict-uiaccess.exe
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
           & $iscc "/DVersion=$($env:TAG.TrimStart('v'))" installer/windict.iss
@@ -50,8 +49,5 @@ jobs:
           target_commitish: ${{ github.sha }}
           files: |
             WinDict-${{ env.TAG }}.exe
-            WinDict-${{ env.TAG }}-uiaccess.exe
             dist/WinDict-${{ env.TAG }}-setup.exe
-            scripts/install-uiaccess.ps1
-            scripts/install-uiaccess-local.ps1
           generate_release_notes: true

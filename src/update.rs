@@ -5,8 +5,7 @@
 //! it and quits; the new one waits for it to exit and deletes it. The
 //! installed edition can't write to Program Files: it runs the scheduled
 //! task its installer registered, which runs the new setup elevated without
-//! asking (see installer/update.ps1). So does the UI access edition that
-//! scripts/install-uiaccess-local.ps1 installed, before there was a setup.
+//! asking (see installer/update.ps1).
 
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -78,16 +77,12 @@ enum Edition {
     Portable,
     /// By the setup, in Program Files.
     Installed,
-    /// The UI access edition, by the script used before there was a setup.
-    Script,
 }
 
 impl Edition {
     fn current() -> Edition {
         if installed::dir().is_some() {
             Edition::Installed
-        } else if cfg!(feature = "uiaccess") {
-            Edition::Script
         } else {
             Edition::Portable
         }
@@ -98,7 +93,6 @@ impl Edition {
         match self {
             Edition::Portable => format!("WinDict-{tag}.exe"),
             Edition::Installed => format!("WinDict-{tag}-setup.exe"),
-            Edition::Script => format!("WinDict-{tag}-uiaccess.exe"),
         }
     }
 }
@@ -254,9 +248,8 @@ mod tests {
         format!(
             r#"{{"tag_name": "{tag}", "assets": [
                 {{"name": "WinDict-{tag}.exe", "size": 8441344, "digest": "sha256:{DIGEST}"}},
-                {{"name": "WinDict-{tag}-uiaccess.exe", "size": 8441344, "digest": "sha256:{DIGEST}"}},
                 {{"name": "WinDict-{tag}-setup.exe", "size": 8441344, "digest": "sha256:{DIGEST}"}},
-                {{"name": "install-uiaccess.ps1", "size": 2404}}
+                {{"name": "notes.txt", "size": 2404}}
             ]}}"#
         )
     }
@@ -289,10 +282,6 @@ mod tests {
         assert_eq!(release.exe, "WinDict-v0.21.0.exe");
         assert_eq!(release.size, 8441344);
         assert_eq!(release.sha256, DIGEST);
-        let release = parse(json.as_bytes(), "0.20.3", Edition::Script)
-            .unwrap()
-            .unwrap();
-        assert_eq!(release.exe, "WinDict-v0.21.0-uiaccess.exe");
         let release = parse(json.as_bytes(), "0.20.3", Edition::Installed)
             .unwrap()
             .unwrap();
