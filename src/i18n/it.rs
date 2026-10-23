@@ -129,6 +129,32 @@ pub const IT: Strings = Strings {
     intro_ui_access_cancelled: "Windows non ha avuto il permesso: non è cambiato nulla.",
     intro_ui_access_failed: "Non ha funzionato: {error}",
 
+    // The setup downloaded from the releases page.
+    setup_title: "Installazione di WinDict",
+    setup_install: "Installa WinDict",
+    setup_update: "Aggiorna WinDict",
+    setup_install_detail: "Cerca qualsiasi parola sullo schermo con una scorciatoia. \
+        Verrà installata la versione {version} per tutti gli utenti di questo PC.",
+    setup_update_detail: "La versione {version} prende il posto di quella installata, e \
+        le impostazioni restano come sono.",
+    setup_install_button: "Installa",
+    setup_update_button: "Aggiorna",
+    setup_cancel: "Annulla",
+    setup_installing: "Installazione in corso",
+    setup_installed: "WinDict è installato",
+    setup_installed_detail: "Lo trovi in Start quando ti serve. Aprilo ora e ti mostra \
+        come funziona.",
+    setup_updated: "WinDict è aggiornato",
+    setup_updated_detail: "La versione {version} è installata, e le impostazioni sono \
+        come le avevi lasciate.",
+    setup_open: "Apri WinDict",
+    setup_close: "Chiudi",
+    setup_failed: "WinDict non è stato installato",
+    setup_failed_detail: "L\u{2019}installazione si è interrotta con l\u{2019}errore \
+        {code}. Riprova, e se succede ancora, riavvia prima il PC.",
+    setup_not_started: "Impossibile avviare l\u{2019}installazione: {error}",
+    setup_try_again: "Riprova",
+
     // Settings: the window.
     settings: "Impostazioni",
     settings_window_title: "Impostazioni di WinDict",

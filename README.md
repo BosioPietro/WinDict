@@ -140,7 +140,7 @@ cargo test                   # unit tests, including the bundled dictionary
 cargo clippy --all-targets -- -D warnings
 ```
 
-The setup is built with [Inno Setup](https://jrsoftware.org/isinfo.php) from
+The installer is built with [Inno Setup](https://jrsoftware.org/isinfo.php) from
 both builds, put in `dist`:
 
 ```powershell
@@ -149,7 +149,17 @@ cargo build --release
 copy target\release\windict.exe dist\WinDict.exe
 cargo build --release --features uiaccess
 copy target\release\windict.exe dist\WinDict-uiaccess.exe
-iscc /DVersion=0.26.0 installer\windict.iss   # dist\WinDict-v0.26.0-setup.exe
+iscc /DVersion=0.26.0 installer\windict.iss   # dist\WinDict-v0.26.0-inno.exe
+```
+
+The setup that's published carries that installer and runs it silently, from
+a window of its own (`src/setup.rs`) or, given Inno Setup's switches as WinGet
+and "Update app" give them, without one. It's built with the installer's
+absolute path in `WINDICT_SETUP`:
+
+```powershell
+$env:WINDICT_SETUP = (Resolve-Path dist\WinDict-v0.26.0-inno.exe).Path
+cargo build --release --features setup --bin windict-setup   # target\release\windict-setup.exe
 ```
 
 ## Credits

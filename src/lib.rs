@@ -21,6 +21,8 @@
 //! - `update`: looking for a new version, and installing it.
 //! - `installed`: the copy the installer put in Program Files, and handing
 //!   over to its UI access build.
+//! - `setup`: the window of the setup downloaded from the releases page,
+//!   which runs that installer (the `windict-setup` executable).
 //! - `i18n`: every string the user reads, so a language is a table, not a
 //!   change across the code.
 //! - `win`: safe wrappers for the Win32 calls shared across modules.
@@ -44,6 +46,7 @@ mod render;
 mod searchbox;
 mod selection;
 mod settings;
+mod setup;
 mod speech;
 mod theme;
 mod translate;
@@ -54,6 +57,7 @@ mod wikizionario;
 mod win;
 
 use windows::core::w;
+use windows::System::DispatcherQueueController;
 use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::System::WinRT::*;
@@ -79,15 +83,34 @@ pub fn run() -> windows::core::Result<()> {
         if GetLastError() == ERROR_ALREADY_EXISTS {
             return Ok(());
         }
-        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        RoInitialize(RO_INIT_SINGLETHREADED)?;
-        // Windows.UI.Composition needs a dispatcher queue on the UI thread.
-        let _queue = CreateDispatcherQueueController(DispatcherQueueOptions {
-            dwSize: std::mem::size_of::<DispatcherQueueOptions>() as u32,
-            threadType: DQTYPE_THREAD_CURRENT,
-            apartmentType: DQTAT_COM_NONE,
-        })?;
-        let compositor = Compositor::new()?;
+        let (_queue, compositor) = start_ui()?;
         app::run(compositor, replacing)
     }
+}
+
+/// Runs the setup downloaded from the releases page until it's closed:
+/// `installer` is the Inno Setup installer it runs (installer/windict.iss).
+/// Given switches, as WinGet and "Update app" give it, it runs the
+/// installer with them instead, without a window, and exits with its code.
+pub fn setup(installer: &'static [u8]) -> windows::core::Result<()> {
+    let switches: Vec<_> = std::env::args_os().skip(1).collect();
+    if !switches.is_empty() {
+        std::process::exit(setup::quietly(installer, &switches));
+    }
+    let (_queue, compositor) = unsafe { start_ui() }?;
+    setup::run(compositor, installer)
+}
+
+/// Makes this thread the UI thread: aware of each monitor's scale, and
+/// with what Windows.UI.Composition needs, a dispatcher queue, kept alive
+/// by the caller.
+unsafe fn start_ui() -> windows::core::Result<(DispatcherQueueController, Compositor)> {
+    let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    RoInitialize(RO_INIT_SINGLETHREADED)?;
+    let queue = CreateDispatcherQueueController(DispatcherQueueOptions {
+        dwSize: std::mem::size_of::<DispatcherQueueOptions>() as u32,
+        threadType: DQTYPE_THREAD_CURRENT,
+        apartmentType: DQTAT_COM_NONE,
+    })?;
+    Ok((queue, Compositor::new()?))
 }

@@ -38,6 +38,10 @@ jobs:
           if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
           & $iscc "/DVersion=$version" installer/windict.iss
           if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
+          $env:WINDICT_SETUP = (Resolve-Path "dist/WinDict-v$version-inno.exe").Path
+          cargo build --release --features setup --bin windict-setup
+          if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
+          Copy-Item target/release/windict-setup.exe "dist/WinDict-v$version-setup.exe"
       - uses: actions/upload-artifact@v4
         with:
           name: windict-setup

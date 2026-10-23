@@ -41,7 +41,9 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; It closes WinDict itself, and starts it again if it was running.
 CloseApplications=no
 OutputDir={#Dist}
-OutputBaseFilename=WinDict-v{#Version}-setup
+; Not published as it is: the setup people download, WinGet and "Update app"
+; run carries it (src/setup.rs), as WinDict-v<version>-setup.exe.
+OutputBaseFilename=WinDict-v{#Version}-inno
 SetupIconFile=..\assets\windict.ico
 UninstallDisplayIcon={app}\WinDict.exe
 LicenseFile=..\LICENSE

@@ -14,10 +14,21 @@ name = "windict"
 path = "src/main.rs"
 test = false
 
+# The setup people download from the releases page, which carries the Inno
+# Setup installer built from installer/windict.iss: build it with that
+# installer's absolute path in WINDICT_SETUP.
+[[bin]]
+name = "windict-setup"
+path = "src/bin/setup.rs"
+test = false
+required-features = ["setup"]
+
 [features]
 # Builds the variant that can show the card above Start/Search. It must be
 # installed by the setup and signed by installer/uiaccess.ps1 to run.
 uiaccess = []
+# Builds windict-setup.
+setup = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

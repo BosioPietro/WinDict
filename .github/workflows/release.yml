@@ -29,9 +29,9 @@ jobs:
       - name: Name the executable after the version
         shell: pwsh
         run: Copy-Item target/release/windict.exe "WinDict-$env:TAG.exe"
-      # The setup WinGet and "Update app" install, with the variant that can
-      # appear above Start; see installer/windict.iss.
-      - name: Build the setup
+      # The installer, with the variant that can appear above Start; see
+      # installer/windict.iss.
+      - name: Build the installer
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
@@ -43,6 +43,15 @@ jobs:
           if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
           & $iscc "/DVersion=$($env:TAG.TrimStart('v'))" installer/windict.iss
           if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
+      # The setup people download, WinGet and "Update app" install with, which
+      # carries the installer above and runs it; see src/setup.rs.
+      - name: Build the setup
+        shell: pwsh
+        run: |
+          $env:WINDICT_SETUP = (Resolve-Path "dist/WinDict-$env:TAG-inno.exe").Path
+          cargo build --release --features setup --bin windict-setup
+          if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
+          Copy-Item target/release/windict-setup.exe "dist/WinDict-$env:TAG-setup.exe"
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}

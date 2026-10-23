@@ -35,6 +35,11 @@ pub fn dir() -> Option<PathBuf> {
         .then(|| parent.to_path_buf())
 }
 
+/// Where the setup installed WinDict, whichever copy this is.
+pub fn install_dir() -> Option<PathBuf> {
+    read_string(w!("InstallDir")).map(PathBuf::from)
+}
+
 /// Whether UI access can be turned on: only the installed copy can have it.
 pub fn ui_access_available() -> bool {
     dir().is_some()

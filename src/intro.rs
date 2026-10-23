@@ -17,17 +17,17 @@ use windows::core::{Interface, Result, HSTRING};
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::UI::Color;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::Vector3;
 
 use crate::hotkey;
 use crate::i18n::tr;
-use crate::render::{Align, Face, Ink, Renderer};
+use crate::render::{Face, Ink, Renderer};
 use crate::theme::{argb, Theme};
 use crate::ui::{
-    self, container, outline, rounded, scale, v2, v3, Animator, Frame, Rect, Text, MARGIN,
+    self, button_width, container, outline, ring, rounded, scale, v2, v3, Animator, Button, Frame,
+    Rect, Text, BUTTON_H, BUTTON_W, FOCUS_OUTSET, MARGIN,
 };
 use crate::win::{self, Window};
 
@@ -77,14 +77,7 @@ const NOTE_GAP: f32 = 10.0;
 const WAITING_OPACITY: f32 = 0.5;
 /// From the buttons to the bottom of the card.
 const PAD_BOTTOM: f32 = 28.0;
-/// A button is at least this wide, and has this much room either side of
-/// a longer label.
-const BUTTON_W: f32 = 96.0;
-const BUTTON_PAD: f32 = 16.0;
-const BUTTON_H: f32 = 32.0;
 const BUTTON_GAP: f32 = 8.0;
-const BUTTON_RADIUS: f32 = 4.0;
-const FOCUS_OUTSET: f32 = 3.0;
 /// The dots for the steps: the one for the step showing is longer.
 const DOT: f32 = 6.0;
 const DOT_ON: f32 = 18.0;
@@ -256,14 +249,6 @@ enum Hit {
     Switch,
 }
 
-struct ButtonView {
-    root: ContainerVisual,
-    hover: SpriteVisual,
-    /// Round it while it has the keyboard.
-    ring: SpriteVisual,
-    at: Rect,
-}
-
 /// A step's switch.
 struct SwitchView {
     /// Dimmed while Windows asks.
@@ -283,7 +268,7 @@ struct StepView {
     /// Its title, what it says and what can be done there.
     text: ContainerVisual,
     /// What can be clicked in it: buttons, or the switch's row.
-    controls: Vec<(Hit, ButtonView)>,
+    controls: Vec<(Hit, Button)>,
     switch: Option<SwitchView>,
     /// Under the switch for UI access: how turning it on is going.
     note: Option<Text>,
@@ -308,7 +293,7 @@ struct View {
     /// The buttons, which change at once.
     footer: ContainerVisual,
     /// Back, when there's a step before, and Next.
-    buttons: Vec<(Hit, ButtonView)>,
+    buttons: Vec<(Hit, Button)>,
 }
 
 pub struct Intro {
@@ -749,7 +734,7 @@ impl Intro {
             return Ok(());
         };
         // What the step offers, then the buttons from the left.
-        let mut footer: Vec<&(Hit, ButtonView)> = view.buttons.iter().collect();
+        let mut footer: Vec<&(Hit, Button)> = view.buttons.iter().collect();
         footer.sort_by(|a, b| a.1.at.x.total_cmp(&b.1.at.x));
         let stops: Vec<Hit> = (view.step.controls.iter().chain(footer))
             .map(|(hit, _)| *hit)
@@ -923,13 +908,13 @@ impl Intro {
         Ok(())
     }
 
-    fn button(&self, hit: Hit) -> Option<&ButtonView> {
+    fn button(&self, hit: Hit) -> Option<&Button> {
         self.targets().find(|(h, _)| *h == hit).map(|(_, b)| b)
     }
 
     /// What can be clicked, but for the close button: what the step offers,
     /// and the buttons that go through the steps.
-    fn targets(&self) -> impl Iterator<Item = &(Hit, ButtonView)> {
+    fn targets(&self) -> impl Iterator<Item = &(Hit, Button)> {
         self.view
             .iter()
             .flat_map(|view| view.step.controls.iter().chain(&view.buttons))
@@ -1139,7 +1124,7 @@ impl Intro {
                 }
                 let mut left = x;
                 for (hit, label) in offers {
-                    let w = (r.line_width(label, Face::Menu)? + 2.0 * BUTTON_PAD).max(BUTTON_W);
+                    let w = button_width(r, label)?;
                     let at = Rect {
                         x: left,
                         y,
@@ -1184,7 +1169,7 @@ impl Intro {
         parent: &ContainerVisual,
         at: Rect,
         label: &str,
-    ) -> Result<(ButtonView, SwitchView)> {
+    ) -> Result<(Button, SwitchView)> {
         let (c, r, t, s) = (
             &self.anim.compositor,
             &self.renderer,
@@ -1248,7 +1233,7 @@ impl Intro {
             t.focus(),
         )?;
         ring.SetOpacity(0.0)?;
-        let row = ButtonView {
+        let row = Button {
             root,
             hover,
             ring,
@@ -1295,7 +1280,7 @@ impl Intro {
     fn build_footer(
         &self,
         content: &ContainerVisual,
-    ) -> Result<(ContainerVisual, Vec<(Hit, ButtonView)>)> {
+    ) -> Result<(ContainerVisual, Vec<(Hit, Button)>)> {
         let s = self.scale;
         let px = |dip: f32| (dip * s).round();
         let footer = container(&self.anim.compositor, content, v3(0.0, 0.0))?;
@@ -1327,64 +1312,21 @@ impl Intro {
     }
 
     /// A button saying `label` at `at` in `content`: in the accent when
-    /// it's the `primary` one, as Windows draws the one to go on with.
+    /// it's the `primary` one.
     fn build_button(
         &self,
         content: &ContainerVisual,
         at: Rect,
         label: &str,
         primary: bool,
-    ) -> Result<ButtonView> {
+    ) -> Result<Button> {
         let (c, r, t, s) = (
             &self.anim.compositor,
             &self.renderer,
             &self.theme,
             self.scale,
         );
-        let px = |dip: f32| (dip * s).round();
-        let root = container(c, content, at.at())?;
-        let face = Rect {
-            w: at.w,
-            h: at.h,
-            ..Rect::default()
-        };
-        let radius = px(BUTTON_RADIUS);
-        // The label stands out on the accent in the other theme's color.
-        let inverse = Theme {
-            dark: !t.dark,
-            ..*t
-        };
-        let (fill, stroke, ink) = if primary {
-            (t.accent, t.accent, inverse)
-        } else {
-            (t.control(), t.control_stroke(), *t)
-        };
-        rounded(c, r, &root, face, radius, fill)?;
-        outline(c, r, &root, face, radius, stroke)?;
-        let (hover, _) = rounded(c, r, &root, face, radius, t.highlight())?;
-        hover.SetOpacity(0.0)?;
-        let text = Text::new(c, &root)?;
-        let line = r.layout_aligned(label, Face::Menu, Ink::Primary, at.w / s, Align::Center)?;
-        let size = text.show(r, &line, s, &ink)?;
-        text.visual
-            .SetOffset(v3(0.0, ((at.h - size.Y) / 2.0).round()))?;
-        let outset = px(FOCUS_OUTSET);
-        let ring = ring(
-            c,
-            r,
-            &root,
-            face.outset(outset),
-            radius + outset,
-            ui::FOCUS_STROKE * s,
-            t.focus(),
-        )?;
-        ring.SetOpacity(0.0)?;
-        Ok(ButtonView {
-            root,
-            hover,
-            ring,
-            at,
-        })
+        ui::button(c, r, t, s, content, at, label, primary)
     }
 
     // -----------------------------------------------------------------------
@@ -1442,31 +1384,6 @@ fn fitted(work: RECT, scale: f32) -> f32 {
     let w = (work.right - work.left) as f32 / (CARD_W + 2.0 * SCREEN_GAP);
     let h = (work.bottom - work.top) as f32 / (CARD_H + 2.0 * SCREEN_GAP);
     (scale * ENLARGE).min(w).min(h)
-}
-
-/// A ring `stroke` pixels thick just inside `rect`, in `parent`, as round
-/// what the keyboard is on.
-fn ring(
-    c: &Compositor,
-    r: &Renderer,
-    parent: &ContainerVisual,
-    rect: Rect,
-    radius: f32,
-    stroke: f32,
-    color: Color,
-) -> Result<SpriteVisual> {
-    let shape =
-        c.CreateSurfaceBrushWithSurface(&r.draw_rounded(rect.w, rect.h, radius, Some(stroke))?)?;
-    shape.SetStretch(CompositionStretch::Fill)?;
-    let masked = c.CreateMaskBrush()?;
-    masked.SetSource(&c.CreateColorBrushWithColor(color)?)?;
-    masked.SetMask(&shape)?;
-    let visual = c.CreateSpriteVisual()?;
-    visual.SetBrush(&masked)?;
-    visual.SetOffset(rect.at())?;
-    visual.SetSize(rect.size())?;
-    parent.Children()?.InsertAtTop(&visual)?;
-    Ok(visual)
 }
 
 #[cfg(test)]

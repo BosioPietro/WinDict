@@ -198,6 +198,39 @@ strings! {
     /// `{error}`.
     intro_ui_access_failed: "That didn\u{2019}t work: {error}",
 
+    // The setup downloaded from the releases page.
+    setup_title: "WinDict Setup",
+    setup_install: "Install WinDict",
+    /// When WinDict is installed already.
+    setup_update: "Update WinDict",
+    /// `{version}`.
+    setup_install_detail: "Look up any word on screen with a shortcut. This installs \
+        version {version} for everyone on this PC.",
+    /// `{version}`.
+    setup_update_detail: "Version {version} takes the place of the one installed, and \
+        your settings stay as they are.",
+    setup_install_button: "Install",
+    setup_update_button: "Update",
+    setup_cancel: "Cancel",
+    /// Dots follow it, one, then two, then three, and again.
+    setup_installing: "Installing",
+    setup_installed: "WinDict is installed",
+    setup_installed_detail: "Find it in Start whenever you need it. Open it now and it \
+        shows you around.",
+    setup_updated: "WinDict is up to date",
+    /// `{version}`.
+    setup_updated_detail: "Version {version} is installed, and your settings are as you \
+        left them.",
+    setup_open: "Open WinDict",
+    setup_close: "Close",
+    setup_failed: "WinDict wasn\u{2019}t installed",
+    /// `{code}`: the installer's exit code.
+    setup_failed_detail: "The installer stopped with error {code}. Try again, and if it \
+        keeps happening, restart the PC first.",
+    /// `{error}`.
+    setup_not_started: "The installer couldn\u{2019}t start: {error}",
+    setup_try_again: "Try again",
+
     // Settings: the window.
     settings: "Settings",
     settings_window_title: "WinDict Settings",
