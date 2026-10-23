@@ -87,6 +87,8 @@ pub struct Config {
     pub animations: Option<bool>,
     /// Look for a new version of WinDict once a day.
     pub check_updates: bool,
+    /// Whether the introduction has been shown (see `app::onboarding`).
+    pub onboarded: bool,
 }
 
 /// The sizes the card can be zoomed to, in percent.
@@ -152,6 +154,7 @@ impl Default for Config {
             mymemory_email: String::new(),
             animations: None,
             check_updates: true,
+            onboarded: false,
         }
     }
 }

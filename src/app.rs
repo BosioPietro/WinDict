@@ -3,13 +3,14 @@
 //! This file holds the state, the hotkey, the timers and the dismissal of the
 //! card; the rest of `impl App` is split by flow into the submodules:
 //! `search`, `lookup`, `translating`, `links`, `pinning`, `zooming`,
-//! `tray_menu`, `prefs` and `updating`.
+//! `tray_menu`, `prefs`, `updating` and `onboarding`.
 //! `procs` has the window procedures, `edit` and `picking` the pure text and
 //! list logic.
 
 pub(crate) mod edit;
 mod links;
 mod lookup;
+mod onboarding;
 pub(crate) mod picking;
 mod pinning;
 mod prefs;
@@ -555,9 +556,10 @@ pub struct App {
 }
 
 pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::core::Result<()> {
-    let (config, first_run, config_error) = match config::load() {
-        Ok((config, first_run)) => (config, first_run, None),
-        Err(e) => (Config::default(), false, Some(e)),
+    // A first run is told by `onboarded` instead.
+    let (config, config_error) = match config::load() {
+        Ok((config, _first_run)) => (config, None),
+        Err(e) => (Config::default(), Some(e)),
     };
     i18n::set(config.ui_language);
     ui::set_motion(config.animated());
@@ -662,11 +664,8 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
                     &[("version", &env!("CARGO_PKG_VERSION"))],
                 ),
             );
-        } else if first_run && app.hotkey_ok {
-            app.tray.notify(
-                tr().running,
-                &fill(tr().running_detail, &[("hotkey", &app.config.hotkey)]),
-            );
+        } else if !app.config.onboarded {
+            app.start_onboarding();
         }
         APP.with(|a| *a.borrow_mut() = Some(app));
 

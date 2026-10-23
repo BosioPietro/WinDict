@@ -22,12 +22,18 @@
       -Resign   signs it again if UI access is on: the installer runs this
                 after every install, since an update replaces the signed file.
       -Disable  turns UI access off and removes the certificates.
+
+    With -Restart, WinDict is then started again, so the build that runs
+    is the one the choice calls for; WinDict passes it when the user turns
+    UI access on or off (see src/installed.rs). If the script fails, WinDict
+    keeps running, to say so.
 #>
 #Requires -RunAsAdministrator
 param(
     [switch]$Enable,
     [switch]$Resign,
-    [switch]$Disable
+    [switch]$Disable,
+    [switch]$Restart
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,9 +54,18 @@ function Remove-WinDictCertificates {
         Remove-Item
 }
 
+function Restart-WinDict {
+    if (-not $Restart) { return }
+    Get-Process -Name WinDict, WinDict-uiaccess -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Milliseconds 300
+    # Through Explorer, so WinDict runs as the user, not elevated.
+    Start-Process explorer.exe -ArgumentList "`"$(Join-Path $PSScriptRoot 'WinDict.exe')`""
+}
+
 if ($Disable) {
     Remove-ItemProperty $Key -Name UIAccess -ErrorAction SilentlyContinue
     Remove-WinDictCertificates
+    Restart-WinDict
     return
 }
 if (-not ($Enable -or $Resign)) { throw 'Pass -Enable, -Resign or -Disable.' }
@@ -85,3 +100,4 @@ if ($signature.Status -ne 'Valid') {
 
 if (-not (Test-Path $Key)) { New-Item $Key | Out-Null }
 Set-ItemProperty $Key -Name UIAccess -Value 1 -Type DWord
+Restart-WinDict
