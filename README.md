@@ -21,6 +21,10 @@ run it from anywhere: it's the whole app in a single executable.
 The app isn't commercially signed, so the first time Windows SmartScreen may
 ask for confirmation: choose **More info**, then **Run anyway**.
 
+The first time it starts, a short introduction goes through the shortcuts,
+each with an example card, and in the installed copy offers to show the
+card above Start.
+
 Once it's running, the tray icon's menu has **Start with Windows**,
 **Settings…** and **Quit**. When there's a new version, **Update app**
 appears there too; the installed copy updates without asking for
@@ -104,20 +108,27 @@ WinDict closes them before showing a definition. To have the card appear on
 top of them instead, WinDict needs "UI access", which Windows only grants to
 signed apps installed in a protected folder.
 
+To turn it on, use the **Show above Start** switch: on the introduction's
+**Show the card above Start** step, or in the settings under **General**.
+Windows asks for permission, then WinDict restarts with UI access. Turn the
+switch off to go back. Only the copy the setup installs can have UI access,
+so a downloaded `windict.exe` doesn't show the switch.
+
 The setup installs a second build of WinDict that asks for UI access, but
-leaves it unsigned. To turn UI access on, run this from an administrator
-PowerShell:
+leaves it unsigned. The switch runs `uiaccess.ps1`, which creates a
+certificate that's trusted on this machine only, signs that build with it
+and restarts WinDict. The certificate's private key is deleted right after
+signing, so it can't be used to sign anything else. Updates sign the new
+version the same way. Turning UI access off removes the certificate, and
+uninstalling WinDict does that too.
+
+The script can also be run by hand, from an administrator PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File "C:\Program Files\WinDict\uiaccess.ps1" -Enable -Restart
 ```
 
-The script creates a certificate that's trusted on this machine only, signs
-WinDict with it and restarts WinDict. The certificate's private key is
-deleted right after signing, so it can't be used to sign anything else.
-Updates sign the new version the same way. Run the script with `-Disable
--Restart` to turn UI access off and remove the certificate; uninstalling
-WinDict does that too.
+Use `-Disable -Restart` instead to turn UI access off.
 
 ## Building from source
 
