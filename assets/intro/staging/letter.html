@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Milan showroom: revised floor plans — Mail</title>
+<style>
+  :root {
+    --app: #f6f8fc;
+    --panel: #ffffff;
+    --search: #e9eef6;
+    --ink: #1f1f1f;
+    --muted: #5f6368;
+    --icon: #444746;
+    --rule: #e0e3e7;
+    --active: #d3e3fd;
+    --active-ink: #041e49;
+    --compose: #c2e7ff;
+    --compose-ink: #001d35;
+    --chip: #e8eaed;
+    /* The text column's left margin; place.js sets the right one. */
+    --right: 56px;
+  }
+  /* A dark theme. It follows Windows' setting, or ?theme=dark and
+     ?theme=light. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --app: #121212;
+      --panel: #1f1f1f;
+      --search: #2b2b2b;
+      --ink: #e3e3e3;
+      --muted: #a8abaf;
+      --icon: #c4c7c5;
+      --rule: #3a3a3a;
+      --active: #004a77;
+      --active-ink: #d3e3fd;
+      --compose: #004a77;
+      --compose-ink: #c2e7ff;
+      --chip: #3a3a3a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --app: #121212;
+    --panel: #1f1f1f;
+    --search: #2b2b2b;
+    --ink: #e3e3e3;
+    --muted: #a8abaf;
+    --icon: #c4c7c5;
+    --rule: #3a3a3a;
+    --active: #004a77;
+    --active-ink: #d3e3fd;
+    --compose: #004a77;
+    --compose-ink: #c2e7ff;
+    --chip: #3a3a3a;
+  }
+  * { box-sizing: border-box; }
+  /* WinDict's accent, as in book.html: plain colors, not variables. */
+  ::selection { background: #005fb8; color: #ffffff; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) ::selection { background: #99ebff; color: #000000; }
+  }
+  :root[data-theme="dark"] ::selection { background: #99ebff; color: #000000; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--app);
+    color: var(--ink);
+    font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  svg { width: 20px; height: 20px; fill: none; stroke: var(--icon); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  .top { flex: none; height: 64px; display: flex; align-items: center; gap: 16px; padding: 0 16px; }
+  .top .menu { width: 48px; display: grid; place-items: center; }
+  .top .brand { font-size: 22px; color: var(--muted); width: 160px; white-space: nowrap; }
+  .search {
+    flex: 1 1 auto; max-width: 720px; min-width: 0; height: 48px; border-radius: 24px;
+    background: var(--search); display: flex; align-items: center; gap: 14px; padding: 0 18px;
+    color: var(--muted); font-size: 16px; white-space: nowrap; overflow: hidden;
+  }
+  .top .avatar { margin-left: auto; }
+
+  .row { flex: 1 1 auto; display: flex; min-height: 0; }
+  nav { flex: 1 1 auto; min-width: 0; overflow: hidden; padding: 4px 16px 0 8px; font-size: 14px; }
+  .compose {
+    display: inline-flex; align-items: center; gap: 12px; height: 56px; padding: 0 24px 0 18px;
+    border-radius: 16px; background: var(--compose); color: var(--compose-ink);
+    font-size: 15px; font-weight: 600; margin: 0 0 16px 0; white-space: nowrap;
+  }
+  .compose svg { stroke: var(--compose-ink); }
+  nav ul { list-style: none; padding: 0; margin: 0; }
+  nav li {
+    display: flex; align-items: center; gap: 18px; height: 32px; padding: 0 12px 0 26px;
+    border-radius: 0 16px 16px 0; white-space: nowrap; overflow: hidden;
+  }
+  nav li .count { margin-left: auto; font-size: 12px; }
+  nav li.current { background: var(--active); color: var(--active-ink); font-weight: 700; }
+  nav li.current svg { stroke: var(--active-ink); }
+  nav h2 { font-size: 15px; font-weight: 500; margin: 20px 0 6px 26px; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; margin: 0 5px; }
+
+  main {
+    flex: 0 0 auto;
+    background: var(--panel);
+    border-radius: 16px;
+    margin: 0 16px 16px 0;
+    padding: 0 var(--right) 0;
+    overflow: hidden;
+  }
+  .toolbar { height: 52px; display: flex; align-items: center; gap: 22px; margin: 0 calc(16px - var(--right)); }
+  .toolbar .sep { width: 1px; height: 20px; background: var(--rule); }
+  .subject { display: flex; align-items: center; gap: 12px; margin: 18px 0 20px; }
+  h1 { font-weight: 400; font-size: 22px; margin: 0; white-space: nowrap; }
+  .chip { font-size: 12px; padding: 2px 6px; border-radius: 4px; background: var(--chip); color: var(--muted); }
+  .sender { display: flex; align-items: center; gap: 12px; font-size: 14px; margin-bottom: 26px; }
+  .avatar {
+    width: 40px; height: 40px; border-radius: 50%;
+    background: #0b8043; color: #fff; font-weight: 600;
+    display: grid; place-items: center; font-size: 17px; flex: none;
+  }
+  .top .avatar { width: 32px; height: 32px; font-size: 14px; background: #8e24aa; }
+  .sender .name { font-weight: 700; }
+  .sender .role { color: var(--muted); font-weight: 400; }
+  .sender .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .sender .time { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+  .page { width: 560px; font-size: 19px; line-height: 1.7; }
+  /* Each line is set by hand, so the selected phrase always ends one,
+     whatever the window's width. */
+  .page p { margin: 0 0 18px; }
+  .l { display: block; }
+  .sign { color: var(--muted); }
+</style>
+</head>
+<body>
+  <div class="top">
+    <div class="menu"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></div>
+    <div class="brand">Mail</div>
+    <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>Search mail</div>
+    <div class="avatar">L</div>
+  </div>
+
+  <div class="row">
+    <nav>
+      <div class="compose"><svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>Compose</div>
+      <ul>
+        <li class="current"><svg viewBox="0 0 24 24"><path d="M4 13l2.5-8h11L20 13v6H4z"/><path d="M4 13h5l1 2h4l1-2h5"/></svg>Inbox<span class="count">4</span></li>
+        <li><svg viewBox="0 0 24 24"><path d="M12 4l2.4 5 5.4.6-4 3.7 1.1 5.4L12 16l-4.9 2.7 1.1-5.4-4-3.7 5.4-.6z"/></svg>Starred</li>
+        <li><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>Snoozed</li>
+        <li><svg viewBox="0 0 24 24"><path d="M4 12L20 5l-5 15-3-6z"/></svg>Sent</li>
+        <li><svg viewBox="0 0 24 24"><path d="M7 4h7l4 4v12H7z"/><path d="M14 4v4h4"/></svg>Drafts<span class="count">2</span></li>
+      </ul>
+      <h2>Labels</h2>
+      <ul>
+        <li><span class="dot" style="background:#4285f4"></span>Clients</li>
+        <li><span class="dot" style="background:#f4b400"></span>Milan showroom</li>
+        <li><span class="dot" style="background:#0f9d58"></span>Invoices</li>
+      </ul>
+    </nav>
+
+    <main>
+      <div class="toolbar">
+        <svg viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+        <svg viewBox="0 0 24 24"><path d="M4 5h16v4H4zM5 9v10h14V9M10 13h4"/></svg>
+        <svg viewBox="0 0 24 24"><path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13"/></svg>
+        <div class="sep"></div>
+        <svg viewBox="0 0 24 24"><path d="M4 6h16v12H4z"/><path d="M4 7l8 6 8-6"/></svg>
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg>
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="5" r=".8"/><circle cx="12" cy="12" r=".8"/><circle cx="12" cy="19" r=".8"/></svg>
+      </div>
+
+      <div class="subject">
+        <h1>Milan showroom: revised floor plans</h1>
+        <span class="chip">Inbox</span>
+      </div>
+
+      <div class="sender">
+        <div class="avatar">S</div>
+        <div>
+          <div class="name">Sarah Whitfield <span class="role">· Account lead</span></div>
+          <div class="meta">to me, Giulia</div>
+        </div>
+        <div class="time">9:41 AM</div>
+      </div>
+
+      <div class="page">
+        <p>
+          <span class="l">Hi Luca,</span>
+        </p>
+        <p>
+          <span class="l">Thanks for the call this morning. I've shared the revised</span>
+          <span class="l">floor plans with the contractor in Milan and asked for</span>
+          <span class="l">an updated quote by Friday. <span class="pick">I'll keep you in the loop</span></span>
+        </p>
+        <p>
+          <span class="l">In the meantime, could you send me the latest budget?</span>
+          <span class="l">I'd like to go through it with Giulia before Thursday.</span>
+        </p>
+        <p class="sign">
+          <span class="l">Best regards,</span>
+          <span class="l">Sarah Whitfield</span>
+        </p>
+      </div>
+    </main>
+  </div>
+  <script src="place.js"></script>
+</body>
+</html>

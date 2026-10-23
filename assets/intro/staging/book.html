@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Salt Road — Chapter 3</title>
+<style>
+  :root {
+    --paper: #f7f1e5;
+    --sidebar: #efe7d6;
+    --rule: #ddd2bc;
+    --ink: #2b2620;
+    --muted: #8a7f6d;
+    --accent: #9a5b2e;
+    --current: rgba(154, 91, 46, .12);
+    /* The text column's left margin; place.js sets the right one. */
+    --right: 56px;
+  }
+  /* A reader's night mode: warm, not black. It follows Windows' setting, or
+     ?theme=dark and ?theme=light. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #1e1b17;
+      --sidebar: #25211c;
+      --rule: #38322a;
+      --ink: #e4dac8;
+      --muted: #978b77;
+      --accent: #d9a476;
+      --current: rgba(217, 164, 118, .12);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #1e1b17;
+    --sidebar: #25211c;
+    --rule: #38322a;
+    --ink: #e4dac8;
+    --muted: #978b77;
+    --accent: #d9a476;
+    --current: rgba(217, 164, 118, .12);
+  }
+  * { box-sizing: border-box; }
+  /* WinDict's accent: Windows' AccentDark1 in light mode and AccentLight2 in
+     dark mode, here the ones that go with Bloom's default blue (the app's
+     fallbacks too). Change them if Windows' accent color isn't the default.
+     Plain colors, not variables: Chromium resolves variables in ::selection
+     differently between versions. */
+  ::selection { background: #005fb8; color: #ffffff; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) ::selection { background: #99ebff; color: #000000; }
+  }
+  :root[data-theme="dark"] ::selection { background: #99ebff; color: #000000; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: Georgia, "Times New Roman", serif;
+    display: flex;
+    overflow: hidden;
+  }
+
+  nav {
+    flex: 1 1 auto;
+    min-width: 0;
+    background: var(--sidebar);
+    border-right: 1px solid var(--rule);
+    padding: 40px 32px;
+    font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    font-size: 14px;
+    color: var(--muted);
+    overflow: hidden;
+  }
+  nav .book { color: var(--ink); font-family: Georgia, serif; font-size: 20px; margin: 0 0 4px; }
+  nav .author { margin: 0 0 32px; }
+  nav h2 { font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 600; margin: 0 0 12px; }
+  nav ol { list-style: none; padding: 0; margin: 0; }
+  nav li { padding: 7px 10px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  nav li span { display: inline-block; width: 22px; }
+  nav li.current { background: var(--current); color: var(--accent); font-weight: 600; }
+
+  main {
+    flex: 0 0 auto;
+    padding: 64px var(--right) 0;
+  }
+  header { height: 120px; }
+  .label {
+    font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    font-size: 12px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 10px;
+  }
+  h1 { font-weight: normal; font-size: 32px; margin: 0; }
+
+  .page { width: 560px; font-size: 19px; line-height: 1.7; }
+  /* Each line is set by hand, so the selected word always ends one,
+     whatever the window's width. */
+  .page p { margin: 0 0 0; text-indent: 0; }
+  .page p + p .l:first-child { text-indent: 1.6em; }
+  .l { display: block; text-align: justify; text-align-last: justify; }
+  .l.end { text-align-last: left; }
+  .smallcaps { font-variant: small-caps; letter-spacing: .04em; }
+
+  footer {
+    margin-top: 40px; width: 560px; text-align: center;
+    font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+    font-size: 12px; color: var(--muted);
+  }
+</style>
+</head>
+<body>
+  <nav>
+    <p class="book">The Salt Road</p>
+    <p class="author">Helen Ashby</p>
+    <h2>Contents</h2>
+    <ol>
+      <li><span>1</span>The Ferry at Dawn</li>
+      <li><span>2</span>Letters from Inland</li>
+      <li class="current"><span>3</span>The Harbour Wall</li>
+      <li><span>4</span>What the Tide Kept</li>
+      <li><span>5</span>A House on Gull Street</li>
+      <li><span>6</span>Winter Lamps</li>
+    </ol>
+  </nav>
+
+  <main>
+    <header>
+      <p class="label">Chapter Three</p>
+      <h1>The Harbour Wall</h1>
+    </header>
+
+    <div class="page">
+      <p>
+        <span class="l"><span class="smallcaps">By the time Mara</span> reached the harbour wall, the</span>
+        <span class="l">sun had slipped behind the headland, and the last <span class="pick">gleam</span></span>
+        <span class="l">of it lay on the water like a thread pulled loose from</span>
+        <span class="l">a coat. She sat on the cold stones and waited. Below</span>
+        <span class="l">her, the boats knocked against one another in the</span>
+        <span class="l end">swell, patient as old dogs.</span>
+      </p>
+      <p>
+        <span class="l">Her father had told her once that the sea kept every</span>
+        <span class="l">promise made beside it, though never in the way you</span>
+        <span class="l">meant. She had not believed him then. She was not</span>
+        <span class="l">sure she believed him now, but she had come anyway,</span>
+        <span class="l end">and that, she supposed, was a kind of answer.</span>
+      </p>
+      <p>
+        <span class="l">A light came on in the window of the customs house.</span>
+        <span class="l">Somebody was still awake down there, bent over a</span>
+        <span class="l">ledger or a letter, and the thought of it made the</span>
+        <span class="l end">evening seem a little less enormous.</span>
+      </p>
+    </div>
+
+    <footer>Page 41 of 312</footer>
+  </main>
+  <script src="place.js"></script>
+</body>
+</html>
