@@ -342,11 +342,15 @@ impl App {
         self.refresh_settings();
     }
 
-    /// The system's colors changed: the settings window follows them.
+    /// The system's colors changed: the settings window and the
+    /// introduction follow them.
     pub(super) fn on_colors_changed(&mut self) {
         let theme = self.theme();
         if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
             let _ = settings.retheme(theme);
+        }
+        if let Some(intro) = self.intro.as_mut().filter(|i| i.visible) {
+            let _ = intro.retheme(theme);
         }
     }
 }

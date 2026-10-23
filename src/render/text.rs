@@ -274,6 +274,7 @@ impl Renderer {
             Face::Title => &self.formats.title,
             Face::Query => &self.formats.query,
             Face::Heading => &self.formats.heading,
+            Face::Display => &self.formats.display,
             Face::Setting => &self.formats.setting,
             Face::Value => &self.formats.value,
             Face::Chrome => &self.formats.chrome,
@@ -319,6 +320,95 @@ impl Renderer {
         Ok(Layout {
             items: out.items,
             width: w.ceil().min(width),
+            height,
+            links: Vec::new(),
+            caret: None,
+            list: None,
+        })
+    }
+
+    /// `text` wrapped at `width`, in the paragraph face, with each
+    /// `{name}` in it that `keys` has shown as those keys, each on a cap of
+    /// its own, as [`Renderer::layout_caps`] draws them, within the line.
+    pub fn layout_paragraph(
+        &self,
+        text: &str,
+        keys: &[(&str, Vec<String>)],
+        ink: Ink,
+        width: f32,
+    ) -> Result<Layout> {
+        // Each name is padded with spaces that don't break, so its cap has
+        // room, and a shortcut's caps stay together on one line.
+        const PAD: char = '\u{2007}';
+        const GAP: char = '\u{00A0}';
+        /// Room for the Windows logo, which is drawn in.
+        const LOGO_ROOM: &str = "\u{2007}\u{2007}";
+        let units = |s: &str| s.encode_utf16().count() as u32;
+        let (mut shown, mut caps, mut rest) = (String::new(), Vec::new(), text);
+        while let Some(open) = rest.find('{') {
+            let Some(close) = rest[open..].find('}').map(|i| open + i) else {
+                break;
+            };
+            let name = &rest[open + 1..close];
+            let Some((_, names)) = keys.iter().find(|(n, _)| *n == name) else {
+                shown.push_str(&rest[..=close]);
+                rest = &rest[close + 1..];
+                continue;
+            };
+            shown.push_str(&rest[..open]);
+            for (i, key) in names.iter().enumerate() {
+                if i > 0 {
+                    shown.push(GAP);
+                }
+                let logo = key == "Win";
+                let start = units(&shown);
+                shown.push(PAD);
+                shown.push_str(if logo { LOGO_ROOM } else { key });
+                shown.push(PAD);
+                let range = DWRITE_TEXT_RANGE {
+                    startPosition: start,
+                    length: units(&shown) - start,
+                };
+                caps.push((range, logo));
+            }
+            rest = &rest[close + 1..];
+        }
+        shown.push_str(rest);
+
+        let line = self.text(&shown, &self.formats.paragraph, width)?;
+        for (range, _) in &caps {
+            unsafe { line.SetFontSize(INLINE_KEY_SIZE, *range)? };
+        }
+        let (_, _, baseline) = metrics(&line);
+        let mut out = Stack::default();
+        // Behind the text: each cap spans the letters, not the room between
+        // the lines.
+        let (rise, drop) = (
+            PARAGRAPH_SIZE * INLINE_CAP_RISE,
+            PARAGRAPH_SIZE * INLINE_CAP_DROP,
+        );
+        for (range, logo) in caps {
+            for rect in hit_rects(&line, range) {
+                let y = rect.top + baseline - rise;
+                out.items.push(Item::Key {
+                    x: rect.left,
+                    y,
+                    width: rect.width,
+                    height: rise + drop,
+                });
+                if logo {
+                    out.items.push(Item::Logo {
+                        x: rect.left + (rect.width - LOGO_SIZE) / 2.0,
+                        y: y + (rise + drop - LOGO_SIZE) / 2.0,
+                        size: LOGO_SIZE,
+                    });
+                }
+            }
+        }
+        let (_, height) = out.text(line, 0.0, ink);
+        Ok(Layout {
+            items: out.items,
+            width,
             height,
             links: Vec::new(),
             caret: None,

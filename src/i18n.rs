@@ -153,6 +153,30 @@ strings! {
     menu_reload: "Reload settings",
     menu_quit: "Quit",
 
+    // The introduction, shown the first time WinDict starts.
+    intro_title: "Welcome to WinDict",
+    intro_back: "Back",
+    intro_next: "Next",
+    intro_done: "Done",
+    intro_lookup: "Look up any word",
+    /// `{hotkey}`, which shows as keys.
+    intro_lookup_detail: "Select a word in any app and press {hotkey}: its definition \
+        opens in a card next to it. With nothing selected, the same keys open a box \
+        to type a word into.",
+    intro_translate: "Translate as you read",
+    /// `{hotkey}`, and `{card_hotkey}`, the keys that translate on a card;
+    /// each shows as keys.
+    intro_translate_detail: "Select a word, a phrase or a whole passage and press \
+        {hotkey}: the card opens on its translation. On a definition, {card_hotkey} \
+        translates the word.",
+    intro_above_start: "Show the card above Start",
+    intro_above_start_detail: "Windows keeps Start and Search above every other window, \
+        so WinDict closes them before showing a definition. With UI access, the card \
+        shows on top of them instead. Windows asks for permission to turn it on.",
+    intro_ready: "You\u{2019}re all set",
+    intro_ready_detail: "WinDict waits in the notification area, by the clock. Click \
+        its icon for the settings, and for updates when there\u{2019}s one.",
+
     // Settings: the window.
     settings: "Settings",
     settings_window_title: "WinDict Settings",

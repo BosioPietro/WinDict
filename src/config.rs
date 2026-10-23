@@ -88,6 +88,9 @@ pub struct Config {
     /// Look for a new version of WinDict once a day.
     pub check_updates: bool,
     /// Whether the introduction has been shown (see `app::onboarding`).
+    /// Settings saved before there was one are someone's who knows WinDict
+    /// already: they don't get it.
+    #[serde(default = "already_onboarded")]
     pub onboarded: bool,
     /// The version of WinDict that ran last: when another one starts, it
     /// says it was updated. Missing, it was a version from before there
@@ -240,10 +243,17 @@ fn parse(bytes: &[u8]) -> Result<Config, String> {
     }
     config.mymemory_email = config.mymemory_email.trim().to_string();
     config.zoom = ZOOMS[zoom_index(config.zoom)];
-    if config.use_ui_automation.take() == Some(false) {
-        config.selection = SelectionMode::Clipboard;
+    // The switch older versions saved, from before the default was Direct.
+    match config.use_ui_automation.take() {
+        Some(true) => config.selection = SelectionMode::Automatic,
+        Some(false) => config.selection = SelectionMode::Clipboard,
+        None => {}
     }
     Ok(config)
+}
+
+fn already_onboarded() -> bool {
+    true
 }
 
 /// Reads a list of languages, or the single one older versions saved.
@@ -292,6 +302,13 @@ mod tests {
         assert_eq!(parse(b"{}").unwrap().version, "");
         // New settings are this version's.
         assert_eq!(Config::default().version, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn introduces_only_new_settings() {
+        assert!(!Config::default().onboarded);
+        assert!(parse(b"{}").unwrap().onboarded);
+        assert!(!parse(br#"{"onboarded": false}"#).unwrap().onboarded);
     }
 
     #[test]

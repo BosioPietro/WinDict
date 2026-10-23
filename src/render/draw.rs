@@ -358,6 +358,67 @@ impl Renderer {
         Ok(surface)
     }
 
+    /// The picture `encoded` (a PNG or JPEG) filling a `w` by `h` pixel
+    /// surface, cropped evenly from both sides of whichever way it's too
+    /// long, like a wallpaper set to fill.
+    pub fn draw_picture(
+        &self,
+        encoded: &[u8],
+        w: f32,
+        h: f32,
+    ) -> Result<CompositionDrawingSurface> {
+        let (w, h) = (w.round().max(1.0), h.round().max(1.0));
+        let surface = self.surface(w, h)?;
+        self.paint(&surface, 1.0, |dc| unsafe {
+            let wic: IWICImagingFactory =
+                CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+            let stream = wic.CreateStream()?;
+            stream.InitializeFromMemory(encoded)?;
+            let decoder = wic.CreateDecoderFromStream(
+                &stream,
+                std::ptr::null(),
+                WICDecodeMetadataCacheOnDemand,
+            )?;
+            let frame = decoder.GetFrame(0)?;
+            let converter = wic.CreateFormatConverter()?;
+            converter.Initialize(
+                &frame,
+                &GUID_WICPixelFormat32bppPBGRA,
+                WICBitmapDitherTypeNone,
+                None,
+                0.0,
+                WICBitmapPaletteTypeMedianCut,
+            )?;
+            let bitmap = dc.CreateBitmapFromWicBitmap(&converter, None)?;
+            let size = bitmap.GetPixelSize();
+            let (pw, ph) = (size.width as f32, size.height as f32);
+            let k = (w / pw).max(h / ph);
+            let (cw, ch) = (w / k, h / k);
+            let source = D2D_RECT_F {
+                left: (pw - cw) / 2.0,
+                top: (ph - ch) / 2.0,
+                right: (pw + cw) / 2.0,
+                bottom: (ph + ch) / 2.0,
+            };
+            let dest = D2D_RECT_F {
+                left: 0.0,
+                top: 0.0,
+                right: w,
+                bottom: h,
+            };
+            dc.DrawBitmap(
+                &bitmap,
+                Some(&dest),
+                1.0,
+                D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
+                Some(&source),
+                None,
+            );
+            Ok(())
+        })?;
+        Ok(surface)
+    }
+
     pub(super) fn surface(&self, w: f32, h: f32) -> Result<CompositionDrawingSurface> {
         self.graphics.CreateDrawingSurface(
             Size {

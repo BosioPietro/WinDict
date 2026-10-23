@@ -60,7 +60,8 @@ use crate::win::{self, Window};
 use edit::{Input, LineEdit, Motion};
 use picking::Picking;
 use procs::{
-    focus_hook, keyboard_hook, main_proc, menu_proc, mouse_hook, popup_proc, settings_proc,
+    focus_hook, intro_proc, keyboard_hook, main_proc, menu_proc, mouse_hook, popup_proc,
+    settings_proc,
 };
 use recent::Recent;
 
@@ -68,6 +69,7 @@ const MAIN_CLASS: PCWSTR = w!("WinDict.Main");
 const POPUP_CLASS: PCWSTR = w!("WinDict.Popup");
 const MENU_CLASS: PCWSTR = w!("WinDict.Menu");
 const SETTINGS_CLASS: PCWSTR = w!("WinDict.Settings");
+const INTRO_CLASS: PCWSTR = w!("WinDict.Intro");
 /// The card and the menu: drawn by the compositor, above everything, and
 /// never activated by a click.
 const FLYOUT_EX_STYLE: WINDOW_EX_STYLE = WINDOW_EX_STYLE(
@@ -98,6 +100,8 @@ const WM_APP_PIN: u32 = WM_APP + 12;
 /// Ctrl and the mouse wheel on a card: the wheel's delta in `wparam`, the
 /// window in `lparam`.
 const WM_APP_ZOOM: u32 = WM_APP + 13;
+/// The introduction was asked to close.
+const WM_APP_CLOSE_INTRO: u32 = WM_APP + 14;
 
 const HOTKEY_LOOKUP: i32 = 1;
 const HOTKEY_ESCAPE: i32 = 2;
@@ -214,6 +218,7 @@ const TIMER_SETTINGS_HIDE: usize = 8;
 const TIMER_TRANSLATING: usize = 9;
 const TIMER_UPDATE_CHECK: usize = 10;
 const TIMER_CLOSED: usize = 11;
+const TIMER_INTRO_HIDE: usize = 12;
 
 /// Free the GPU resources after this long without a lookup.
 const IDLE_TEARDOWN_MS: u32 = 3 * 60 * 1000;
@@ -507,6 +512,8 @@ pub struct App {
     menu: Option<Menu>,
     /// The settings window, while it's open.
     settings: Option<Settings>,
+    /// The introduction, while it's open.
+    intro: Option<crate::intro::Intro>,
     /// When the tray menu last started closing (win::now_ms).
     menu_closed_at: u64,
     /// The press on the tray icon that closed the menu; its release mustn't reopen it.
@@ -605,6 +612,7 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             closing: Vec::new(),
             menu: None,
             settings: None,
+            intro: None,
             menu_closed_at: 0,
             swallow_tray_release: false,
             tray,
@@ -689,12 +697,13 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
     Ok(())
 }
 
-/// Registers the window classes of the main, card, menu and settings windows.
+/// Registers the window classes of the main, card, menu, settings and
+/// introduction windows.
 unsafe fn register_classes(instance: HINSTANCE) -> windows::core::Result<()> {
     let arrow = LoadCursorW(None, IDC_ARROW)?;
     let icon =
         LoadIconW(Some(instance), PCWSTR(tray::ICON_ID as usize as *const u16)).unwrap_or_default();
-    let classes: [(PCWSTR, WNDPROC, HCURSOR, HICON); 4] = [
+    let classes: [(PCWSTR, WNDPROC, HCURSOR, HICON); 5] = [
         (
             MAIN_CLASS,
             Some(main_proc),
@@ -705,6 +714,7 @@ unsafe fn register_classes(instance: HINSTANCE) -> windows::core::Result<()> {
         (POPUP_CLASS, Some(popup_proc), arrow, icon),
         (MENU_CLASS, Some(menu_proc), arrow, HICON::default()),
         (SETTINGS_CLASS, Some(settings_proc), arrow, icon),
+        (INTRO_CLASS, Some(intro_proc), arrow, icon),
     ];
     for (name, proc, cursor, icon) in classes {
         RegisterClassW(&WNDCLASSW {
@@ -1157,6 +1167,13 @@ impl App {
                     s.finish_hide();
                 }
                 self.keyboard_hook = None;
+                trim_working_set();
+            }
+            // Shown once: it goes as soon as it's hidden.
+            TIMER_INTRO_HIDE if self.intro.as_ref().is_some_and(|i| !i.visible) => {
+                if let Some(mut intro) = self.intro.take() {
+                    intro.finish_hide();
+                }
                 trim_working_set();
             }
             TIMER_TEARDOWN if self.card.popup.as_ref().is_some_and(|p| !p.visible) => {

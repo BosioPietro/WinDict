@@ -150,6 +150,10 @@ pub(super) unsafe extern "system" fn main_proc(
             with_app(|app| app.close_settings());
             LRESULT(0)
         }
+        WM_APP_CLOSE_INTRO => {
+            with_app(|app| app.finish_onboarding());
+            LRESULT(0)
+        }
         WM_APP_RECORD_KEY => {
             let key = VIRTUAL_KEY(wparam.0 as u16);
             let modifiers = HOT_KEY_MODIFIERS((lparam.0 & 0xFFFF) as u32);
@@ -535,6 +539,99 @@ pub(super) unsafe extern "system" fn settings_proc(
             }
             if msg == WM_SETTINGCHANGE && wparam.0 == SPI_SETCLIENTAREAANIMATION.0 as usize {
                 with_app(|app| app.on_motion_changed());
+            }
+            default()
+        }
+        _ => default(),
+    }
+}
+
+pub(super) unsafe extern "system" fn intro_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    // Mouse messages carry client coordinates (screen ones for WM_NCHITTEST).
+    let (x, y) = win::lparam_point(lparam);
+    let default = || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    match msg {
+        // The header drags the window.
+        WM_NCHITTEST => {
+            let hit = default();
+            let mut pt = POINT { x, y };
+            let caption = hit.0 == HTCLIENT as isize
+                && unsafe { ScreenToClient(hwnd, &mut pt).as_bool() }
+                && with_app(|app| app.intro.as_ref().is_some_and(|i| i.caption_at(pt.x, pt.y)))
+                    .unwrap_or(false);
+            if caption {
+                LRESULT(HTCAPTION as isize)
+            } else {
+                hit
+            }
+        }
+        WM_MOUSEMOVE => {
+            // Ask for WM_MOUSELEAVE, to put out the hover when the pointer goes.
+            win::track_mouse_leave(hwnd);
+            with_app(|app| app.in_intro(|i| i.hover(Some((x, y))).map(|_| None)));
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            with_app(|app| app.in_intro(|i| i.hover(None).map(|_| None)));
+            LRESULT(0)
+        }
+        WM_LBUTTONDOWN => {
+            unsafe { SetCapture(hwnd) };
+            with_app(|app| app.in_intro(|i| i.press(x, y).map(|_| None)));
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            unsafe {
+                let _ = ReleaseCapture();
+            }
+            with_app(|app| app.in_intro(|i| i.release(x, y)));
+            LRESULT(0)
+        }
+        // What slid or faded away is gone.
+        WM_TIMER => {
+            with_app(|app| app.in_intro(|i| i.on_timer().map(|_| None)));
+            LRESULT(0)
+        }
+        WM_KEYDOWN => {
+            let key = VIRTUAL_KEY(wparam.0 as u16);
+            with_app(|app| app.in_intro(|i| i.key(key)));
+            LRESULT(0)
+        }
+        WM_KEYUP if snip(wparam) => LRESULT(0),
+        // Alt on its own: there's no menu bar to go to.
+        WM_SYSCOMMAND if (wparam.0 & 0xFFF0) as u32 == SC_KEYMENU && lparam.0 == 0 => LRESULT(0),
+        WM_ACTIVATE => {
+            if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE {
+                with_app(|app| app.in_intro(|i| i.deactivate().map(|_| None)));
+            }
+            default()
+        }
+        // Alt+F4, or Close on the taskbar: the window fades out, and only
+        // then goes.
+        WM_CLOSE => {
+            post(WM_APP_CLOSE_INTRO, WPARAM(0), LPARAM(0));
+            LRESULT(0)
+        }
+        // Dragged to a monitor with another scale: redrawn for it.
+        WM_DPICHANGED => {
+            let suggested = unsafe { *(lparam.0 as *const RECT) };
+            let dpi = (wparam.0 & 0xFFFF) as u32;
+            with_app(|app| app.in_intro(|i| i.rescale(dpi, suggested).map(|_| None)));
+            LRESULT(0)
+        }
+        // Light or dark mode, or the accent color, changed.
+        WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED => {
+            let colors = msg == WM_DWMCOLORIZATIONCOLORCHANGED
+                || (lparam.0 != 0
+                    && unsafe { PCWSTR(lparam.0 as *const u16).to_string() }
+                        .is_ok_and(|area| area == "ImmersiveColorSet"));
+            if colors {
+                with_app(|app| app.on_colors_changed());
             }
             default()
         }

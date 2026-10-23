@@ -36,13 +36,12 @@ pub fn dir() -> Option<PathBuf> {
 }
 
 /// Whether UI access can be turned on: only the installed copy can have it.
-#[allow(dead_code)] // For the onboarding, which doesn't exist yet.
 pub fn ui_access_available() -> bool {
     dir().is_some()
 }
 
 /// Whether UI access is on.
-#[allow(dead_code)]
+#[allow(dead_code)] // For the introduction's next step.
 pub fn ui_access_on() -> bool {
     read_dword(w!("UIAccess")) == Some(1)
 }

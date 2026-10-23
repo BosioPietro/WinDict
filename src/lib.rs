@@ -12,9 +12,9 @@
 //!   WordNet) and `online` (Free Dictionary API, Wiktionary, and
 //!   `wikizionario` for Italian, over `http`) fill them; `translate`
 //!   translates the word (Google Translate, else MyMemory).
-//! - `popup` (the card, with `searchbox`), `menu` and `settings`: the windows,
-//!   each a composition visual tree built from `ui`, drawn by `render` in
-//!   the colors of `theme`.
+//! - `popup` (the card, with `searchbox`), `menu`, `settings` and `intro`:
+//!   the windows, each a composition visual tree built from `ui`, drawn by
+//!   `render` in the colors of `theme`.
 //! - `config`, `hotkey`, `autostart`, `tray`: settings and their storage, the
 //!   shortcut, "Start with Windows", and the notification-area icon.
 //! - `speech`: saying the word out loud, in its language's voice.
@@ -34,6 +34,7 @@ mod hotkey;
 mod http;
 mod i18n;
 mod installed;
+mod intro;
 mod lang;
 mod menu;
 mod offline;

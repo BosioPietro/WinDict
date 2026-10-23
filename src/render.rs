@@ -19,6 +19,8 @@ use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::*;
+use windows::Win32::Graphics::Imaging::*;
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::WinRT::Composition::*;
 use windows::UI::Composition::{CompositionDrawingSurface, CompositionGraphicsDevice, Compositor};
 use windows_numerics::{Matrix3x2, Vector2};
@@ -244,7 +246,28 @@ impl Layout {
             })
             .unwrap_or(0.0)
     }
+
+    /// How far down the middle of the capitals on its first line is, in
+    /// DIPs: what a symbol beside the text lines up with.
+    pub fn cap_middle(&self) -> f32 {
+        self.items
+            .iter()
+            .find_map(|item| match item {
+                Item::Text { layout, y, .. } => {
+                    let (_, _, baseline) = metrics(layout);
+                    // The format's size: the layout's own asks where in the text.
+                    let format: &IDWriteTextFormat = layout;
+                    let size = unsafe { format.GetFontSize() };
+                    Some(y + baseline - size * CAP_HEIGHT / 2.0)
+                }
+                _ => None,
+            })
+            .unwrap_or(self.height / 2.0)
+    }
 }
+
+/// How tall Segoe UI's capitals are, in ems.
+const CAP_HEIGHT: f32 = 0.7;
 
 #[derive(Clone, Debug)]
 pub struct Link {
@@ -376,6 +399,13 @@ const CARET_W: f32 = 1.5;
 /// The Windows logo on a shortcut's cap, in DIPs: four panes, a gap apart.
 const LOGO_SIZE: f32 = 11.0;
 const LOGO_GAP: f32 = 1.0;
+/// The paragraph face's size, and its caps for keys within the line: how
+/// far they reach above the baseline and below it, in ems.
+const PARAGRAPH_SIZE: f32 = 14.0;
+/// The names on those caps, a little smaller than the text around them.
+const INLINE_KEY_SIZE: f32 = 12.0;
+const INLINE_CAP_RISE: f32 = 1.0;
+const INLINE_CAP_DROP: f32 = 0.35;
 
 /// A layout being built top to bottom.
 #[derive(Default)]
@@ -433,6 +463,8 @@ pub enum Face {
     Query,
     /// The settings window's heading.
     Heading,
+    /// The title of a step of the introduction.
+    Display,
     /// A setting's name.
     Setting,
     /// A number shown by a setting.
@@ -483,6 +515,9 @@ struct Formats {
     button: IDWriteTextFormat,
     large_button: IDWriteTextFormat,
     heading: IDWriteTextFormat,
+    display: IDWriteTextFormat,
+    /// Wrapped text, such as what a step of the introduction says.
+    paragraph: IDWriteTextFormat,
     setting: IDWriteTextFormat,
     value: IDWriteTextFormat,
     chrome: IDWriteTextFormat,
@@ -684,6 +719,14 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
         button,
         large_button,
         heading: make(&display, 20.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?,
+        display: make(&display, 24.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?,
+        paragraph: make(
+            &text,
+            PARAGRAPH_SIZE,
+            DWRITE_FONT_WEIGHT_NORMAL,
+            normal,
+            1.55,
+        )?,
         setting,
         value,
         chrome,

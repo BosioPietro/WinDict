@@ -92,6 +92,29 @@ pub const IT: Strings = Strings {
     menu_reload: "Ricarica le impostazioni",
     menu_quit: "Esci",
 
+    // The introduction, shown the first time WinDict starts.
+    intro_title: "Benvenuto in WinDict",
+    intro_back: "Indietro",
+    intro_next: "Avanti",
+    intro_done: "Fine",
+    intro_lookup: "Cerca qualsiasi parola",
+    intro_lookup_detail: "Seleziona una parola in qualsiasi app e premi {hotkey}: la sua \
+        definizione si apre in una scheda accanto. Senza nulla di selezionato, gli stessi \
+        tasti aprono una casella in cui scrivere la parola.",
+    intro_translate: "Traduci mentre leggi",
+    intro_translate_detail: "Seleziona una parola, una frase o un intero passaggio e \
+        premi {hotkey}: la scheda si apre sulla traduzione. Su una definizione, \
+        {card_hotkey} traduce la parola.",
+    intro_above_start: "Mostra la scheda sopra Start",
+    intro_above_start_detail: "Windows tiene Start e Cerca sopra ogni altra finestra, \
+        quindi WinDict li chiude prima di mostrare una definizione. Con l\u{2019}accesso \
+        all\u{2019}interfaccia, la scheda appare sopra di loro. Windows chiede il \
+        permesso per attivarlo.",
+    intro_ready: "Tutto pronto",
+    intro_ready_detail: "WinDict resta nell\u{2019}area di notifica, accanto \
+        all\u{2019}orologio. Fai clic sulla sua icona per le impostazioni, e per gli \
+        aggiornamenti quando ce n\u{2019}è uno.",
+
     // Settings: the window.
     settings: "Impostazioni",
     settings_window_title: "Impostazioni di WinDict",
