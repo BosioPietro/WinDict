@@ -15,6 +15,8 @@ pub const IT: Strings = Strings {
     shortcut_invalid: "Scorciatoia non valida",
     updated: "WinDict aggiornato",
     updated_detail: "Questa è la versione {version}.",
+    updating: "Aggiornamento di WinDict",
+    updating_detail: "Installazione della versione {version}. WinDict si riavvierà da solo.",
     update_failed: "Impossibile aggiornare WinDict",
     draw_window_failed: "WinDict non è riuscito a disegnare la finestra",
     draw_menu_failed: "WinDict non è riuscito a disegnare il menu",

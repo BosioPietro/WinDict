@@ -648,7 +648,12 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             app.install(download, true);
         }
         app.schedule_update_check(updating::FIRST_CHECK_MS);
-        let updated = replacing.is_some();
+        // However the new version came: from the menu, the setup or WinGet.
+        let version = env!("CARGO_PKG_VERSION");
+        let updated = replacing.is_some() || app.config.version != version;
+        if app.config.version != version && config_error.is_none() {
+            app.save_setting(|config| config.version = version.into());
+        }
         if let Some(replacing) = replacing {
             std::thread::spawn(move || replacing.remove_old());
         }

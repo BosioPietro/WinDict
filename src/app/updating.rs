@@ -86,8 +86,19 @@ impl App {
         match result {
             // The new version has started, and waits for this one to go.
             Ok(()) if !update::by_task() => self.on_command(Command::Quit),
-            // The task closes this one once it's ready to replace it.
-            Ok(()) => {}
+            // The task closes this one once it's ready to replace it,
+            // which takes a while: say it's coming.
+            Ok(()) => {
+                if let Some(release) = &self.update {
+                    self.tray.notify(
+                        tr().updating,
+                        &fill(
+                            tr().updating_detail,
+                            &[("version", &release.tag.trim_start_matches('v'))],
+                        ),
+                    );
+                }
+            }
             Err(e) => {
                 self.tray.notify(tr().update_failed, &e);
                 if update::by_task() {

@@ -59,6 +59,9 @@ strings! {
     updated: "WinDict updated",
     /// `{version}`.
     updated_detail: "This is version {version}.",
+    updating: "Updating WinDict",
+    /// `{version}`.
+    updating_detail: "Installing version {version}. WinDict will start again by itself.",
     update_failed: "WinDict couldn\u{2019}t update",
     draw_window_failed: "WinDict couldn\u{2019}t draw its window",
     draw_menu_failed: "WinDict couldn\u{2019}t draw its menu",

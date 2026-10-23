@@ -89,6 +89,11 @@ pub struct Config {
     pub check_updates: bool,
     /// Whether the introduction has been shown (see `app::onboarding`).
     pub onboarded: bool,
+    /// The version of WinDict that ran last: when another one starts, it
+    /// says it was updated. Missing, it was a version from before there
+    /// was this setting.
+    #[serde(default)]
+    pub version: String,
 }
 
 /// The sizes the card can be zoomed to, in percent.
@@ -155,6 +160,7 @@ impl Default for Config {
             animations: None,
             check_updates: true,
             onboarded: false,
+            version: env!("CARGO_PKG_VERSION").into(),
         }
     }
 }
@@ -278,6 +284,14 @@ mod tests {
             parse(br#"{"max_definitions": 0}"#).unwrap().max_definitions,
             1
         );
+    }
+
+    #[test]
+    fn tells_an_older_version_ran() {
+        // Settings saved before there was `version` are an older version's.
+        assert_eq!(parse(b"{}").unwrap().version, "");
+        // New settings are this version's.
+        assert_eq!(Config::default().version, env!("CARGO_PKG_VERSION"));
     }
 
     #[test]

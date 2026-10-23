@@ -126,7 +126,7 @@ impl Tray {
     }
 }
 
-/// A copy of `icon` with a dot of `color` in its bottom right corner.
+/// A copy of `icon` with a dot of `color` in its top right corner.
 unsafe fn badged(icon: HICON, color: (u8, u8, u8)) -> Option<HICON> {
     let mut info = ICONINFO::default();
     GetIconInfo(icon, &mut info).ok()?;
@@ -189,17 +189,18 @@ unsafe fn badged(icon: HICON, color: (u8, u8, u8)) -> Option<HICON> {
     badged
 }
 
-/// Paints a dot of `color` in the bottom right corner of a square of
+/// Paints a dot of `color` in the top right corner of a square of
 /// `width` BGRA pixels with straight alpha, with a clear ring around it so
 /// it stands out from the icon.
 fn paint_dot(pixels: &mut [u32], width: usize, (r, g, b): (u8, u8, u8)) {
     let size = width as f32;
     let radius = size * 0.19;
     let gap = (size * 0.06).max(1.0);
-    let centre = size - radius - size * 0.02;
+    let inset = radius + size * 0.02;
+    let (cx, cy) = (size - inset, inset);
     for (i, pixel) in pixels.iter_mut().enumerate() {
         let (x, y) = ((i % width) as f32 + 0.5, (i / width) as f32 + 0.5);
-        let distance = ((x - centre).powi(2) + (y - centre).powi(2)).sqrt();
+        let distance = ((x - cx).powi(2) + (y - cy).powi(2)).sqrt();
         // How much of the pixel each circle covers, with a pixel of blur.
         let cover = |r: f32| (r - distance + 0.5).clamp(0.0, 1.0);
         let (dot, ring) = (cover(radius), cover(radius + gap));
@@ -235,10 +236,10 @@ mod tests {
         paint_dot(&mut pixels, 32, (200, 0, 0));
         let at = |x: usize, y: usize| pixels[y * 32 + x].to_le_bytes();
         // The middle of the dot is its color; the icon shows through elsewhere.
-        assert_eq!(at(25, 25), [0, 0, 200, 255]);
+        assert_eq!(at(25, 6), [0, 0, 200, 255]);
         assert_eq!(at(4, 4), [255, 255, 255, 255]);
-        assert_eq!(at(25, 4), [255, 255, 255, 255]);
+        assert_eq!(at(25, 25), [255, 255, 255, 255]);
         // Around it, a clear ring.
-        assert_eq!(at(25, 18)[3], 0);
+        assert_eq!(at(25, 13)[3], 0);
     }
 }
