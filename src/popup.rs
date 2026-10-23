@@ -567,14 +567,9 @@ impl Popup {
         };
         let button = self.speak.shown().then_some(BACK_SIZE);
         let muted = matches!(body, Body::Loading { status: true });
-        let heading = self.renderer.layout_header(
-            word,
-            phonetic,
-            content_w - room,
-            indent,
-            button,
-            muted,
-        )?;
+        let heading =
+            self.renderer
+                .layout_header(word, phonetic, content_w - room, indent, button, muted)?;
         let shown = Shown {
             word: word.to_owned(),
             phonetic: phonetic.map(str::to_owned),
