@@ -150,7 +150,7 @@ impl Default for Config {
             max_synonyms: 6,
             show_examples: true,
             zoom: 100,
-            selection: SelectionMode::Automatic,
+            selection: SelectionMode::Direct,
             use_ui_automation: None,
             online_lookup: true,
             languages: vec!["en".into()],
@@ -277,7 +277,7 @@ mod tests {
         assert!(config.online_lookup);
         assert!(config.check_updates);
         assert!(config.show_examples);
-        assert_eq!(config.selection, SelectionMode::Automatic);
+        assert_eq!(config.selection, SelectionMode::Direct);
         assert_eq!(config.languages, ["en"]);
         assert_eq!(config.zoom, 100);
         assert_eq!(
