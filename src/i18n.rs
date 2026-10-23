@@ -110,6 +110,8 @@ strings! {
     key_close: "Close",
 
     // The card: a definition.
+    /// The heading while the selection is being looked up.
+    looking_up: "Looking up\u{2026}",
     similar: "Similar",
     opposite: "Opposite",
     /// `{word}`: shown when a word is a form of another.

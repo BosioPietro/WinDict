@@ -957,11 +957,15 @@ impl App {
         self.card.history.clear();
         (self.card.translatable, self.card.translating) = (None, None);
         self.sync_back_keys();
+        let status = match self.card.to_translate {
+            true => tr().translating,
+            false => tr().looking_up,
+        };
         self.show_body(
             anchor_or_cursor(None),
-            "WinDict",
+            status,
             None,
-            Body::Loading,
+            Body::Loading { status: true },
             false,
         );
         self.card.copying = self.card.popup.as_ref().is_some_and(|p| p.visible);

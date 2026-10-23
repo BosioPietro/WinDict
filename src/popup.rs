@@ -566,16 +566,22 @@ impl Popup {
             PIN_ROOM
         };
         let button = self.speak.shown().then_some(BACK_SIZE);
-        let heading =
-            self.renderer
-                .layout_header(word, phonetic, content_w - room, indent, button)?;
+        let muted = matches!(body, Body::Loading { status: true });
+        let heading = self.renderer.layout_header(
+            word,
+            phonetic,
+            content_w - room,
+            indent,
+            button,
+            muted,
+        )?;
         let shown = Shown {
             word: word.to_owned(),
             phonetic: phonetic.map(str::to_owned),
             heading,
             body: self.renderer.layout_body(&body, content_w, PAD_BOTTOM)?,
             indent,
-            loading: matches!(body, Body::Loading),
+            loading: matches!(body, Body::Loading { .. }),
         };
         self.draw_content(&shown, transition, rise_from)?;
         self.shown = Some(shown);

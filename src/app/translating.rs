@@ -66,9 +66,9 @@ impl App {
         if !in_place {
             self.show_body(
                 anchor_or_cursor(anchor),
-                "WinDict",
+                tr().translating,
                 None,
-                Body::Loading,
+                Body::Loading { status: true },
                 false,
             );
         }

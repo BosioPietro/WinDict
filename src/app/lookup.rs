@@ -42,7 +42,7 @@ impl App {
             (None, None) if !self.config.online_lookup => {
                 return self.present(place, &word, &Lookup::NotFound);
             }
-            (None, None) => self.present_body(place, &word, None, Body::Loading),
+            (None, None) => self.present_body(place, &word, None, Body::Loading { status: false }),
         }
 
         let (id, events) = (self.card.request, self.events.clone());

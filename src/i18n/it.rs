@@ -56,6 +56,7 @@ pub const IT: Strings = Strings {
     key_close: "Chiudi",
 
     // The card: a definition.
+    looking_up: "Ricerca in corso\u{2026}",
     similar: "Sinonimi",
     opposite: "Contrari",
     also_form_of: "Anche forma di \u{201C}{word}\u{201D}",

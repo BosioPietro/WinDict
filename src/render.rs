@@ -475,7 +475,9 @@ pub enum Face {
 
 /// What the body of the card shows.
 pub enum Body<'a> {
-    Loading,
+    /// On its way; with `status`, the heading says what's happening
+    /// rather than naming a word, and shows muted.
+    Loading { status: bool },
     Definition(&'a Definition),
     /// `suggestion`, if any, is offered after `detail` as a link to its own
     /// definition: "Did you mean embody?"

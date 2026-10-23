@@ -7,7 +7,7 @@ impl Renderer {
         let mut out = Stack::default();
         match body {
             // Room for the loading dots, which popup.rs draws.
-            Body::Loading => out.y = 26.0,
+            Body::Loading { .. } => out.y = 26.0,
             Body::Message {
                 title,
                 detail,

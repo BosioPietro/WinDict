@@ -10,6 +10,7 @@ const BUTTON_INK_BELOW: f32 = (1887.0 - 161.0) / 2.0 / 2048.0 * 14.0;
 impl Renderer {
     /// The word and its pronunciation, `indent` DIPs from the left, with
     /// room after them for a button `button` DIPs wide, if there's one.
+    /// A `muted` heading says what the card is doing rather than naming a word.
     pub fn layout_header(
         &self,
         word: &str,
@@ -17,6 +18,7 @@ impl Renderer {
         width: f32,
         indent: f32,
         button: Option<f32>,
+        muted: bool,
     ) -> Result<Heading> {
         let room = width - indent;
         let button_room = button.map_or(0.0, |w| HEADING_BUTTON_GAP + w);
@@ -74,7 +76,7 @@ impl Renderer {
                 layout: title,
                 x: indent,
                 y: 0.0,
-                ink: Ink::Primary,
+                ink: if muted { Ink::Tertiary } else { Ink::Primary },
                 accents: Vec::new(),
             }],
             width,
