@@ -41,6 +41,7 @@ impl Settings {
     pub(super) fn switch(&self, sw: Switch) -> bool {
         match sw {
             Switch::Autostart => self.values.autostart,
+            Switch::UiAccess => self.values.ui_access == Some(true),
             Switch::Online => self.values.config.online_lookup,
             Switch::Examples => self.values.config.show_examples,
             Switch::Animations => self.values.config.animated(),

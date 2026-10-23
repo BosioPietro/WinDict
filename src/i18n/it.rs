@@ -124,7 +124,7 @@ pub const IT: Strings = Strings {
     intro_shortcut_taken: "Un\u{2019}altra app usa già questa scorciatoia.",
     intro_choose_shortcut: "Scegline un\u{2019}altra",
     intro_ui_access: "Mostra sopra Start",
-    intro_ui_access_waiting: "In attesa di Windows\u{2026}",
+    intro_ui_access_waiting: "In attesa di Windows",
     intro_ui_access_cancelled: "Windows non ha avuto il permesso: non è cambiato nulla.",
     intro_ui_access_failed: "Non ha funzionato: {error}",
 
@@ -157,6 +157,8 @@ pub const IT: Strings = Strings {
     lookup_shortcut: "Cerca",
     start_with_windows: "Avvia con Windows",
     start_with_windows_detail: "Avvia WinDict insieme al PC",
+    above_start: "Mostra sopra Start",
+    above_start_detail: "Apre la scheda sopra Start e Cerca",
     check_updates: "Cerca aggiornamenti",
     check_updates_detail: "Avviene una volta al giorno",
     card: "Scheda",

@@ -129,8 +129,9 @@ impl App {
 
     /// Turns UI access on or off, which restarts WinDict, on a thread of its
     /// own: it waits for Windows to ask, and for the script that does it.
-    /// It's said how that went once WinDict is back, on this step.
-    fn ask_ui_access(&mut self, on: bool) {
+    /// It's said how that went once WinDict is back: on the introduction's
+    /// step, if it was turned there.
+    pub(super) fn ask_ui_access(&mut self, on: bool) {
         self.save_setting(|config| config.ui_access_asked = Some(on));
         let events = self.events.clone();
         std::thread::spawn(move || {
@@ -150,6 +151,9 @@ impl App {
             UiAccessError::Failed(e) => fill(tr().intro_ui_access_failed, &[("error", &e)]),
         };
         let on = installed::ui_access_on();
+        if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
+            let _ = settings.settle_ui_access(on, &note, true);
+        }
         if let Some(intro) = self.intro.as_mut().filter(|i| i.visible) {
             let _ = intro.settle_ui_access(on, Some((note, true)));
         }
@@ -157,22 +161,32 @@ impl App {
 
     /// At start, once WinDict has restarted for UI access to be turned
     /// `on` or off: back on the introduction's step, if it was turned there,
-    /// or in a notification.
+    /// or else in the settings, under the switch; failing that, in a
+    /// notification.
     pub(super) fn after_ui_access(&mut self, on: bool) {
         self.save_setting(|config| config.ui_access_asked = None);
-        let (title, detail) = match (installed::ui_access_on() == on, on) {
-            (true, true) => (tr().ui_access_on, tr().ui_access_on_detail),
-            (true, false) => (tr().ui_access_off, tr().ui_access_off_detail),
-            (false, _) => (tr().ui_access_unchanged, tr().ui_access_unchanged_detail),
+        let ui_access = installed::ui_access_on();
+        let failed = ui_access != on;
+        let (title, detail) = match (failed, on) {
+            (false, true) => (tr().ui_access_on, tr().ui_access_on_detail),
+            (false, false) => (tr().ui_access_off, tr().ui_access_off_detail),
+            (true, _) => (tr().ui_access_unchanged, tr().ui_access_unchanged_detail),
         };
-        if !self.config.onboarded && self.open_intro(Step::AboveStart) {
-            let (failed, ui_access) = (installed::ui_access_on() != on, installed::ui_access_on());
-            if let Some(intro) = self.intro.as_mut() {
-                let _ = intro.settle_ui_access(ui_access, Some((detail.to_owned(), failed)));
+        if !self.config.onboarded {
+            if self.open_intro(Step::AboveStart) {
+                if let Some(intro) = self.intro.as_mut() {
+                    let _ = intro.settle_ui_access(ui_access, Some((detail.to_owned(), failed)));
+                }
+                return;
             }
         } else {
-            self.tray.notify(title, detail);
+            self.open_settings();
+            if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
+                let _ = settings.settle_ui_access(ui_access, detail, failed);
+                return;
+            }
         }
+        self.tray.notify(title, detail);
     }
 
     fn ensure_intro(&mut self, theme: Theme) -> Option<&mut Intro> {

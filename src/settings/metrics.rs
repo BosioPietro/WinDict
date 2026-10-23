@@ -135,6 +135,8 @@ pub(super) const EXPAND_MS: u64 = ui::RESIZE_MS;
 /// Once the card has shrunk, the window does.
 pub(super) const SETTLE_MS: u32 = ui::RESIZE_MS as u32 + 60;
 pub(super) const TIMER_SETTLE: usize = 1;
+/// The next of the dots after "Waiting for Windows".
+pub const TIMER_DOTS: usize = 2;
 pub(super) const BREATHE_MS: u64 = 1600;
 
 // Segoe Fluent Icons and Segoe MDL2 Assets.

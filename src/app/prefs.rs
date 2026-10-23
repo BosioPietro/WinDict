@@ -20,6 +20,7 @@ impl App {
         Values {
             config,
             autostart: autostart::is_enabled(),
+            ui_access: installed::ui_access_available().then(installed::ui_access_on),
         }
     }
 
@@ -60,6 +61,15 @@ impl App {
             self.register_hotkeys();
         }
         win::set_timer(self.hwnd, TIMER_SETTINGS_HIDE, HIDE_DONE_MS);
+    }
+
+    /// Something else became the active window: the settings window goes,
+    /// unless it's waiting for Windows to ask about UI access.
+    pub(super) fn settings_left(&mut self) {
+        let waiting = self.settings.as_ref().is_some_and(|s| s.waiting());
+        if !waiting {
+            self.close_settings();
+        }
     }
 
     /// The settings changed from elsewhere (the tray menu, or the file): the
@@ -125,6 +135,7 @@ impl App {
             Change::Close => return self.close_settings(),
             Change::OpenConfig => return open_config_file(),
             Change::Autostart(on) => return autostart::set(on),
+            Change::UiAccess(on) => return self.ask_ui_access(on),
             // No shortcut may fire as it's pressed to be kept, the one being
             // replaced or the other.
             Change::RecordingStarted => return self.unregister_hotkeys(),

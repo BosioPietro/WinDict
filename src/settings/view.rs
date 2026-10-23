@@ -280,6 +280,7 @@ impl Settings {
         let mut spare = None;
         let mut slack_y = 0.0;
         for (i, (name, rows)) in SECTIONS.iter().enumerate() {
+            let rows: Vec<&Row> = rows.iter().filter(|row| row.shown(&self.values)).collect();
             let name = name(i18n::tr());
             y += if i == 0 { px(2.0) } else { px(SECTION_GAP) };
             let label = Text::new(c, &parent)?;
@@ -448,21 +449,14 @@ impl Settings {
                 .into_iter()
                 .collect::<Option<_>>()
                 .ok_or_else(missing)?,
-            switches: parts
-                .switches
-                .into_iter()
-                .collect::<Option<_>>()
-                .ok_or_else(missing)?,
+            // Some rows don't show.
+            switches: parts.switches.into(),
             choices: parts
                 .choices
                 .into_iter()
                 .collect::<Option<_>>()
                 .ok_or_else(missing)?,
-            notes: parts
-                .notes
-                .into_iter()
-                .collect::<Option<_>>()
-                .ok_or_else(missing)?,
+            notes: parts.notes.into(),
             counters: parts
                 .counters
                 .into_iter()
@@ -883,6 +877,7 @@ impl Settings {
             Control::Shortcut(shortcut) => Some(Note::of(shortcut)),
             Control::Fold(Fold::Shortcuts) => Some(Note::Shortcuts),
             Control::Fold(Fold::Languages) => Some(Note::Language),
+            Control::Switch(Switch::UiAccess) => Some(Note::UiAccess),
             _ => None,
         };
         if let Some(note) = note {

@@ -198,6 +198,15 @@ pub fn blink(c: &Compositor, caret: &SpriteVisual) -> Result<()> {
 }
 
 /// A line of text and the brush that shows it.
+/// How long each step of [`waiting`]'s dots shows, in ms.
+pub const DOTS_MS: u32 = 400;
+
+/// `text` with `dots` dots after it, from one to three, as what's waiting
+/// shows: they come one by one, step after step.
+pub fn waiting(text: &str, dots: usize) -> String {
+    format!("{text}{}", ".".repeat(dots % 3 + 1))
+}
+
 pub struct Text {
     pub visual: SpriteVisual,
     pub brush: CompositionSurfaceBrush,
@@ -566,6 +575,12 @@ impl Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dots_come_one_by_one() {
+        let steps: Vec<String> = (0..4).map(|i| waiting("Waiting", i)).collect();
+        assert_eq!(steps, ["Waiting.", "Waiting..", "Waiting...", "Waiting."]);
+    }
 
     #[test]
     fn eases_like_css() {

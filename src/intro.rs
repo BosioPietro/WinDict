@@ -114,6 +114,8 @@ const SWITCH_FILL_MS: u64 = 160;
 /// Once what's going has faded, it's taken away.
 const GONE_MS: u32 = SETTLE_MS as u32 + 30;
 const TIMER_GONE: usize = 1;
+/// The next of the dots after "Waiting for Windows".
+const TIMER_DOTS: usize = 2;
 
 /// "Cancel" in Segoe Fluent Icons and Segoe MDL2 Assets.
 const CLOSE_GLYPH: &str = "\u{E8BB}";
@@ -327,6 +329,8 @@ pub struct Intro {
     waiting: bool,
     /// How turning UI access on went, and whether it failed.
     note: Option<(String, bool)>,
+    /// How many steps the dots have taken while Windows asks.
+    dots: usize,
     theme: Theme,
     scale: f32,
     hovered: Option<Hit>,
@@ -362,6 +366,7 @@ impl Intro {
             options: Options::default(),
             waiting: false,
             note: None,
+            dots: 0,
             theme,
             scale: 1.0,
             hovered: None,
@@ -442,6 +447,7 @@ impl Intro {
     /// how that went, and whether it failed.
     pub fn settle_ui_access(&mut self, on: bool, note: Option<(String, bool)>) -> Result<()> {
         (self.options.ui_access, self.waiting, self.note) = (on, false, note);
+        win::kill_timer(self.hwnd, TIMER_DOTS);
         self.show_switch(true)?;
         self.show_note()
     }
@@ -545,8 +551,15 @@ impl Intro {
         self.set_pressed(None)
     }
 
-    /// What was fading out has, and goes.
-    pub fn on_timer(&mut self) -> Result<()> {
+    /// Timer `id` went off: what was fading out has, and goes, or the dots
+    /// take a step.
+    pub fn on_timer(&mut self, id: usize) -> Result<()> {
+        if id == TIMER_DOTS {
+            self.dots += 1;
+            let waiting = ui::waiting(tr().intro_ui_access_waiting, self.dots);
+            self.note = Some((waiting, false));
+            return self.show_note();
+        }
         win::kill_timer(self.hwnd, TIMER_GONE);
         for gone in self.gone.drain(..) {
             if let Ok(parent) = gone.Parent() {
@@ -623,8 +636,9 @@ impl Intro {
         let action = match self.steps[self.at] {
             Step::AboveStart if !self.waiting => {
                 self.options.ui_access = !self.options.ui_access;
-                self.waiting = true;
-                self.note = Some((tr().intro_ui_access_waiting.into(), false));
+                (self.waiting, self.dots) = (true, 0);
+                self.note = Some((ui::waiting(tr().intro_ui_access_waiting, 0), false));
+                win::set_timer(self.hwnd, TIMER_DOTS, ui::DOTS_MS);
                 Action::UiAccess(self.options.ui_access)
             }
             Step::Ready => {

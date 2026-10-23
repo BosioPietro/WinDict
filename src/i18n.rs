@@ -190,7 +190,8 @@ strings! {
     intro_choose_shortcut: "Choose another",
     /// The switch that turns UI access on.
     intro_ui_access: "Show above Start",
-    intro_ui_access_waiting: "Waiting for Windows\u{2026}",
+    /// Dots follow it, one, then two, then three, and again.
+    intro_ui_access_waiting: "Waiting for Windows",
     intro_ui_access_cancelled: "Windows didn\u{2019}t get permission, so nothing changed.",
     /// `{error}`.
     intro_ui_access_failed: "That didn\u{2019}t work: {error}",
@@ -228,6 +229,8 @@ strings! {
     lookup_shortcut: "Look up",
     start_with_windows: "Start with Windows",
     start_with_windows_detail: "Runs WinDict when you sign in",
+    above_start: "Show above Start",
+    above_start_detail: "Opens the card on top of Start and Search",
     check_updates: "Check for updates",
     check_updates_detail: "Once a day; the tray icon shows a dot when there\u{2019}s one",
     card: "Card",

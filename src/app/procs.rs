@@ -463,7 +463,12 @@ pub(super) unsafe extern "system" fn settings_proc(
             }
             LRESULT(0)
         }
-        // The card has shrunk: the window follows.
+        // The dots after "Waiting for Windows" take a step, or the card has
+        // shrunk: the window follows.
+        WM_TIMER if wparam.0 == crate::settings::TIMER_DOTS => {
+            with_app(|app| app.in_settings(|s| s.step_dots().map(|_| None)));
+            LRESULT(0)
+        }
         WM_TIMER => {
             with_app(|app| app.in_settings(|s| s.settle().map(|_| None)));
             LRESULT(0)
@@ -510,6 +515,8 @@ pub(super) unsafe extern "system" fn settings_proc(
         WM_ACTIVATE => {
             if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE {
                 with_app(|app| app.in_settings(|s| s.deactivate()));
+                // Like the other windows, it goes once something else is clicked.
+                with_app(|app| app.settings_left());
             } else {
                 with_app(|app| app.in_settings(|s| s.activated().map(|_| None)));
             }
@@ -592,9 +599,10 @@ pub(super) unsafe extern "system" fn intro_proc(
             with_app(|app| app.in_intro(|i| i.release(x, y)));
             LRESULT(0)
         }
-        // What slid or faded away is gone.
+        // What slid or faded away is gone, or the dots take a step.
         WM_TIMER => {
-            with_app(|app| app.in_intro(|i| i.on_timer().map(|_| None)));
+            let id = wparam.0;
+            with_app(|app| app.in_intro(|i| i.on_timer(id).map(|_| None)));
             LRESULT(0)
         }
         WM_KEYDOWN => {

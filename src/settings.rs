@@ -49,14 +49,19 @@ use crate::ui::{
 };
 use crate::win::{self, Window};
 
+/// What the window's timer for the dots after "Waiting for Windows" is.
+pub use metrics::TIMER_DOTS;
 use metrics::*;
 
 /// What the settings window shows: the settings, and whether WinDict
-/// starts with Windows, which is kept in the registry instead.
+/// starts with Windows, and shows above Start, which are kept in the
+/// registry instead.
 #[derive(Clone)]
 pub struct Values {
     pub config: Config,
     pub autostart: bool,
+    /// Whether UI access is on, in the installed copy: only it can have it.
+    pub ui_access: Option<bool>,
 }
 
 /// Something done in the window, for the app to carry out.
@@ -82,6 +87,9 @@ pub enum Change {
     Selection(SelectionMode),
     Animations(bool),
     Autostart(bool),
+    /// Turn UI access on or off. The switch waits, until
+    /// [`Settings::settle_ui_access`].
+    UiAccess(bool),
     CheckUpdates(bool),
     /// The languages translated from and into when the card can't tell,
     /// as codes.
@@ -94,14 +102,17 @@ pub enum Change {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Switch {
     Autostart,
+    /// Only in the installed copy.
+    UiAccess,
     Online,
     Examples,
     Animations,
     Updates,
 }
 
-const SWITCHES: [Switch; 5] = [
+const SWITCHES: [Switch; 6] = [
     Switch::Autostart,
+    Switch::UiAccess,
     Switch::Online,
     Switch::Examples,
     Switch::Animations,
@@ -264,14 +275,17 @@ enum Note {
     TranslateShortcut,
     Language,
     Selection,
+    /// How turning UI access on or off is going.
+    UiAccess,
 }
 
-const NOTES: [Note; 5] = [
+const NOTES: [Note; 6] = [
     Note::Shortcuts,
     Note::Shortcut,
     Note::TranslateShortcut,
     Note::Language,
     Note::Selection,
+    Note::UiAccess,
 ];
 
 impl Note {
@@ -290,6 +304,7 @@ impl Note {
             Note::TranslateShortcut => tr().translate_shortcut_detail.into(),
             Note::Language => summary(&values.config.languages),
             Note::Selection => selection_detail(values.config.selection).into(),
+            Note::UiAccess => tr().above_start_detail.into(),
         }
     }
 }
@@ -426,6 +441,12 @@ impl Row {
     fn detail(&self) -> &'static str {
         (self.detail)(tr())
     }
+
+    /// Whether the row shows, with `values`: the one for UI access only in
+    /// the installed copy.
+    fn shown(&self, values: &Values) -> bool {
+        !matches!(self.control, Control::Switch(Switch::UiAccess)) || values.ui_access.is_some()
+    }
 }
 
 const fn row(icon: &'static str, title: Label, detail: Label, control: Control) -> Row {
@@ -446,6 +467,12 @@ const SECTIONS: &[(Label, &[Row])] = &[
                 |s| s.start_with_windows,
                 |s| s.start_with_windows_detail,
                 Control::Switch(Switch::Autostart),
+            ),
+            row(
+                "\u{E81E}",
+                |s| s.above_start,
+                |s| s.above_start_detail,
+                Control::Switch(Switch::UiAccess),
             ),
             row(
                 "\u{E895}",
@@ -703,11 +730,12 @@ struct View {
     /// In the order of [`SHORTCUTS`].
     shortcuts: Vec<ShortcutView>,
     /// In the order of [`SWITCHES`] and [`COUNTERS`].
-    switches: Vec<SwitchView>,
+    /// A row that isn't shown has none.
+    switches: Vec<Option<SwitchView>>,
     field: FieldView,
     /// In the order of [`CHOICES`] and [`NOTES`].
     choices: Vec<ChoiceView>,
-    notes: Vec<NoteView>,
+    notes: Vec<Option<NoteView>>,
     counters: Vec<CounterView>,
     /// The default languages' row, in the scroller.
     translate_at: Rect,
@@ -855,6 +883,10 @@ pub struct Settings {
     /// The scroll last started, which may still be running.
     scroll_anim: Option<Glide>,
     wheel_bursts: Bursts,
+    /// Windows is asking whether UI access may change, and how many steps
+    /// the dots after saying so have taken.
+    waiting: bool,
+    dots: usize,
     pub visible: bool,
     /// The tallest the card gets, in pixels. The window is made for that,
     /// so that it never resizes under the blurred background.
@@ -911,6 +943,8 @@ impl Settings {
             scroll: 0.0,
             scroll_anim: None,
             wheel_bursts: Bursts::default(),
+            waiting: false,
+            dots: 0,
             visible: false,
             room: 0.0,
             _window: window,
@@ -1366,6 +1400,32 @@ impl Settings {
         }
     }
 
+    /// UI access is `on`, as turning it on or off left it, and `note` says
+    /// how that went, and whether it `failed`.
+    pub fn settle_ui_access(&mut self, on: bool, note: &str, failed: bool) -> Result<()> {
+        (self.values.ui_access, self.waiting) = (Some(on), false);
+        win::kill_timer(self.hwnd, TIMER_DOTS);
+        self.show_switch(Switch::UiAccess, true)?;
+        self.set_note(Note::UiAccess, note, failed)
+    }
+
+    /// Whether Windows is asking whether UI access may change: the window
+    /// stays while it does.
+    pub fn waiting(&self) -> bool {
+        self.waiting
+    }
+
+    /// The dots after "Waiting for Windows" take a step, in place.
+    pub fn step_dots(&mut self) -> Result<()> {
+        if !self.waiting {
+            return Ok(());
+        }
+        self.dots += 1;
+        let text = ui::waiting(tr().intro_ui_access_waiting, self.dots);
+        self.notes[Note::UiAccess as usize] = (text.clone(), false);
+        self.show_note(Note::UiAccess, &text, false, false)
+    }
+
     /// Shows `values` changed from elsewhere, cross-fading to them.
     pub fn refresh(&mut self, theme: Theme, values: Values) -> Result<()> {
         (self.values, self.recording) = (values, None);
@@ -1485,6 +1545,18 @@ impl Settings {
                 self.start_recording(shortcut)?;
                 Some(Change::RecordingStarted)
             }
+            // It waits for Windows to ask, and can't be turned again until
+            // it has.
+            Hit::Switch(Switch::UiAccess) if self.waiting => None,
+            Hit::Switch(Switch::UiAccess) => {
+                let on = !self.switch(Switch::UiAccess);
+                (self.values.ui_access, self.waiting, self.dots) = (Some(on), true, 0);
+                self.show_switch(Switch::UiAccess, true)?;
+                let text = ui::waiting(tr().intro_ui_access_waiting, 0);
+                self.set_note(Note::UiAccess, &text, false)?;
+                win::set_timer(self.hwnd, TIMER_DOTS, ui::DOTS_MS);
+                Some(Change::UiAccess(on))
+            }
             Hit::Switch(sw) => {
                 let on = !self.switch(sw);
                 let v = &mut self.values;
@@ -1509,6 +1581,8 @@ impl Settings {
                         v.config.check_updates = on;
                         Change::CheckUpdates(on)
                     }
+                    // Turned above.
+                    Switch::UiAccess => return Ok(None),
                 };
                 self.show_switch(sw, true)?;
                 Some(change)

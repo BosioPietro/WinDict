@@ -8,10 +8,14 @@ impl Settings {
 
     /// Slides the knob over and fades the switch's fill to match its value.
     pub(super) fn show_switch(&self, sw: Switch, animate: bool) -> Result<()> {
-        let Some(view) = &self.view else {
+        let Some(v) = self
+            .view
+            .as_ref()
+            .and_then(|v| v.switches[sw as usize].as_ref())
+        else {
             return Ok(());
         };
-        let (v, anim, on) = (&view.switches[sw as usize], &self.anim, self.switch(sw));
+        let (anim, on) = (&self.anim, self.switch(sw));
         let rest = v.rest[on as usize];
         let (fill, color) = (if on { 1.0 } else { 0.0 }, self.theme.knob(on));
         if animate {
@@ -49,7 +53,10 @@ impl Settings {
         } else {
             scale(1.0)
         };
-        let (anim, knob) = (&self.anim, &view.switches[sw as usize].knob);
+        let Some(switch) = &view.switches[sw as usize] else {
+            return Ok(());
+        };
+        let (anim, knob) = (&self.anim, &switch.knob);
         anim.vector3(knob, "Scale", k, KNOB_MS / 2, 0, &anim.decelerate)
     }
 
@@ -228,7 +235,9 @@ impl Settings {
         let Some(view) = self.view.as_mut() else {
             return Ok(());
         };
-        let v = &mut view.notes[note as usize];
+        let Some(v) = view.notes[note as usize].as_mut() else {
+            return Ok(());
+        };
         std::mem::swap(&mut v.text, &mut v.old);
         let ink = if error { Ink::Critical } else { Ink::Secondary };
         let line = r.layout_line(text, Face::Small, ink, v.w)?;
@@ -537,7 +546,9 @@ impl Settings {
             Some(Hit::Close) => fade(&view.close_hover),
             Some(Hit::Shortcut(shortcut)) => fade(&view.shortcuts[shortcut as usize].hover),
             Some(Hit::Switch(sw)) => {
-                fade(&view.switches[sw as usize].hover)?;
+                if let Some(switch) = &view.switches[sw as usize] {
+                    fade(&switch.hover)?;
+                }
                 self.show_knob(sw)
             }
             Some(Hit::Choice(choice, _)) => self.show_choice_labels(choice),
