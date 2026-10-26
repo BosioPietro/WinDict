@@ -149,8 +149,8 @@ struct Setup {
     update: bool,
     language: Language,
     installer: &'static [u8],
-    /// Where the installer is written to run it from.
-    folder: PathBuf,
+    /// Where the installer is written to run it from, once it has been.
+    folder: Option<PathBuf>,
     news: Receiver<News>,
     sender: Sender<News>,
     /// How many steps the dots have taken.
@@ -216,7 +216,9 @@ pub fn run(compositor: Compositor, installer: &'static [u8]) -> Result<()> {
     }
     // Taken out first: the window's destroyed as it goes.
     drop(SETUP.with(|s| s.borrow_mut().take()));
-    let _ = std::fs::remove_dir_all(folder);
+    if let Some(folder) = folder {
+        let _ = std::fs::remove_dir_all(folder);
+    }
     Ok(())
 }
 
@@ -248,7 +250,7 @@ impl Setup {
             update: installed::install_dir().is_some(),
             language,
             installer,
-            folder: work_folder(),
+            folder: None,
             news,
             sender,
             dots: 0,
@@ -313,7 +315,14 @@ impl Setup {
 
     /// Runs the installer silently, on a thread of its own that waits for it.
     fn install(&mut self) -> Result<()> {
-        let exe = match write_out(&self.folder, self.installer) {
+        let folder = match self.folder.clone().map_or_else(work_folder, Ok) {
+            Ok(folder) => self.folder.insert(folder),
+            Err(e) => {
+                let error = fill(tr().setup_not_started, &[("error", &e)]);
+                return self.go(Stage::Failed(error));
+            }
+        };
+        let exe = match write_out(folder, self.installer) {
             Ok(exe) => exe,
             Err(e) => {
                 let error = fill(tr().setup_not_started, &[("error", &e)]);
@@ -887,7 +896,9 @@ impl Setup {
 /// Runs the installer silently, as WinGet and "Update app" do, passing it
 /// `switches` as they are, and returns its exit code. There's no window.
 pub fn quietly(installer: &[u8], switches: &[OsString]) -> i32 {
-    let folder = work_folder();
+    let Ok(folder) = work_folder() else {
+        return 1;
+    };
     let code = write_out(&folder, installer)
         .and_then(|exe| run_installer(&exe, switches))
         .map_or(1, |code| code as i32);
@@ -895,16 +906,65 @@ pub fn quietly(installer: &[u8], switches: &[OsString]) -> i32 {
     code
 }
 
-/// Where the installer is written out to while it runs, a folder of this
-/// setup's own.
-fn work_folder() -> PathBuf {
-    std::env::temp_dir().join(format!("WinDict-setup-{}", std::process::id()))
+/// Makes a new folder for the installer to be written out to and run from,
+/// in Windows' own temporary folder, that only administrators can write
+/// in: the installer runs elevated, so nothing else may swap it first. The
+/// user's %TEMP% won't do, as any app of theirs can write there.
+fn work_folder() -> std::io::Result<PathBuf> {
+    let temp = win::windows_dir().join("Temp");
+    let mut error = None;
+    for _ in 0..8 {
+        let folder = temp.join(format!("WinDict-setup-{:016x}", random()));
+        match private_dir(&folder) {
+            Ok(()) => return Ok(folder),
+            // Taken, maybe on purpose: a folder made by someone else could
+            // let them in, so it's never used.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => error = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(error.unwrap_or_else(|| std::io::ErrorKind::AlreadyExists.into()))
 }
 
-/// Writes `installer` out into `folder`, and returns where.
+/// Creates the folder `path`, which mustn't exist, that only administrators
+/// and the system can open, whatever the folder it's in allows.
+fn private_dir(path: &Path) -> std::io::Result<()> {
+    use windows::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+    use windows::Win32::Storage::FileSystem::CreateDirectoryW;
+    unsafe {
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        // Protected (nothing inherited): full control for the system and
+        // administrators, and no one else.
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            w!("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"),
+            SDDL_REVISION_1,
+            &mut descriptor,
+            None,
+        )?;
+        let attributes = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: descriptor.0,
+            bInheritHandle: false.into(),
+        };
+        let created = CreateDirectoryW(&HSTRING::from(path.as_os_str()), Some(&attributes));
+        let _ = LocalFree(Some(HLOCAL(descriptor.0)));
+        created.map_err(|e| std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF))
+    }
+}
+
+/// A number no one can guess ahead of time, for a folder's name.
+fn random() -> u64 {
+    use std::hash::{BuildHasher, RandomState};
+    RandomState::new().hash_one(std::process::id())
+}
+
+/// Writes `installer` out into `folder`, made by [`work_folder`], and
+/// returns where.
 fn write_out(folder: &Path, installer: &[u8]) -> std::io::Result<PathBuf> {
     let exe = folder.join(format!("WinDict-v{VERSION}-inno.exe"));
-    std::fs::create_dir_all(folder)?;
     std::fs::write(&exe, installer)?;
     Ok(exe)
 }

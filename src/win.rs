@@ -1,11 +1,13 @@
 //! Safe wrappers for the Win32 calls several parts of the app make, so
 //! they're written, and their errors handled, in one place.
 
+use std::path::PathBuf;
+
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::SystemInformation::GetTickCount64;
+use windows::Win32::System::SystemInformation::{GetSystemWindowsDirectoryW, GetTickCount64};
 use windows::Win32::UI::Accessibility::{
     SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK, WINEVENTPROC,
 };
@@ -284,6 +286,17 @@ pub fn set_title(hwnd: HWND, title: &str) {
 /// Milliseconds since Windows started.
 pub fn now_ms() -> u64 {
     unsafe { GetTickCount64() }
+}
+
+/// Windows' own folder, from Windows itself: %SystemRoot% is the user's to
+/// change, and so no ground for what runs elevated.
+pub fn windows_dir() -> PathBuf {
+    let mut buffer = [0u16; 260];
+    let len = unsafe { GetSystemWindowsDirectoryW(Some(&mut buffer)) } as usize;
+    if len == 0 || len > buffer.len() {
+        return PathBuf::from("C:\\Windows");
+    }
+    PathBuf::from(String::from_utf16_lossy(&buffer[..len]))
 }
 
 /// The pointer's position, in screen pixels.
