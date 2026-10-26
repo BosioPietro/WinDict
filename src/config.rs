@@ -1,7 +1,9 @@
 //! User settings, stored as JSON in `%APPDATA%\WinDict\config.json`.
 
-use std::io::ErrorKind;
+use std::fs::File;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
@@ -184,11 +186,18 @@ pub fn path() -> PathBuf {
     dir().join("config.json")
 }
 
+/// Why the file couldn't be read as settings when it was last loaded, if it
+/// couldn't. Until it loads, it isn't saved over: that would replace every
+/// setting in it with the defaults the app runs on meanwhile.
+static UNREADABLE: Mutex<Option<String>> = Mutex::new(None);
+
 /// Loads the config, writing the defaults on first run.
 /// Returns the config and whether this is the first run, or why the file
 /// couldn't be read as settings.
 pub fn load() -> Result<(Config, bool), String> {
-    load_from(&path())
+    let loaded = load_from(&path());
+    *UNREADABLE.lock().unwrap_or_else(|e| e.into_inner()) = loaded.as_ref().err().cloned();
+    loaded
 }
 
 fn load_from(path: &Path) -> Result<(Config, bool), String> {
@@ -215,17 +224,35 @@ pub fn read() -> Result<Config, String> {
     }
 }
 
-/// Writes the settings where [`load`] reads them.
+/// Writes the settings where [`load`] reads them, unless the file there
+/// couldn't be loaded: then it says why.
 pub fn save(config: &Config) -> Result<(), String> {
+    if let Some(e) = UNREADABLE.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        return Err(e);
+    }
     save_to(&path(), config)
 }
 
+/// Writes the settings to a file beside `path` first, and then puts it in
+/// its place: a write cut short (a crash, a full disk) leaves the old
+/// settings, not half of the new ones, and `wd` never reads half a file.
 fn save_to(path: &Path, config: &Config) -> Result<(), String> {
     let json = serde_json::to_string_pretty(config).map_err(|e| format!("config.json: {e}"))?;
-    path.parent()
-        .map_or(Ok(()), std::fs::create_dir_all)
-        .and_then(|_| std::fs::write(path, json))
-        .map_err(|e| format!("config.json: {e}"))
+    let temp = path.with_extension("json.tmp");
+    let write = || -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let mut file = File::create(&temp)?;
+        file.write_all(json.as_bytes())?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temp, path)
+    };
+    write().map_err(|e| {
+        let _ = std::fs::remove_file(&temp);
+        format!("config.json: {e}")
+    })
 }
 
 fn parse(bytes: &[u8]) -> Result<Config, String> {
@@ -418,6 +445,14 @@ mod tests {
         assert_eq!(config.hotkey, "Alt+D");
         assert!(path.exists());
         assert!(!load_from(&path).unwrap().1);
+        // Saved whole, and nothing left beside it.
+        let config = Config {
+            hotkey: "Ctrl+Alt+D".into(),
+            ..Config::default()
+        };
+        save_to(&path, &config).unwrap();
+        assert_eq!(load_from(&path).unwrap().0.hotkey, "Ctrl+Alt+D");
+        assert!(!path.with_extension("json.tmp").exists());
         // A path that can't be read as a file is an error, and stays as it is.
         let unreadable = dir.join("folder");
         std::fs::create_dir(&unreadable).unwrap();
