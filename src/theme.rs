@@ -8,7 +8,7 @@ use windows::UI::ViewManagement::{UIColorType, UISettings};
 
 use crate::config::ThemeMode;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Theme {
     pub dark: bool,
     pub transparency: bool,

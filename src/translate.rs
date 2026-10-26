@@ -1,7 +1,7 @@
 //! Quick translation of the word on the card: Google Translate's dictionary
 //! (the endpoint translate.google.com asks), which groups the translations
 //! by part of speech, then the older keyless `gtx` endpoint should that
-//! fail, and MyMemory (https://mymemory.translated.net) as a last fallback,
+//! fail, and MyMemory (<https://mymemory.translated.net>) as a last fallback,
 //! asked with the word's first definition for context. The translation
 //! shortcut translates whole passages the same way.
 

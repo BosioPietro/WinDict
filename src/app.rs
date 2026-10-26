@@ -707,8 +707,7 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
 /// introduction windows.
 unsafe fn register_classes(instance: HINSTANCE) -> windows::core::Result<()> {
     let arrow = LoadCursorW(None, IDC_ARROW)?;
-    let icon =
-        LoadIconW(Some(instance), PCWSTR(tray::ICON_ID as usize as *const u16)).unwrap_or_default();
+    let icon = tray::window_icon(instance);
     let classes: [(PCWSTR, WNDPROC, HCURSOR, HICON); 5] = [
         (
             MAIN_CLASS,

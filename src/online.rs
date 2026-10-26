@@ -1,5 +1,5 @@
 //! The online dictionaries: the Free Dictionary API
-//! (https://dictionaryapi.dev, built from Wiktionary), with Wiktionary's own
+//! (<https://dictionaryapi.dev>, built from Wiktionary), with Wiktionary's own
 //! API as a fallback, and for Italian, Wikizionario (`wikizionario`).
 
 use std::sync::mpsc;

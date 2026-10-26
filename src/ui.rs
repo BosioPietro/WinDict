@@ -1,6 +1,7 @@
 //! What the card, the tray menu and the settings window are built from:
 //! windows that host a composition visual tree, the outline they share,
-//! text sprites, and the animations they move with.
+//! text sprites, and the animations they move with. The introduction and
+//! the setup share more still, in [`picture_card`].
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -26,6 +27,8 @@ mod button;
 mod list;
 mod scroll;
 mod shapes;
+
+pub mod picture_card;
 
 pub use button::{button, button_width, ring, Button, BUTTON_H, BUTTON_W, FOCUS_OUTSET};
 pub use list::List;

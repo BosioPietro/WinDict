@@ -36,6 +36,8 @@ pub fn button_width(r: &Renderer, label: &str) -> Result<f32> {
 /// A button saying `label` at `at` in `parent`, drawn at `s` pixels per
 /// DIP: in the accent when it's the `primary` one, as Windows draws the one
 /// to go on with.
+// The drawing context (compositor, renderer, theme, scale) every builder in
+// `ui` takes, plus where the button goes and what it says.
 #[allow(clippy::too_many_arguments)]
 pub fn button(
     c: &Compositor,

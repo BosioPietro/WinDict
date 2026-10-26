@@ -24,7 +24,11 @@ use windows_numerics::Vector3;
 use crate::hotkey;
 use crate::i18n::tr;
 use crate::render::{Face, Ink, Renderer};
-use crate::theme::{argb, Theme};
+use crate::theme::Theme;
+use crate::ui::picture_card::{
+    self, Close, BUTTON_GAP, ENTER_MS, FOCUS_MS, HOVER_MS, INSET, LEAVE_MS, PAD_BOTTOM, PAD_X,
+    SHOW_MS, SLIDE, TOP_H,
+};
 use crate::ui::{
     self, button_width, container, outline, ring, rounded, scale, v2, v3, Animator, Button, Frame,
     Rect, Text, BUTTON_H, BUTTON_W, FOCUS_OUTSET, MARGIN,
@@ -34,31 +38,11 @@ use crate::win::{self, Window};
 // Geometry, in DIPs.
 const CARD_W: f32 = 720.0;
 const CARD_H: f32 = 440.0;
-/// The picture, on the left, as far from the card's edges all round.
-const INSET: f32 = 12.0;
 const PANE_W: f32 = 328.0;
 const PANE_H: f32 = CARD_H - 2.0 * INSET;
-const PICTURE_RADIUS: f32 = 8.0;
-/// Between the picture and the text, and between the text and the right.
-const PAD_X: f32 = 36.0;
 /// Where the text starts.
 const TEXT_X: f32 = INSET + PANE_W + PAD_X;
 const TEXT_W: f32 = CARD_W - TEXT_X - PAD_X;
-/// The strip along the top that drags the window, over the picture too.
-const TOP_H: f32 = 48.0;
-const CLOSE_SIZE: f32 = 32.0;
-/// The close button's distance from the card's top and right edges.
-const CLOSE_INSET: f32 = 10.0;
-const CLOSE_RADIUS: f32 = 5.0;
-/// Where a step's title starts, the same for every step.
-const TITLE_Y: f32 = 64.0;
-/// The symbol before a step's title, on a square tinted with the accent,
-/// and the space after it.
-const BADGE: f32 = 36.0;
-const BADGE_RADIUS: f32 = 8.0;
-const BADGE_GAP: f32 = 14.0;
-/// Between a step's title and what it says.
-const TITLE_GAP: f32 = 14.0;
 /// Between what a step says and what can be done there, and under the
 /// line saying the shortcut is taken.
 const ACTIONS_GAP: f32 = 20.0;
@@ -75,34 +59,17 @@ const KNOB_HOVER: f32 = 14.0;
 const NOTE_GAP: f32 = 10.0;
 /// How dim the switch is while Windows asks.
 const WAITING_OPACITY: f32 = 0.5;
-/// From the buttons to the bottom of the card.
-const PAD_BOTTOM: f32 = 28.0;
-const BUTTON_GAP: f32 = 8.0;
 /// The dots for the steps: the one for the step showing is longer.
 const DOT: f32 = 6.0;
 const DOT_ON: f32 = 18.0;
 const DOT_GAP: f32 = 6.0;
-/// How far the text slides as it goes and comes.
-const SLIDE: f32 = 24.0;
 /// How much larger a picture starts, as it fades in and settles.
 const ZOOM: f32 = 1.04;
-/// The least room kept between the window and the screen's edges.
-const SCREEN_GAP: f32 = 16.0;
-/// How much larger than its size in DIPs the window opens, all of it alike.
-const ENLARGE: f32 = 1.33;
 
 // Durations, in ms.
-const SHOW_MS: u64 = 360;
-const LEAVE_MS: u64 = 150;
-const ENTER_MS: u64 = 300;
-/// Each line of the text comes in this long after the one above it.
-const STAGGER_MS: u64 = 40;
 /// How long a picture takes to settle as it fades in.
 const SETTLE_MS: u64 = 700;
 const DOTS_MS: u64 = 300;
-const HOVER_MS: u64 = 100;
-const PRESS_MS: u64 = 90;
-const FOCUS_MS: u64 = 150;
 const THEME_MS: u64 = 300;
 const KNOB_MS: u64 = 300;
 const SWITCH_FILL_MS: u64 = 160;
@@ -111,9 +78,6 @@ const GONE_MS: u32 = SETTLE_MS as u32 + 30;
 const TIMER_GONE: usize = 1;
 /// The next of the dots after "Waiting for Windows".
 const TIMER_DOTS: usize = 2;
-
-/// "Cancel" in Segoe Fluent Icons and Segoe MDL2 Assets.
-const CLOSE_GLYPH: &str = "\u{E8BB}";
 
 /// A step of the introduction.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -287,8 +251,7 @@ struct View {
     pane: ContainerVisual,
     picture: SpriteVisual,
     step: StepView,
-    close_at: Rect,
-    close_hover: SpriteVisual,
+    close: Close,
     dots: Vec<DotView>,
     /// The buttons, which change at once.
     footer: ContainerVisual,
@@ -407,7 +370,12 @@ impl Intro {
         self.visible = true;
         self.anim.fade_in(root, ui::FADE_IN_MS, SHOW_MS)?;
         if let Some(view) = &self.view {
-            self.bring_in(&view.step.text, v3(0.0, SLIDE / 3.0 * s), ui::FADE_IN_MS)?;
+            picture_card::bring_in(
+                &self.anim,
+                &view.step.text,
+                v3(0.0, SLIDE / 3.0 * s),
+                ui::FADE_IN_MS,
+            )?;
         }
         Ok(())
     }
@@ -480,7 +448,7 @@ impl Intro {
         };
         let (x, y) = self.card_point(x, y);
         let px = |dip: f32| (dip * self.scale).round();
-        x >= 0.0 && x < px(CARD_W) && y >= 0.0 && y < px(TOP_H) && !view.close_at.contains(x, y)
+        x >= 0.0 && x < px(CARD_W) && y >= 0.0 && y < px(TOP_H) && !view.close.at.contains(x, y)
     }
 
     /// The pointer moved to a point in window pixels, or left.
@@ -558,9 +526,7 @@ impl Intro {
 
     /// Switches to `theme`, cross-fading everything.
     pub fn retheme(&mut self, theme: Theme) -> Result<()> {
-        let same = (theme.dark, theme.transparency, theme.accent)
-            == (self.theme.dark, self.theme.transparency, self.theme.accent);
-        if same {
+        if theme == self.theme {
             return Ok(());
         }
         self.theme = theme;
@@ -682,7 +648,7 @@ impl Intro {
             &anim.decelerate,
         )?;
         let step = self.build_step(&view.content)?;
-        self.bring_in(&step.text, v3(dx, 0.0), LEAVE_MS)?;
+        picture_card::bring_in(&self.anim, &step.text, v3(dx, 0.0), LEAVE_MS)?;
         self.show_dots(&view.dots, true)?;
 
         // Back comes and goes, and Next turns to Done.
@@ -710,22 +676,6 @@ impl Intro {
         {
             self.focus = Some(Hit::Next);
         }
-    }
-
-    /// Brings each line of `text` in from `from` away, a beat after the one
-    /// above it, starting after `delay`.
-    fn bring_in(&self, text: &ContainerVisual, from: Vector3, delay: u64) -> Result<()> {
-        let anim = &self.anim;
-        for (i, line) in text.Children()?.into_iter().enumerate() {
-            let rest = line.Offset()?;
-            let delay = delay + i as u64 * STAGGER_MS;
-            Animator::stop(&line, &["Opacity", "Offset"]);
-            line.SetOpacity(0.0)?;
-            line.SetOffset(rest + from)?;
-            anim.scalar(&line, "Opacity", 1.0, ENTER_MS, delay, &anim.decelerate)?;
-            anim.vector3(&line, "Offset", rest, ENTER_MS, delay, &anim.decelerate)?;
-        }
-        Ok(())
     }
 
     /// Moves the keyboard to the next (or previous) button, going round.
@@ -758,17 +708,9 @@ impl Intro {
             return Ok(());
         }
         let old = std::mem::replace(&mut self.pressed, hit);
-        for (hit, opacity) in [(old, 1.0), (hit, 0.8)] {
+        for (hit, down) in [(old, false), (hit, true)] {
             if let Some(button) = hit.and_then(|hit| self.button(hit)) {
-                let anim = &self.anim;
-                anim.scalar(
-                    &button.root,
-                    "Opacity",
-                    opacity,
-                    PRESS_MS,
-                    0,
-                    &anim.decelerate,
-                )?;
+                picture_card::show_pressed(&self.anim, button, down)?;
             }
         }
         Ok(())
@@ -783,7 +725,7 @@ impl Intro {
             return Ok(());
         };
         let hover = match hit {
-            Hit::Close => &view.close_hover,
+            Hit::Close => &view.close.hover,
             _ => match self.button(hit) {
                 Some(button) => &button.hover,
                 None => return Ok(()),
@@ -960,7 +902,6 @@ impl Intro {
             self.scale,
         );
         let px = |dip: f32| (dip * s).round();
-        let card_w = px(CARD_W);
         let content = c.CreateContainerVisual()?;
         self.frame.card.Children()?.InsertAtTop(&content)?;
 
@@ -971,42 +912,9 @@ impl Intro {
             w: px(PANE_W),
             h: px(PANE_H),
         };
-        let pane = container(c, &content, at.at())?;
-        pane.SetSize(at.size())?;
-        let corners = c.CreateRoundedRectangleGeometry()?;
-        corners.SetSize(at.size())?;
-        corners.SetCornerRadius(v2(px(PICTURE_RADIUS), px(PICTURE_RADIUS)))?;
-        pane.SetClip(&c.CreateGeometricClipWithGeometry(&corners)?)?;
+        let pane = picture_card::picture_pane(c, r, t, s, &content, at)?;
         let picture = self.build_picture(&pane)?;
-        // A shade darker or lighter than the picture, whatever it shows.
-        let edge = if t.dark {
-            argb(0x24, 0xFF, 0xFF, 0xFF)
-        } else {
-            argb(0x24, 0x00, 0x00, 0x00)
-        };
-        outline(c, r, &content, at, px(PICTURE_RADIUS), edge)?;
-
-        let size = px(CLOSE_SIZE);
-        let close_at = Rect {
-            x: card_w - px(CLOSE_INSET) - size,
-            y: px(CLOSE_INSET),
-            w: size,
-            h: size,
-        };
-        let close = container(c, &content, close_at.at())?;
-        let face = Rect {
-            w: size,
-            h: size,
-            ..Rect::default()
-        };
-        let (close_hover, _) = rounded(c, r, &close, face, px(CLOSE_RADIUS), t.highlight())?;
-        close_hover.SetOpacity(0.0)?;
-        let glyph = Text::new(c, &close)?;
-        let cross = r.layout_line(CLOSE_GLYPH, Face::Chrome, Ink::Primary, CLOSE_SIZE)?;
-        let glyph_size = glyph.show(r, &cross, s, t)?;
-        glyph
-            .visual
-            .SetOffset(v3(0.0, ((size - glyph_size.Y) / 2.0).round()))?;
+        let close = picture_card::close_button(c, r, t, s, &content, CARD_W)?;
 
         let step = self.build_step(&content)?;
         let dots = self.build_dots(&content)?;
@@ -1016,8 +924,7 @@ impl Intro {
             pane,
             picture,
             step,
-            close_at,
-            close_hover,
+            close,
             dots,
             footer,
             buttons,
@@ -1055,36 +962,9 @@ impl Intro {
         let step = self.steps[self.at];
         let text = container(c, content, v3(0.0, 0.0))?;
         let x = px(TEXT_X);
-        let mut y = px(TITLE_Y);
 
-        // The symbol, centred on the capitals of the title's first line.
-        let indent = BADGE + BADGE_GAP;
-        let line = r.layout_line(step.title(), Face::Display, Ink::Primary, TEXT_W - indent)?;
-        let b = px(BADGE);
-        let badge = container(
-            c,
-            &text,
-            v3(x, y + (line.cap_middle() * s - b / 2.0).round()),
-        )?;
-        let face = Rect {
-            w: b,
-            h: b,
-            ..Rect::default()
-        };
-        let a = t.accent;
-        let tint = argb(if t.dark { 0x33 } else { 0x24 }, a.R, a.G, a.B);
-        rounded(c, r, &badge, face, px(BADGE_RADIUS), tint)?;
-        let glyph = Text::new(c, &badge)?;
-        let symbol = r.layout_line(step.glyph(), Face::LargeButton, Ink::Accent, BADGE)?;
-        let size = glyph.show(r, &symbol, s, t)?;
-        glyph
-            .visual
-            .SetOffset(v3(0.0, ((b - size.Y) / 2.0).round()))?;
-
-        let title = Text::new(c, &text)?;
-        let size = title.show(r, &line, s, t)?;
-        title.visual.SetOffset(v3(px(TEXT_X + indent), y))?;
-        y += size.Y.max(b) + px(TITLE_GAP);
+        let (title, glyph) = (step.title(), step.glyph());
+        let mut y = picture_card::heading(c, r, t, s, &text, TEXT_X, TEXT_W, title, glyph, false)?;
 
         let detail = Text::new(c, &text)?;
         let (said, keys) = step.detail(&self.shortcuts);
@@ -1335,34 +1215,23 @@ impl Intro {
     /// Sizes the card for the current scale. Returns the window's size in
     /// pixels: the card, and room for its shadow.
     fn fit(&self) -> Result<(i32, i32)> {
-        let s = self.scale;
-        let m = (MARGIN * s).round();
-        let (w, h) = ((CARD_W * s).round(), (CARD_H * s).round());
-        self.frame.resize(&self.anim, w, h, v3(m, m), s, false)?;
-        Ok(((w + 2.0 * m) as i32, (h + 2.0 * m) as i32))
+        picture_card::fit(&self.frame, &self.anim, self.scale, CARD_W, CARD_H)
     }
 
     /// The middle of the card, in the window: what it grows from.
     fn centre(&self) -> Vector3 {
-        let s = self.scale;
-        let m = (MARGIN * s).round();
-        Vector3 {
-            X: m + (CARD_W * s).round() / 2.0,
-            Y: m + (CARD_H * s).round() / 2.0,
-            Z: 0.0,
-        }
+        picture_card::centre(self.scale, CARD_W, CARD_H)
     }
 
     /// A point in window pixels, relative to the card's top left.
     fn card_point(&self, x: i32, y: i32) -> (f32, f32) {
-        let m = (MARGIN * self.scale).round();
-        (x as f32 - m, y as f32 - m)
+        picture_card::card_point(self.scale, x, y)
     }
 
     fn hit_at(&self, x: i32, y: i32) -> Option<Hit> {
         let view = self.view.as_ref()?;
         let (x, y) = self.card_point(x, y);
-        if view.close_at.contains(x, y) {
+        if view.close.at.contains(x, y) {
             return Some(Hit::Close);
         }
         self.targets()
@@ -1378,12 +1247,10 @@ impl Intro {
     }
 }
 
-/// The scale of the window on a monitor of `scale` pixels per DIP, enlarged
-/// by `ENLARGE`: smaller, should it not fit in the `work` area.
+/// The scale of the window on a monitor of `scale` pixels per DIP: see
+/// [`picture_card::fitted`].
 fn fitted(work: RECT, scale: f32) -> f32 {
-    let w = (work.right - work.left) as f32 / (CARD_W + 2.0 * SCREEN_GAP);
-    let h = (work.bottom - work.top) as f32 / (CARD_H + 2.0 * SCREEN_GAP);
-    (scale * ENLARGE).min(w).min(h)
+    picture_card::fitted(work, scale, CARD_W, CARD_H)
 }
 
 #[cfg(test)]
@@ -1417,5 +1284,20 @@ mod tests {
         let n = Step::all(true).len() as f32;
         let dots = DOT_ON + (n - 1.0) * (DOT + DOT_GAP);
         assert!(dots + 2.0 * BUTTON_W + BUTTON_GAP + 24.0 < TEXT_W);
+    }
+
+    #[test]
+    fn opens_enlarged_unless_the_screen_is_too_small() {
+        let work = |w, h| RECT {
+            left: 0,
+            top: 0,
+            right: w,
+            bottom: h,
+        };
+        assert_eq!(fitted(work(1920, 1040), 1.0), 1.33);
+        // As high as 440 DIPs and 16 either side fit, 600 pixels.
+        assert_eq!(fitted(work(1024, 600), 1.5), 600.0 / 472.0);
+        // As wide as 720 DIPs and 16 either side fit, 700 pixels.
+        assert_eq!(fitted(work(700, 2000), 2.0), 700.0 / 752.0);
     }
 }

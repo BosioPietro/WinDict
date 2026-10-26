@@ -65,6 +65,8 @@ impl Header {
     /// Shows the pronunciation `text`, drawn on `surface`, `size` pixels,
     /// at `at` in the heading. With `fade`, a new one fades in, sliding a
     /// little into place, and one that moved glides there.
+    // What to show and where, plus the animator and scale every part's
+    // methods take: a struct for them would only be built for this call.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn show_phonetic(
         &mut self,

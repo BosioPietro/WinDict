@@ -1,5 +1,5 @@
 //! Wikizionario, the Italian Wiktionary, online: its entries as wiktextract
-//! extracts them (https://kaikki.org/itwiktionary/, which the Italian
+//! extracts them (<https://kaikki.org/itwiktionary/>, which the Italian
 //! dictionary is built from), and its pages themselves, through the
 //! MediaWiki API, for the words the extract doesn't have yet.
 

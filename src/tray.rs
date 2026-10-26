@@ -9,6 +9,12 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub const ICON_ID: u32 = 1;
 
+/// WinDict's icon, from the resources of the executable `instance` is, as
+/// windows show it in the taskbar; none if it isn't there.
+pub fn window_icon(instance: HINSTANCE) -> HICON {
+    unsafe { LoadIconW(Some(instance), PCWSTR(ICON_ID as usize as *const u16)) }.unwrap_or_default()
+}
+
 pub struct Tray {
     hwnd: HWND,
     callback: u32,

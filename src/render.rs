@@ -781,7 +781,6 @@ fn hit_rects(layout: &IDWriteTextLayout, range: DWRITE_TEXT_RANGE) -> Vec<DWRITE
     }
 }
 
-/// The height of the first line of a laid-out text.
 /// Where `text`, laid out in `layout`, ends: right after its last
 /// character, and the baseline of the line that's on.
 fn line_end(layout: &IDWriteTextLayout, text: &str) -> (f32, f32) {
@@ -806,6 +805,7 @@ fn line_end(layout: &IDWriteTextLayout, text: &str) -> (f32, f32) {
     (x, baseline)
 }
 
+/// The height of the first line of a laid-out text.
 fn first_line_height(layout: &IDWriteTextLayout) -> f32 {
     let mut lines = [DWRITE_LINE_METRICS::default(); 1];
     let mut count = 0;

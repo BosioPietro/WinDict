@@ -22,9 +22,9 @@ use windows::core::{w, Interface, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::UI::Color;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::Vector3;
@@ -34,10 +34,14 @@ use crate::hotkey;
 use crate::i18n::{self, fill, tr, Language};
 use crate::installed;
 use crate::render::{Face, Ink, Renderer};
-use crate::theme::{argb, Theme};
+use crate::theme::Theme;
+use crate::ui::picture_card::{
+    self, Close, BUTTON_GAP, FOCUS_MS, HOVER_MS, INSET, LEAVE_MS, PAD_BOTTOM, PAD_X, SHOW_MS,
+    SLIDE, TOP_H,
+};
 use crate::ui::{
-    self, button_width, container, outline, rounded, scale, v2, v3, Animator, Button, Frame, Rect,
-    Text, BUTTON_H, MARGIN,
+    self, button_width, container, rounded, scale, v2, v3, Animator, Button, Frame, Rect, Text,
+    BUTTON_H,
 };
 use crate::win::{self, Window};
 
@@ -48,27 +52,10 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 // Geometry, in DIPs.
 const CARD_W: f32 = 640.0;
 const CARD_H: f32 = 380.0;
-/// The picture, on the left, as far from the card's edges all round.
-const INSET: f32 = 12.0;
 const PANE_W: f32 = 256.0;
 const PANE_H: f32 = CARD_H - 2.0 * INSET;
-const PICTURE_RADIUS: f32 = 8.0;
-/// Between the picture and the text, and between the text and the right.
-const PAD_X: f32 = 36.0;
 const TEXT_X: f32 = INSET + PANE_W + PAD_X;
 const TEXT_W: f32 = CARD_W - TEXT_X - PAD_X;
-/// The strip along the top that drags the window, over the picture too.
-const TOP_H: f32 = 48.0;
-const CLOSE_SIZE: f32 = 32.0;
-const CLOSE_INSET: f32 = 10.0;
-const CLOSE_RADIUS: f32 = 5.0;
-const TITLE_Y: f32 = 64.0;
-/// The symbol before the title, on a square tinted with the accent, and
-/// the space after it.
-const BADGE: f32 = 36.0;
-const BADGE_RADIUS: f32 = 8.0;
-const BADGE_GAP: f32 = 14.0;
-const TITLE_GAP: f32 = 14.0;
 /// Between what the stage says and the progress bar, or the line saying
 /// Windows didn't get permission.
 const PROGRESS_GAP: f32 = 24.0;
@@ -79,25 +66,8 @@ const TRACK_H: f32 = 1.0;
 const RUNNER: f32 = 0.35;
 /// Between the progress bar and the line under it saying what's going on.
 const STATUS_GAP: f32 = 12.0;
-const PAD_BOTTOM: f32 = 28.0;
-const BUTTON_GAP: f32 = 8.0;
-/// How far the text slides as it goes and comes.
-const SLIDE: f32 = 24.0;
-/// The least room kept between the window and the screen's edges.
-const SCREEN_GAP: f32 = 16.0;
-/// How much larger than its size in DIPs the window opens, as the
-/// introduction does.
-const ENLARGE: f32 = 1.33;
 
 // Durations, in ms.
-const SHOW_MS: u64 = 360;
-const LEAVE_MS: u64 = 150;
-const ENTER_MS: u64 = 300;
-/// Each line of the text comes in this long after the one above it.
-const STAGGER_MS: u64 = 40;
-const HOVER_MS: u64 = 100;
-const PRESS_MS: u64 = 90;
-const FOCUS_MS: u64 = 150;
 /// How long the progress bar's runner takes to cross it.
 const RUN_MS: u64 = 1600;
 /// Once what's going has faded, it's taken away.
@@ -108,15 +78,8 @@ const TIMER_DOTS: usize = 2;
 /// The window has faded out: the setup ends.
 const TIMER_QUIT: usize = 3;
 
-// Not in the windows crate.
-const WM_MOUSELEAVE: u32 = 0x02A3;
-const WM_DWMCOLORIZATIONCOLORCHANGED: u32 = 0x0320;
-
 /// The installer's thread has news, in [`Setup::news`].
 const WM_APP_INSTALLER: u32 = WM_APP + 1;
-
-/// "Cancel" in Segoe Fluent Icons and Segoe MDL2 Assets.
-const CLOSE_GLYPH: &str = "\u{E8BB}";
 
 /// Where the setup is at.
 #[derive(Clone, PartialEq, Debug)]
@@ -166,9 +129,7 @@ struct StageView {
 
 struct View {
     content: ContainerVisual,
-    close: ContainerVisual,
-    close_at: Rect,
-    close_hover: SpriteVisual,
+    close: Close,
     stage: StageView,
 }
 
@@ -229,11 +190,7 @@ pub fn run(compositor: Compositor, installer: &'static [u8]) -> Result<()> {
             lpfnWndProc: Some(setup_proc),
             hInstance: instance,
             hCursor: LoadCursorW(None, IDC_ARROW)?,
-            hIcon: LoadIconW(
-                Some(instance),
-                PCWSTR(crate::tray::ICON_ID as usize as *const u16),
-            )
-            .unwrap_or_default(),
+            hIcon: crate::tray::window_icon(instance),
             lpszClassName: CLASS,
             ..Default::default()
         });
@@ -291,7 +248,7 @@ impl Setup {
             update: installed::install_dir().is_some(),
             language,
             installer,
-            folder: std::env::temp_dir().join(format!("WinDict-setup-{}", std::process::id())),
+            folder: work_folder(),
             news,
             sender,
             dots: 0,
@@ -330,7 +287,8 @@ impl Setup {
         self.visible = true;
         self.anim.fade_in(root, ui::FADE_IN_MS, SHOW_MS)?;
         if let Some(view) = &self.view {
-            self.bring_in(
+            picture_card::bring_in(
+                &self.anim,
                 &view.stage.text,
                 v3(0.0, SLIDE / 3.0 * self.scale),
                 ui::FADE_IN_MS,
@@ -506,17 +464,9 @@ impl Setup {
             return Ok(());
         }
         let old = std::mem::replace(&mut self.pressed, hit);
-        for (hit, opacity) in [(old, 1.0), (hit, 0.8)] {
+        for (hit, down) in [(old, false), (hit, true)] {
             if let Some(button) = hit.and_then(|hit| self.button(hit)) {
-                let anim = &self.anim;
-                anim.scalar(
-                    &button.root,
-                    "Opacity",
-                    opacity,
-                    PRESS_MS,
-                    0,
-                    &anim.decelerate,
-                )?;
+                picture_card::show_pressed(&self.anim, button, down)?;
             }
         }
         Ok(())
@@ -547,9 +497,7 @@ impl Setup {
 
     fn retheme(&mut self) -> Result<()> {
         let theme = Theme::current(ThemeMode::System);
-        let same = (theme.dark, theme.transparency, theme.accent)
-            == (self.theme.dark, self.theme.transparency, self.theme.accent);
-        if same {
+        if theme == self.theme {
             return Ok(());
         }
         self.theme = theme;
@@ -612,7 +560,7 @@ impl Setup {
         win::set_timer(self.hwnd, TIMER_GONE, GONE_MS);
 
         let stage = self.build_stage(&view.content)?;
-        self.bring_in(&stage.text, v3(dx, 0.0), LEAVE_MS)?;
+        picture_card::bring_in(&self.anim, &stage.text, v3(dx, 0.0), LEAVE_MS)?;
         self.view = Some(View { stage, ..view });
         if was_working != self.stage.working() {
             self.show_close()?;
@@ -624,28 +572,12 @@ impl Setup {
         self.show_focus()
     }
 
-    /// Brings each line of `text` in from `from` away, a beat after the one
-    /// above it, starting after `delay`.
-    fn bring_in(&self, text: &ContainerVisual, from: Vector3, delay: u64) -> Result<()> {
-        let anim = &self.anim;
-        for (i, line) in text.Children()?.into_iter().enumerate() {
-            let rest = line.Offset()?;
-            let delay = delay + i as u64 * STAGGER_MS;
-            Animator::stop(&line, &["Opacity", "Offset"]);
-            line.SetOpacity(0.0)?;
-            line.SetOffset(rest + from)?;
-            anim.scalar(&line, "Opacity", 1.0, ENTER_MS, delay, &anim.decelerate)?;
-            anim.vector3(&line, "Offset", rest, ENTER_MS, delay, &anim.decelerate)?;
-        }
-        Ok(())
-    }
-
     fn show_hover(&self, hit: Option<Hit>) -> Result<()> {
         let (Some(view), Some(hit)) = (&self.view, hit) else {
             return Ok(());
         };
         let hover = match hit {
-            Hit::Close if !self.stage.working() => &view.close_hover,
+            Hit::Close if !self.stage.working() => &view.close.hover,
             Hit::Close => return Ok(()),
             _ => match self.button(hit) {
                 Some(button) => &button.hover,
@@ -679,7 +611,7 @@ impl Setup {
         let anim = &self.anim;
         if self.stage.working() {
             anim.scalar(
-                &view.close_hover,
+                &view.close.hover,
                 "Opacity",
                 0.0,
                 HOVER_MS,
@@ -687,7 +619,14 @@ impl Setup {
                 &anim.decelerate,
             )?;
         }
-        anim.scalar(&view.close, "Opacity", to, HOVER_MS, 0, &anim.decelerate)
+        anim.scalar(
+            &view.close.root,
+            "Opacity",
+            to,
+            HOVER_MS,
+            0,
+            &anim.decelerate,
+        )
     }
 
     /// Says under the progress bar what's going on, with dots.
@@ -750,12 +689,7 @@ impl Setup {
             w: px(PANE_W),
             h: px(PANE_H),
         };
-        let pane = container(c, &content, at.at())?;
-        pane.SetSize(at.size())?;
-        let corners = c.CreateRoundedRectangleGeometry()?;
-        corners.SetSize(at.size())?;
-        corners.SetCornerRadius(v2(px(PICTURE_RADIUS), px(PICTURE_RADIUS)))?;
-        pane.SetClip(&c.CreateGeometricClipWithGeometry(&corners)?)?;
+        let pane = picture_card::picture_pane(c, r, t, s, &content, at)?;
         let picture = if t.dark {
             include_bytes!("../assets/intro/lookup-dark.jpg").as_slice()
         } else {
@@ -766,41 +700,12 @@ impl Setup {
         sprite.SetBrush(&c.CreateSurfaceBrushWithSurface(&surface)?)?;
         sprite.SetSize(at.size())?;
         pane.Children()?.InsertAtTop(&sprite)?;
-        let edge = if t.dark {
-            argb(0x24, 0xFF, 0xFF, 0xFF)
-        } else {
-            argb(0x24, 0x00, 0x00, 0x00)
-        };
-        outline(c, r, &content, at, px(PICTURE_RADIUS), edge)?;
-
-        let size = px(CLOSE_SIZE);
-        let close_at = Rect {
-            x: px(CARD_W) - px(CLOSE_INSET) - size,
-            y: px(CLOSE_INSET),
-            w: size,
-            h: size,
-        };
-        let close = container(c, &content, close_at.at())?;
-        let face = Rect {
-            w: size,
-            h: size,
-            ..Rect::default()
-        };
-        let (close_hover, _) = rounded(c, r, &close, face, px(CLOSE_RADIUS), t.highlight())?;
-        close_hover.SetOpacity(0.0)?;
-        let glyph = Text::new(c, &close)?;
-        let cross = r.layout_line(CLOSE_GLYPH, Face::Chrome, Ink::Primary, CLOSE_SIZE)?;
-        let glyph_size = glyph.show(r, &cross, s, t)?;
-        glyph
-            .visual
-            .SetOffset(v3(0.0, ((size - glyph_size.Y) / 2.0).round()))?;
+        let close = picture_card::close_button(c, r, t, s, &content, CARD_W)?;
 
         let stage = self.build_stage(&content)?;
         Ok(View {
             content,
             close,
-            close_at,
-            close_hover,
             stage,
         })
     }
@@ -817,7 +722,6 @@ impl Setup {
         let px = |dip: f32| (dip * s).round();
         let text = container(c, content, v3(0.0, 0.0))?;
         let x = px(TEXT_X);
-        let mut y = px(TITLE_Y);
         let version: &dyn std::fmt::Display = &VERSION;
         let (glyph, title, said) = match (&self.stage, self.update) {
             (Stage::Ready | Stage::Installing, false) => (
@@ -844,46 +748,7 @@ impl Setup {
         };
         let failed = matches!(self.stage, Stage::Failed(_));
 
-        // The symbol, centred on the capitals of the title's first line.
-        let indent = BADGE + BADGE_GAP;
-        let line = r.layout_line(title, Face::Display, Ink::Primary, TEXT_W - indent)?;
-        let b = px(BADGE);
-        let badge = container(
-            c,
-            &text,
-            v3(x, y + (line.cap_middle() * s - b / 2.0).round()),
-        )?;
-        let face = Rect {
-            w: b,
-            h: b,
-            ..Rect::default()
-        };
-        let (hue, ink) = if failed {
-            let red = t.critical();
-            let channel = |v: f32| (v * 255.0).round() as u8;
-            let red = Color {
-                A: 0xFF,
-                R: channel(red.r),
-                G: channel(red.g),
-                B: channel(red.b),
-            };
-            (red, Ink::Critical)
-        } else {
-            (t.accent, Ink::Accent)
-        };
-        let tint = argb(if t.dark { 0x33 } else { 0x24 }, hue.R, hue.G, hue.B);
-        rounded(c, r, &badge, face, px(BADGE_RADIUS), tint)?;
-        let symbol = Text::new(c, &badge)?;
-        let shape = r.layout_line(glyph, Face::LargeButton, ink, BADGE)?;
-        let size = symbol.show(r, &shape, s, t)?;
-        symbol
-            .visual
-            .SetOffset(v3(0.0, ((b - size.Y) / 2.0).round()))?;
-
-        let heading = Text::new(c, &text)?;
-        let size = heading.show(r, &line, s, t)?;
-        heading.visual.SetOffset(v3(px(TEXT_X + indent), y))?;
-        y += size.Y.max(b) + px(TITLE_GAP);
+        let mut y = picture_card::heading(c, r, t, s, &text, TEXT_X, TEXT_W, title, glyph, failed)?;
 
         let detail = Text::new(c, &text)?;
         let paragraph = r.layout_paragraph(&said, &[], Ink::Secondary, TEXT_W)?;
@@ -981,28 +846,17 @@ impl Setup {
     /// Sizes the card for the current scale. Returns the window's size in
     /// pixels: the card, and room for its shadow.
     fn fit(&self) -> Result<(i32, i32)> {
-        let s = self.scale;
-        let m = (MARGIN * s).round();
-        let (w, h) = ((CARD_W * s).round(), (CARD_H * s).round());
-        self.frame.resize(&self.anim, w, h, v3(m, m), s, false)?;
-        Ok(((w + 2.0 * m) as i32, (h + 2.0 * m) as i32))
+        picture_card::fit(&self.frame, &self.anim, self.scale, CARD_W, CARD_H)
     }
 
     /// The middle of the card, in the window: what it grows from.
     fn centre(&self) -> Vector3 {
-        let s = self.scale;
-        let m = (MARGIN * s).round();
-        Vector3 {
-            X: m + (CARD_W * s).round() / 2.0,
-            Y: m + (CARD_H * s).round() / 2.0,
-            Z: 0.0,
-        }
+        picture_card::centre(self.scale, CARD_W, CARD_H)
     }
 
     /// A point in window pixels, relative to the card's top left.
     fn card_point(&self, x: i32, y: i32) -> (f32, f32) {
-        let m = (MARGIN * self.scale).round();
-        (x as f32 - m, y as f32 - m)
+        picture_card::card_point(self.scale, x, y)
     }
 
     /// Whether a point in window pixels is on the strip along the top, which
@@ -1013,13 +867,13 @@ impl Setup {
         };
         let (x, y) = self.card_point(x, y);
         let px = |dip: f32| (dip * self.scale).round();
-        x >= 0.0 && x < px(CARD_W) && y >= 0.0 && y < px(TOP_H) && !view.close_at.contains(x, y)
+        x >= 0.0 && x < px(CARD_W) && y >= 0.0 && y < px(TOP_H) && !view.close.at.contains(x, y)
     }
 
     fn hit_at(&self, x: i32, y: i32) -> Option<Hit> {
         let view = self.view.as_ref()?;
         let (x, y) = self.card_point(x, y);
-        if view.close_at.contains(x, y) {
+        if view.close.at.contains(x, y) {
             return Some(Hit::Close);
         }
         view.stage
@@ -1033,12 +887,18 @@ impl Setup {
 /// Runs the installer silently, as WinGet and "Update app" do, passing it
 /// `switches` as they are, and returns its exit code. There's no window.
 pub fn quietly(installer: &[u8], switches: &[OsString]) -> i32 {
-    let folder = std::env::temp_dir().join(format!("WinDict-setup-{}", std::process::id()));
+    let folder = work_folder();
     let code = write_out(&folder, installer)
         .and_then(|exe| run_installer(&exe, switches))
         .map_or(1, |code| code as i32);
     let _ = std::fs::remove_dir_all(folder);
     code
+}
+
+/// Where the installer is written out to while it runs, a folder of this
+/// setup's own.
+fn work_folder() -> PathBuf {
+    std::env::temp_dir().join(format!("WinDict-setup-{}", std::process::id()))
 }
 
 /// Writes `installer` out into `folder`, and returns where.
@@ -1063,12 +923,10 @@ fn explorer() -> PathBuf {
     Path::new(&windows).join("explorer.exe")
 }
 
-/// The scale of the window on a monitor of `scale` pixels per DIP, enlarged
-/// by `ENLARGE`: smaller, should it not fit in the `work` area.
+/// The scale of the window on a monitor of `scale` pixels per DIP: see
+/// [`picture_card::fitted`].
 fn fitted(work: RECT, scale: f32) -> f32 {
-    let w = (work.right - work.left) as f32 / (CARD_W + 2.0 * SCREEN_GAP);
-    let h = (work.bottom - work.top) as f32 / (CARD_H + 2.0 * SCREEN_GAP);
-    (scale * ENLARGE).min(w).min(h)
+    picture_card::fitted(work, scale, CARD_W, CARD_H)
 }
 
 unsafe extern "system" fn setup_proc(
@@ -1182,5 +1040,20 @@ mod tests {
             }
         }
         i18n::set(Language::English);
+    }
+
+    #[test]
+    fn opens_enlarged_unless_the_screen_is_too_small() {
+        let work = |w, h| RECT {
+            left: 0,
+            top: 0,
+            right: w,
+            bottom: h,
+        };
+        assert_eq!(fitted(work(1920, 1040), 1.0), 1.33);
+        // As high as 380 DIPs and 16 either side fit, 600 pixels.
+        assert_eq!(fitted(work(1024, 600), 1.5), 600.0 / 412.0);
+        // As wide as 640 DIPs and 16 either side fit, 600 pixels.
+        assert_eq!(fitted(work(600, 2000), 2.0), 600.0 / 672.0);
     }
 }

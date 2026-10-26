@@ -7,14 +7,12 @@ use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Accessibility::HWINEVENTHOOK;
+use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::*;
 use crate::win;
-
-/// Not in the windows crate's message set (it lives with the common controls).
-const WM_MOUSELEAVE: u32 = 0x02A3;
 
 /// Posts `msg` to the main window, for the app state to handle once the
 /// procedure that saw it has returned.
