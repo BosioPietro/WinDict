@@ -290,14 +290,59 @@ pub fn strip_html(html: &str) -> String {
             _ => {}
         }
     }
-    let out = out
-        .replace("&nbsp;", " ")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&#39;", "'")
-        .replace("&amp;", "&");
-    out.split_whitespace().collect::<Vec<_>>().join(" ")
+    decode_entities(&out)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Decodes HTML's character references, once each: `&amp;lt;` is `&lt;`.
+/// One it doesn't know stays as it's written.
+fn decode_entities(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        let decoded = rest[1..]
+            .find(';')
+            .filter(|&end| end <= 10)
+            .and_then(|end| Some((entity(&rest[1..=end])?, end + 2)));
+        match decoded {
+            Some((c, len)) => {
+                out.push(c);
+                rest = &rest[len..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The character `&name;` stands for.
+fn entity(name: &str) -> Option<char> {
+    let code = match name {
+        "nbsp" => 0xA0,
+        "lt" => '<' as u32,
+        "gt" => '>' as u32,
+        "quot" => '"' as u32,
+        "apos" => '\'' as u32,
+        "amp" => '&' as u32,
+        _ => match name.strip_prefix('#')? {
+            hex if hex.starts_with(['x', 'X']) => u32::from_str_radix(&hex[1..], 16).ok()?,
+            decimal => decimal.parse().ok()?,
+        },
+    };
+    char::from_u32(code)
+}
+
+/// Whether two words are the same but for case, in any script.
+pub fn same_word(a: &str, b: &str) -> bool {
+    a.to_lowercase() == b.to_lowercase()
 }
 
 fn parse(body: &[u8], max_senses: usize, max_synonyms: usize) -> Option<Definition> {
@@ -359,7 +404,7 @@ fn parse(body: &[u8], max_senses: usize, max_synonyms: usize) -> Option<Definiti
             if target.synonyms.len() >= max_synonyms {
                 break;
             }
-            if !target.synonyms.contains(s) && !s.eq_ignore_ascii_case(&word) {
+            if !target.synonyms.iter().any(|t| same_word(t, s)) && !same_word(s, &word) {
                 target.synonyms.push(s.clone());
             }
         }
@@ -371,7 +416,7 @@ fn parse(body: &[u8], max_senses: usize, max_synonyms: usize) -> Option<Definiti
             if target.antonyms.len() >= MAX_ANTONYMS {
                 break;
             }
-            if !target.antonyms.contains(a) && !a.eq_ignore_ascii_case(&word) {
+            if !target.antonyms.iter().any(|t| same_word(t, a)) && !same_word(a, &word) {
                 target.antonyms.push(a.clone());
             }
         }
@@ -442,6 +487,17 @@ mod tests {
             "x y \"z\" 'w'"
         );
         assert_eq!(strip_html(""), "");
+        assert_eq!(
+            strip_html("don&#8217;t &#x2014; a&#xA0;b &bogus; &#xZZ; R&D"),
+            "don\u{2019}t \u{2014} a b &bogus; &#xZZ; R&D"
+        );
+    }
+
+    #[test]
+    fn same_words_in_any_case() {
+        assert!(same_word("Città", "città"));
+        assert!(same_word("ÉTÉ", "été"));
+        assert!(!same_word("città", "citta"));
     }
 
     #[test]

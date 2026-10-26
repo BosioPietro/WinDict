@@ -10,7 +10,7 @@ use crate::dictionary::{
 };
 use crate::i18n::{fill, tr};
 use crate::offline::sentence;
-use crate::online::{fetch, strip_html};
+use crate::online::{fetch, same_word, strip_html};
 
 /// The word's entries in the extract, following an inflected form ("case")
 /// to its base ("casa") when that's all there is.
@@ -535,7 +535,11 @@ fn related(words: Vec<&str>, word: &str, max: usize) -> Vec<String> {
         let is_word = (2..=40).contains(&count)
             && w.chars()
                 .all(|c| c.is_alphanumeric() || matches!(c, '\'' | '\u{2019}' | ' ' | '-'));
-        if is_word && !w.eq_ignore_ascii_case(word) && !out.contains(&w) && out.len() < max {
+        if is_word
+            && !same_word(&w, word)
+            && !out.iter().any(|o| same_word(o, &w))
+            && out.len() < max
+        {
             out.push(w);
         }
     }
