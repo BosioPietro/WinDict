@@ -182,10 +182,12 @@ pub(super) unsafe extern "system" fn main_proc(
             with_app(|app| app.recover_device());
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
-        // Light or dark mode, the accent color or the animations changed.
-        // The main window hears it for every window, as it's always there.
-        WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED => {
-            let colors = msg == WM_DWMCOLORIZATIONCOLORCHANGED
+        // Light or dark mode, the accent color, a contrast theme or the
+        // animations changed. The main window hears it for every window, as
+        // it's always there.
+        WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED | WM_SYSCOLORCHANGE => {
+            let colors = msg != WM_SETTINGCHANGE
+                || wparam.0 == SPI_SETHIGHCONTRAST.0 as usize
                 || (lparam.0 != 0
                     && unsafe { PCWSTR(lparam.0 as *const u16).to_string() }
                         .is_ok_and(|area| area == "ImmersiveColorSet"));

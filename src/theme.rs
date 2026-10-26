@@ -1,8 +1,14 @@
-//! Colors that follow the Windows light/dark setting and accent color.
+//! Colors that follow the Windows light/dark setting and accent color,
+//! or the colors of a contrast theme while one is on.
 
 use windows::core::w;
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
+use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Registry::*;
+use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
+use windows::Win32::UI::WindowsAndMessaging::{
+    SystemParametersInfoW, SPI_GETHIGHCONTRAST, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+};
 use windows::UI::Color;
 use windows::UI::ViewManagement::{UIColorType, UISettings};
 
@@ -13,10 +19,65 @@ pub struct Theme {
     pub dark: bool,
     pub transparency: bool,
     pub accent: Color,
+    /// The contrast theme's colors, while one is on.
+    pub contrast: Option<Contrast>,
+}
+
+/// A contrast theme's colors, as Windows has them: everything is drawn
+/// solid in these, whatever the app's own theme.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Contrast {
+    pub back: Color,
+    pub text: Color,
+    pub link: Color,
+    pub gray: Color,
+    /// What's chosen, and the text on it.
+    pub chosen: Color,
+    pub chosen_text: Color,
+}
+
+impl Contrast {
+    fn current() -> Option<Contrast> {
+        let mut hc = HIGHCONTRASTW {
+            cbSize: std::mem::size_of::<HIGHCONTRASTW>() as u32,
+            ..Default::default()
+        };
+        let on = unsafe {
+            SystemParametersInfoW(
+                SPI_GETHIGHCONTRAST,
+                hc.cbSize,
+                Some(&mut hc as *mut _ as *mut _),
+                SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+            )
+        }
+        .is_ok()
+            && hc.dwFlags.contains(HCF_HIGHCONTRASTON);
+        let color = |index| {
+            let c = unsafe { GetSysColor(index) };
+            rgb(c as u8, (c >> 8) as u8, (c >> 16) as u8)
+        };
+        on.then(|| Contrast {
+            back: color(COLOR_WINDOW),
+            text: color(COLOR_WINDOWTEXT),
+            link: color(COLOR_HOTLIGHT),
+            gray: color(COLOR_GRAYTEXT),
+            chosen: color(COLOR_HIGHLIGHT),
+            chosen_text: color(COLOR_HIGHLIGHTTEXT),
+        })
+    }
 }
 
 impl Theme {
     pub fn current(mode: ThemeMode) -> Theme {
+        if let Some(c) = Contrast::current() {
+            let (r, g, b) = (c.back.R as u32, c.back.G as u32, c.back.B as u32);
+            return Theme {
+                dark: 299 * r + 587 * g + 114 * b < 128_000,
+                transparency: false,
+                accent: c.chosen,
+                contrast: Some(c),
+            };
+        }
         let dark = match mode {
             ThemeMode::Dark => true,
             ThemeMode::Light => false,
@@ -41,11 +102,28 @@ impl Theme {
             dark,
             transparency,
             accent,
+            contrast: None,
+        }
+    }
+
+    /// The theme to draw on the accent in: the other one's colors, or a
+    /// contrast theme's for what's chosen.
+    pub fn on_accent(&self) -> Theme {
+        Theme {
+            dark: !self.dark,
+            contrast: self.contrast.map(|c| Contrast {
+                text: c.chosen_text,
+                ..c
+            }),
+            ..*self
         }
     }
 
     /// Color laid over the blurred backdrop.
     pub fn tint(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.back;
+        }
         match (self.dark, self.transparency) {
             (true, true) => argb(0xB8, 0x20, 0x20, 0x20),
             (true, false) => rgb(0x2B, 0x2B, 0x2B),
@@ -55,6 +133,9 @@ impl Theme {
     }
 
     pub fn border(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.text;
+        }
         if self.dark {
             argb(0x26, 0xFF, 0xFF, 0xFF)
         } else {
@@ -64,6 +145,9 @@ impl Theme {
 
     /// The soft fill behind whatever is under the pointer.
     pub fn highlight(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return faded(c.text);
+        }
         if self.dark {
             argb(0x17, 0xFF, 0xFF, 0xFF)
         } else {
@@ -74,6 +158,9 @@ impl Theme {
     /// Laid over the tint where something sits on the card: lighter in
     /// light mode, darker in dark mode.
     pub fn badge_shade(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.back;
+        }
         if self.dark {
             argb(0x33, 0x00, 0x00, 0x00)
         } else {
@@ -83,6 +170,9 @@ impl Theme {
 
     /// The ring around what the keyboard is on, as on Windows 11 controls.
     pub fn focus(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.text;
+        }
         if self.dark {
             rgb(0xFF, 0xFF, 0xFF)
         } else {
@@ -92,6 +182,9 @@ impl Theme {
 
     /// The search field's background, as on a focused Windows 11 text box.
     pub fn field(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.back;
+        }
         if self.dark {
             argb(0xB3, 0x1E, 0x1E, 0x1E)
         } else {
@@ -101,6 +194,9 @@ impl Theme {
 
     /// A group of settings, a step up from the card it's on.
     pub fn group(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.back;
+        }
         if self.dark {
             argb(0x0D, 0xFF, 0xFF, 0xFF)
         } else {
@@ -109,6 +205,9 @@ impl Theme {
     }
 
     pub fn group_stroke(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.text;
+        }
         if self.dark {
             argb(0x33, 0x00, 0x00, 0x00)
         } else {
@@ -118,6 +217,9 @@ impl Theme {
 
     /// The line between two settings in a group.
     pub fn separator(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.gray;
+        }
         if self.dark {
             argb(0x15, 0xFF, 0xFF, 0xFF)
         } else {
@@ -127,6 +229,9 @@ impl Theme {
 
     /// The scrollbar's thumb.
     pub fn thumb(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.text;
+        }
         if self.dark {
             argb(0x60, 0xFF, 0xFF, 0xFF)
         } else {
@@ -136,6 +241,9 @@ impl Theme {
 
     /// The line between groups of commands in the tray menu.
     pub fn menu_separator(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.gray;
+        }
         if self.dark {
             argb(0x24, 0xFF, 0xFF, 0xFF)
         } else {
@@ -145,6 +253,9 @@ impl Theme {
 
     /// A button's face, as on Windows 11 controls.
     pub fn control(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.back;
+        }
         if self.dark {
             argb(0x0F, 0xFF, 0xFF, 0xFF)
         } else {
@@ -153,6 +264,9 @@ impl Theme {
     }
 
     pub fn control_stroke(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.text;
+        }
         if self.dark {
             argb(0x12, 0xFF, 0xFF, 0xFF)
         } else {
@@ -162,6 +276,9 @@ impl Theme {
 
     /// The groove behind a switch that's off, or a choice of options.
     pub fn sunken(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.back;
+        }
         if self.dark {
             argb(0x1F, 0x00, 0x00, 0x00)
         } else {
@@ -171,6 +288,9 @@ impl Theme {
 
     /// The chosen one of a choice of options, raised out of the groove.
     pub fn raised(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return faded(c.text);
+        }
         if self.dark {
             argb(0x1F, 0xFF, 0xFF, 0xFF)
         } else {
@@ -180,6 +300,9 @@ impl Theme {
 
     /// The outline of a switch that's off.
     pub fn strong_stroke(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.text;
+        }
         if self.dark {
             argb(0x8B, 0xFF, 0xFF, 0xFF)
         } else {
@@ -189,6 +312,9 @@ impl Theme {
 
     /// A switch's knob, off and on.
     pub fn knob(&self, on: bool) -> Color {
+        if let Some(c) = self.contrast {
+            return if on { c.chosen_text } else { c.text };
+        }
         match (on, self.dark) {
             (false, true) => argb(0xC5, 0xFF, 0xFF, 0xFF),
             (false, false) => argb(0x9E, 0x00, 0x00, 0x00),
@@ -198,6 +324,9 @@ impl Theme {
     }
 
     pub fn shadow_opacity(&self) -> f32 {
+        if self.contrast.is_some() {
+            return 0.0;
+        }
         if self.dark {
             0.55
         } else {
@@ -206,38 +335,62 @@ impl Theme {
     }
 
     pub fn text(&self) -> D2D1_COLOR_F {
+        if let Some(c) = self.contrast {
+            return to_d2d(c.text);
+        }
         self.ink(if self.dark { 0.96 } else { 0.90 })
     }
 
     pub fn text_secondary(&self) -> D2D1_COLOR_F {
+        if let Some(c) = self.contrast {
+            return to_d2d(c.text);
+        }
         self.ink(if self.dark { 0.68 } else { 0.62 })
     }
 
     pub fn text_tertiary(&self) -> D2D1_COLOR_F {
+        if let Some(c) = self.contrast {
+            return to_d2d(c.gray);
+        }
         self.ink(if self.dark { 0.46 } else { 0.45 })
     }
 
     pub fn divider(&self) -> D2D1_COLOR_F {
+        if let Some(c) = self.contrast {
+            return to_d2d(c.gray);
+        }
         self.ink(if self.dark { 0.09 } else { 0.08 })
     }
 
     /// The edge around a language's flag, so its white parts don't melt
     /// into the card.
     pub fn flag_edge(&self) -> D2D1_COLOR_F {
+        if let Some(c) = self.contrast {
+            return to_d2d(c.text);
+        }
         self.ink(if self.dark { 0.16 } else { 0.28 })
     }
 
     /// The cap behind a key's name.
     pub fn key(&self) -> D2D1_COLOR_F {
+        if let Some(c) = self.contrast {
+            return to_d2d(faded(c.text));
+        }
         self.ink(if self.dark { 0.08 } else { 0.05 })
     }
 
     pub fn accent_d2d(&self) -> D2D1_COLOR_F {
+        if let Some(c) = self.contrast {
+            return to_d2d(c.link);
+        }
         to_d2d(self.accent)
     }
 
     /// Text that says something went wrong.
     pub fn critical(&self) -> D2D1_COLOR_F {
+        if let Some(c) = self.contrast {
+            return to_d2d(c.text);
+        }
         to_d2d(if self.dark {
             rgb(0xFF, 0x99, 0xA4)
         } else {
@@ -254,6 +407,11 @@ impl Theme {
             a,
         }
     }
+}
+
+/// `c` thinned, for a fill that shows what's on it.
+fn faded(c: Color) -> Color {
+    Color { A: 0x40, ..c }
 }
 
 pub fn rgb(r: u8, g: u8, b: u8) -> Color {

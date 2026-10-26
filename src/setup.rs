@@ -1068,8 +1068,8 @@ unsafe extern "system" fn setup_proc(
             with_setup(|s| s.rescale(dpi, suggested));
             LRESULT(0)
         }
-        // Light or dark mode, or the accent color, changed.
-        WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED => {
+        // Light or dark mode, the accent color or a contrast theme changed.
+        WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED | WM_SYSCOLORCHANGE => {
             with_setup(|s| s.retheme());
             default()
         }

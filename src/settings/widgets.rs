@@ -165,7 +165,9 @@ impl Settings {
         root.SetSize(face.size())?;
         root.SetOpacity(0.0)?;
         let radius = px(TIP_RADIUS);
-        let fill = if t.dark {
+        let fill = if let Some(contrast) = t.contrast {
+            contrast.back
+        } else if t.dark {
             rgb(0x2C, 0x2C, 0x2C)
         } else {
             rgb(0xFA, 0xFA, 0xFA)

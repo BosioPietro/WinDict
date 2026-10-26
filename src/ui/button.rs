@@ -58,10 +58,7 @@ pub fn button(
     };
     let radius = px(BUTTON_RADIUS);
     // The label stands out on the accent in the other theme's color.
-    let inverse = Theme {
-        dark: !t.dark,
-        ..*t
-    };
+    let inverse = t.on_accent();
     let (fill, stroke, ink) = if primary {
         (t.accent, t.accent, inverse)
     } else {

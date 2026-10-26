@@ -430,7 +430,7 @@ pub struct Frame {
     shadow_brush: CompositionNineGridBrush,
     /// Scale, darkness and the renderer's generation the shadow was last
     /// drawn for.
-    shadow_key: Option<(u32, bool, u32)>,
+    shadow_key: Option<(u32, u32, u32)>,
     /// The content goes in here.
     pub card: ContainerVisual,
     clip: CompositionRoundedRectangleGeometry,
@@ -499,7 +499,11 @@ impl Frame {
     pub fn apply_theme(&mut self, renderer: &Renderer, t: &Theme, s: f32) -> Result<()> {
         self.tint.SetColor(t.tint())?;
         self.border_brush.SetColor(t.border())?;
-        let key = ((s * 100.0) as u32, t.dark, renderer.generation());
+        let key = (
+            (s * 100.0) as u32,
+            t.shadow_opacity().to_bits(),
+            renderer.generation(),
+        );
         if self.shadow_key != Some(key) {
             let (surface, inset) =
                 renderer.draw_shadow(SHADOW_SPREAD * s, RADIUS * s, t.shadow_opacity())?;

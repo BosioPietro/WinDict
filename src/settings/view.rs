@@ -708,10 +708,7 @@ impl Settings {
         let at = v3(group_at.X, group_at.Y + top);
         list.SetOpacity(0.0)?;
         // The tick, in the color that stands out on the accent.
-        let inverse = Theme {
-            dark: !t.dark,
-            ..*t
-        };
+        let inverse = t.on_accent();
         let (h, b) = (px(LANGUAGE_H), px(CHECK_SIZE));
         let outset = px(FOCUS_OUTSET);
         let mut items = Vec::new();
