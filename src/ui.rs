@@ -41,9 +41,7 @@ pub use scroll::{
 // Geometry, in DIPs.
 /// Room around a card in its window, for the shadow.
 pub const MARGIN: f32 = 32.0;
-/// The stroke of the ring around what Tab, or typing, has focused, as on
-/// Windows 11 controls.
-pub const FOCUS_STROKE: f32 = 2.0;
+pub use crate::render::FOCUS_STROKE;
 /// Room kept above and below what Tab scrolls into view, clear of the fades
 /// at the ends of what scrolls.
 pub const FOCUS_MARGIN: f32 = 20.0;

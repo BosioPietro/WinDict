@@ -6,6 +6,7 @@
 
 mod body;
 mod draw;
+mod flags;
 mod text;
 
 use std::cell::{Cell, RefCell};
@@ -33,6 +34,7 @@ use crate::i18n::{fill, tr};
 use crate::lang::LangCode;
 use crate::theme::{to_d2d, Theme};
 use crate::translate::{self, Translation};
+use flags::Flag;
 
 #[derive(Clone, Copy)]
 pub enum Ink {
@@ -108,63 +110,6 @@ enum Paint {
     Field,
     /// The accent, as thick as the rings round focused controls.
     Focus,
-}
-
-/// The flags drawn for the languages WinDict knows.
-#[derive(Clone, Copy)]
-enum Flag {
-    UnitedKingdom,
-    Italy,
-    France,
-    Germany,
-    Spain,
-    Portugal,
-    Netherlands,
-    Sweden,
-    Denmark,
-    Norway,
-    Finland,
-    Poland,
-    Czechia,
-    Romania,
-    Hungary,
-    Greece,
-    Turkey,
-    Russia,
-    Ukraine,
-    Japan,
-    SouthKorea,
-    China,
-}
-
-impl Flag {
-    fn of(language: &str) -> Option<Flag> {
-        match language {
-            "en" => Some(Flag::UnitedKingdom),
-            "it" => Some(Flag::Italy),
-            "fr" => Some(Flag::France),
-            "de" => Some(Flag::Germany),
-            "es" => Some(Flag::Spain),
-            "pt" => Some(Flag::Portugal),
-            "nl" => Some(Flag::Netherlands),
-            "sv" => Some(Flag::Sweden),
-            "da" => Some(Flag::Denmark),
-            "no" => Some(Flag::Norway),
-            "fi" => Some(Flag::Finland),
-            "pl" => Some(Flag::Poland),
-            "cs" => Some(Flag::Czechia),
-            "ro" => Some(Flag::Romania),
-            "hu" => Some(Flag::Hungary),
-            "el" => Some(Flag::Greece),
-            "tr" => Some(Flag::Turkey),
-            "ru" => Some(Flag::Russia),
-            "uk" => Some(Flag::Ukraine),
-            "ja" => Some(Flag::Japan),
-            "ko" => Some(Flag::SouthKorea),
-            "zh-CN" => Some(Flag::China),
-            _ => None,
-        }
-    }
 }
 
 /// Laid-out content, in DIPs.
@@ -372,6 +317,9 @@ pub const WORD_SIZE: f32 = 26.0;
 pub const QUERY_SIZE: f32 = 17.0;
 /// The size of a suggestion under the search box, in DIPs.
 pub const SUGGESTION_SIZE: f32 = 14.0;
+/// The stroke of the ring around what Tab, or typing, has focused, as on
+/// Windows 11 controls, in DIPs.
+pub const FOCUS_STROKE: f32 = 2.0;
 
 /// Room for the sense numbers, in DIPs.
 const SENSE_INDENT: f32 = 22.0;
