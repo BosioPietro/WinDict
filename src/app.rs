@@ -250,6 +250,9 @@ thread_local! {
     // Read by the low-level mouse hook, which must not touch APP.
     static CARD_RECT: Cell<RECT> = const { Cell::new(RECT { left: 0, top: 0, right: 0, bottom: 0 }) };
     static MSG_HWND: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) };
+    // The message Explorer broadcasts when it restarts, outside APP so it's
+    // known even while APP is in use.
+    static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
     // When the card last appeared (win::now_ms), read by the focus hook.
     static SHOWN_AT: Cell<u64> = const { Cell::new(0) };
     // Where the pointer last moved over the card, on screen (GetMessagePos).
@@ -523,7 +526,6 @@ pub struct App {
     /// The press on the tray icon that closed the menu; its release mustn't reopen it.
     swallow_tray_release: bool,
     tray: Tray,
-    taskbar_created: u32,
     capture_thread: u32,
     /// What the capture and lookup threads sent, and how they send it.
     inbox: Receiver<Event>,
@@ -599,6 +601,12 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
 
         let tray = Tray::new(hwnd, WM_APP_TRAY);
         let taskbar_created = RegisterWindowMessageW(w!("TaskbarCreated"));
+        TASKBAR_CREATED.set(taskbar_created);
+        // Explorer runs without administrator rights: were WinDict running
+        // with them, Windows would keep the broadcast from it.
+        if taskbar_created != 0 {
+            let _ = ChangeWindowMessageFilterEx(hwnd, taskbar_created, MSGFLT_ALLOW, None);
+        }
 
         let (tx, inbox) = channel();
         let events = Events {
@@ -620,7 +628,6 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             menu_closed_at: 0,
             swallow_tray_release: false,
             tray,
-            taskbar_created,
             capture_thread,
             inbox,
             events,

@@ -201,7 +201,7 @@ pub(super) unsafe extern "system" fn main_proc(
             LRESULT(0)
         }
         _ => {
-            let taskbar = with_app(|app| app.taskbar_created).unwrap_or(0);
+            let taskbar = TASKBAR_CREATED.get();
             if msg == taskbar && taskbar != 0 {
                 with_app(|app| app.tray.add());
                 return LRESULT(0);
