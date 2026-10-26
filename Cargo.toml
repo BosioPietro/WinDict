@@ -54,6 +54,7 @@ features = [
     "Media_Core",
     "Media_Playback",
     "Media_SpeechSynthesis",
+    "Networking_Connectivity",
     "Storage",
     "Storage_Streams",
     "System",

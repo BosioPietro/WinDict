@@ -304,8 +304,9 @@ pub fn typed(from: Option<&str>, enabled: &[LangCode], default: (&str, &str)) ->
 }
 
 /// Translates `word` between the languages of `direction`: Google first,
-/// the website's endpoint and then gtx, then MyMemory, told what the word means by `context` (its first
-/// definition), and `email`, if given, for its larger allowance.
+/// the website's endpoint and then gtx, then MyMemory, told what the word
+/// means by `context` (its first definition), and `email`, if given, for
+/// its larger allowance.
 pub fn translate(
     word: &str,
     from: &LangCode,
@@ -314,8 +315,20 @@ pub fn translate(
     email: &str,
 ) -> Result<Translation, String> {
     google_web(word, from, to)
-        .or_else(|_| google(word, from, to))
-        .or_else(|_| mymemory(word, from, to, context, email))
+        .or_else(|e| or_next(e, || google(word, from, to)))
+        .or_else(|e| or_next(e, || mymemory(word, from, to, context, email)))
+}
+
+/// Asks the next service, unless there's no internet: then it couldn't
+/// answer either, and waiting for it to say so would only take longer.
+fn or_next(
+    failed: String,
+    next: impl FnOnce() -> Result<Translation, String>,
+) -> Result<Translation, String> {
+    if http::offline() {
+        return Err(failed);
+    }
+    next()
 }
 
 fn get(host: &str, path: &str) -> Result<Vec<u8>, String> {

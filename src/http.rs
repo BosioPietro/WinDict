@@ -7,6 +7,7 @@ use std::ffi::c_void;
 use std::sync::OnceLock;
 
 use windows::core::{w, HSTRING, PCWSTR};
+use windows::Networking::Connectivity::{NetworkConnectivityLevel, NetworkInformation};
 use windows::Win32::Networking::WinHttp::*;
 
 use crate::i18n::tr;
@@ -61,6 +62,13 @@ fn session() -> Result<&'static Handle, String> {
     } else {
         Ok(session)
     }
+}
+
+/// Whether Windows knows of no way to the internet.
+pub fn offline() -> bool {
+    let level = NetworkInformation::GetInternetConnectionProfile()
+        .and_then(|profile| profile.GetNetworkConnectivityLevel());
+    !matches!(level, Ok(NetworkConnectivityLevel::InternetAccess))
 }
 
 /// Performs `GET https://{host}{path}` and returns the status code and body.
