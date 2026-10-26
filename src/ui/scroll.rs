@@ -141,6 +141,86 @@ impl Bursts {
     }
 }
 
+/// Where content that scrolls is headed, the glide taking it there, and
+/// the wheel's bursts that move it.
+#[derive(Default)]
+pub struct Scroller {
+    /// Where it's headed, in pixels from the top.
+    pub at: f32,
+    glide: Option<Glide>,
+    bursts: Bursts,
+}
+
+impl Scroller {
+    /// Still, at `at`.
+    pub fn stop_at(&mut self, at: f32) {
+        (self.at, self.glide) = (at, None);
+    }
+
+    /// The glide under way, if one is.
+    pub fn running(&self) -> Option<Glide> {
+        self.glide.filter(Glide::running)
+    }
+
+    /// Where it is on screen now, following the glide under way.
+    pub fn visible(&self) -> f32 {
+        self.running().map_or(self.at, |glide| glide.at())
+    }
+
+    /// Heads for `to`, pushed past it, over `ms`, in content that scrolls
+    /// `0..=max` at `s` pixels per DIP. It starts from where the content
+    /// is on screen now, as fast as it's going, not from the last target,
+    /// which would lag behind the wheel.
+    pub fn glide_to(&mut self, to: f32, push: Push, max: f32, s: f32, ms: u64) -> Glide {
+        let to = to.round();
+        let glide = Glide::new(self.glide, self.at, to, push, max, stretch_limit(s), ms);
+        (self.at, self.glide) = (to, Some(glide));
+        glide
+    }
+
+    /// A wheel's `delta`, as far as `step` pixels a notch: where to, how
+    /// far past it, and over how long, or nothing when it shouldn't play.
+    pub fn wheel(
+        &mut self,
+        delta: i32,
+        step: f32,
+        max: f32,
+        s: f32,
+        ms: u64,
+    ) -> Option<(f32, Push, u64)> {
+        let mut step = -(delta as f32 / 120.0) * step;
+        // A touchpad's scroll is smoothed already, so it follows at once.
+        let precise = self.bursts.precise(delta);
+        if precise {
+            step = self.bursts.precise_step(step, s);
+        }
+        self.step(step, precise, max, s, ms)
+    }
+
+    /// A step by `step` pixels, over `ms`, or at once if it's `precise`:
+    /// where to, how far past it, and over how long, or nothing when it
+    /// shouldn't play. Past the end, it gives a little, and springs back.
+    pub fn step(
+        &mut self,
+        step: f32,
+        precise: bool,
+        max: f32,
+        s: f32,
+        ms: u64,
+    ) -> Option<(f32, Push, u64)> {
+        if !self.bursts.take(self.at + step, max) {
+            return None;
+        }
+        let (to, push) = stretch(self.visible(), self.at, step, max, s);
+        let ms = if precise {
+            self.glide.map_or(0, |glide| glide.easing_left())
+        } else {
+            ms
+        };
+        Some((to, push, ms))
+    }
+}
+
 /// How a scroll pushes the content past its end, in pixels, signed.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Push {

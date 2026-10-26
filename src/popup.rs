@@ -23,8 +23,8 @@ use crate::render::{
 use crate::searchbox::SearchBox;
 use crate::theme::Theme;
 use crate::ui::{
-    self, attach, blink, monitor_at, scale, text_sprite, ts, v2, v3, Animator, Bursts, Frame,
-    Glide, List, Push, ScrollFade, Scrollbar, Track, MARGIN, RESIZE_MS,
+    self, attach, blink, monitor_at, scale, text_sprite, ts, v2, v3, Animator, Frame, Glide, List,
+    Push, ScrollFade, Scrollbar, Scroller, Track, MARGIN, RESIZE_MS,
 };
 use crate::win::{self, create_tooltip, set_tooltip_rect, Window};
 
@@ -322,9 +322,7 @@ pub struct Popup {
     /// coming in afresh: the languages under the search box's field, on
     /// their way to the same under a translation's heading, or back.
     body_glides: bool,
-    scroll: f32,
-    scroll_anim: Option<Glide>,
-    wheel_bursts: Bursts,
+    scroller: Scroller,
     /// Where the pointer last was on the window, in window pixels.
     pointer: Option<(i32, i32)>,
     pub visible: bool,
@@ -483,9 +481,7 @@ impl Popup {
             header_key: Default::default(),
             body_h: 0.0,
             body_glides: false,
-            scroll: 0.0,
-            scroll_anim: None,
-            wheel_bursts: Bursts::default(),
+            scroller: Scroller::default(),
             pointer: None,
             visible: false,
             pinned: false,
@@ -721,16 +717,14 @@ impl Popup {
         let s = self.scale;
         match transition {
             Transition::Instant => {
-                self.scroll = 0.0;
-                self.scroll_anim = None;
+                self.scroller.stop_at(0.0);
                 self.content.appear(self.header_h, s)?;
                 self.resize(card_h, false)?;
             }
             Transition::Replace if std::mem::take(&mut self.body_glides) => {
                 // What's the same at the top of both glides to its new place,
                 // from where it was: a translation has its languages lower.
-                self.scroll = 0.0;
-                self.scroll_anim = None;
+                self.scroller.stop_at(0.0);
                 self.content.keep_place(0.0, s)?;
                 self.content.shift_host(-LANGUAGES_TOP * s)?;
                 self.move_content_host(previous_header_h)?;
@@ -738,8 +732,7 @@ impl Popup {
             }
             Transition::Replace => {
                 // New body slides up a touch and fades in while the card resizes.
-                self.scroll = 0.0;
-                self.scroll_anim = None;
+                self.scroller.stop_at(0.0);
                 self.content.slide_in(&self.anim, s)?;
                 self.move_content_host(previous_header_h)?;
                 self.resize(card_h, true)?;
@@ -747,16 +740,16 @@ impl Popup {
             Transition::Refine => {
                 // Same entry with more detail: keep the reader's place.
                 self.resize(card_h, true)?;
-                self.scroll = self.scroll.min(self.max_scroll());
-                self.scroll_anim = None;
-                self.content.keep_place(self.scroll, s)?;
+                self.scroller
+                    .stop_at(self.scroller.at.min(self.max_scroll()));
+                self.content.keep_place(self.scroller.at, s)?;
                 self.move_content_host(previous_header_h)?;
             }
             Transition::Rescale => {
                 self.resize(card_h, false)?;
-                self.scroll = self.scroll.min(self.max_scroll());
-                self.scroll_anim = None;
-                self.content.keep_place(self.scroll, s)?;
+                self.scroller
+                    .stop_at(self.scroller.at.min(self.max_scroll()));
+                self.content.keep_place(self.scroller.at, s)?;
                 self.content.move_host(&self.anim, self.header_h, false)?;
             }
         }
@@ -869,7 +862,7 @@ impl Popup {
                     SWP_NOACTIVATE | SWP_NOZORDER,
                 );
             }
-            self.scroll *= self.scale / old;
+            self.scroller.at *= self.scale / old;
             self.apply_theme()?;
             self.draw_content(&shown, Transition::Rescale, None)?;
         }
@@ -973,8 +966,9 @@ impl Popup {
         let s = self.scale;
         let body = self.frame_y() + self.header_h;
         let left = (MARGIN + PAD_X + l.x) * s;
-        let top = (body + l.y * s - self.scroll).max(body);
-        let bottom = (body + (l.y + l.height) * s - self.scroll).min(self.frame_y() + self.card_h);
+        let top = (body + l.y * s - self.scroller.at).max(body);
+        let bottom =
+            (body + (l.y + l.height) * s - self.scroller.at).min(self.frame_y() + self.card_h);
         if bottom <= top {
             return RECT::default();
         }

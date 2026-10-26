@@ -17,7 +17,7 @@ impl Popup {
         if y < self.header_h || y >= self.card_h || x < 0.0 || x >= CARD_W * s {
             return None;
         }
-        Some((x - PAD_X * s, y - self.header_h + self.scroll))
+        Some((x - PAD_X * s, y - self.header_h + self.scroller.at))
     }
 
     /// Whether the card has links, or buttons, to Tab through.
@@ -165,7 +165,7 @@ impl Popup {
     pub(super) fn glide_ring(&mut self, from: Stop, from_scroll: f32, to: Stop) -> Result<()> {
         let (Some((from_at, from_size, _)), Some((to_at, to_size, radius))) = (
             self.ring_rect(from, from_scroll),
-            self.ring_rect(to, self.scroll),
+            self.ring_rect(to, self.scroller.at),
         ) else {
             return Ok(());
         };
@@ -255,9 +255,9 @@ impl Popup {
             (bottom + ui::FOCUS_MARGIN) * s,
         );
         let view = self.card_h - self.header_h;
-        let to = if top < self.scroll {
+        let to = if top < self.scroller.at {
             top
-        } else if bottom > self.scroll + view {
+        } else if bottom > self.scroller.at + view {
             bottom - view
         } else {
             return Ok(());

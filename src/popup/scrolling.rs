@@ -13,13 +13,14 @@ impl Popup {
         if !self.scrolls() {
             return Ok(());
         }
-        let mut step = -(wheel_delta as f32 / 120.0) * 56.0 * self.scale;
-        // A touchpad's scroll is smoothed already, so it follows at once.
-        let precise = self.wheel_bursts.precise(wheel_delta);
-        if precise {
-            step = self.wheel_bursts.precise_step(step, self.scale);
+        let (max, s) = (self.max_scroll(), self.scale);
+        match self
+            .scroller
+            .wheel(wheel_delta, 56.0 * s, max, s, SCROLL_MS)
+        {
+            Some((to, push, ms)) => self.scroll_to(to, push, ms),
+            None => Ok(()),
         }
-        self.scroll_step(step, precise)
     }
 
     /// Scrolls the list of languages by a mouse wheel delta, if the pointer
@@ -51,38 +52,19 @@ impl Popup {
         if !self.scrolls() {
             return Ok(());
         }
-        let step = 56.0 * self.scale;
-        self.scroll_step(if down { step } else { -step }, false)
-    }
-
-    /// Scrolls the body by `step` pixels, at once if it's `precise`.
-    fn scroll_step(&mut self, step: f32, precise: bool) -> Result<()> {
-        let max = self.max_scroll();
-        if !self.wheel_bursts.take(self.scroll + step, max) {
-            return Ok(());
+        let (max, s) = (self.max_scroll(), self.scale);
+        let step = if down { 56.0 * s } else { -56.0 * s };
+        match self.scroller.step(step, false, max, s, SCROLL_MS) {
+            Some((to, push, ms)) => self.scroll_to(to, push, ms),
+            None => Ok(()),
         }
-        // Past the end, it gives a little, and springs back.
-        let visible = self.visible_scroll();
-        let (to, push) = ui::stretch(visible, self.scroll, step, max, self.scale);
-        let ms = if precise {
-            self.scroll_anim.map_or(0, |glide| glide.easing_left())
-        } else {
-            SCROLL_MS
-        };
-        self.scroll_to(to, push, ms)
     }
 
     /// Scrolls the body smoothly to `to`, in pixels from the top, pushed
     /// past it, over `ms`.
     pub(super) fn scroll_to(&mut self, to: f32, push: Push, ms: u64) -> Result<()> {
-        // Start from where the content is on screen right now, not from the
-        // previous target: restarting from a stale value is what made
-        // scrolling feel like it lagged behind the wheel.
-        let (at, max) = (self.scroll, self.max_scroll());
-        self.scroll = to.round();
-        let most = ui::stretch_limit(self.scale);
-        let glide = Glide::new(self.scroll_anim, at, self.scroll, push, max, most, ms);
-        self.scroll_anim = Some(glide);
+        let max = self.max_scroll();
+        let glide = self.scroller.glide_to(to, push, max, self.scale, ms);
         let x = PAD_X * self.scale;
         self.content.play_scroll(&self.anim, &glide, x)?;
         self.update_scroll_chrome(true)?;
@@ -91,9 +73,7 @@ impl Popup {
 
     /// The scroll position currently on screen, following the running animation.
     pub(super) fn visible_scroll(&self) -> f32 {
-        self.scroll_anim
-            .filter(Glide::running)
-            .map_or(self.scroll, |glide| glide.at())
+        self.scroller.visible()
     }
 
     pub(super) fn max_scroll(&self) -> f32 {
@@ -106,7 +86,7 @@ impl Popup {
         let anim = &self.anim;
         let thumb = self.scroll_chrome.bar.visual();
         self.content
-            .show_fades(anim, self.scroll, max, s, animate)?;
+            .show_fades(anim, self.scroller.at, max, s, animate)?;
 
         if max <= 0.0 {
             Animator::stop(thumb, &["Opacity"]);
@@ -116,10 +96,10 @@ impl Popup {
         let viewport = self.card_h - self.header_h;
         let thumb_y =
             |scroll: f32| self.header_h + ui::thumb_span(viewport, self.body_h, scroll, max, s).0;
-        let (_, h) = ui::thumb_span(viewport, self.body_h, self.scroll, max, s);
-        let y = thumb_y(self.scroll);
+        let (_, h) = ui::thumb_span(viewport, self.body_h, self.scroller.at, max, s);
+        let y = thumb_y(self.scroller.at);
         let x = self.scroll_chrome.bar.size(CARD_W * s, h, s)?;
-        let glide = self.scroll_anim.filter(|glide| animate && glide.running());
+        let glide = self.scroller.running().filter(|_| animate);
         if let Some(glide) = glide {
             // Track the content exactly, from where the thumb is now.
             glide.play(anim, thumb, |scroll| v3(x, thumb_y(scroll)))?;
@@ -187,7 +167,7 @@ impl Popup {
         let (over, y) = point.map_or((false, 0.0), |(x, y)| self.bar_point(x, y));
         self.scroll_chrome.bar.hover(&self.anim, over)?;
         let to = point.and_then(|_| self.scroll_chrome.bar.drag(y, self.track()));
-        if let Some(to) = to.filter(|&to| to != self.scroll) {
+        if let Some(to) = to.filter(|&to| to != self.scroller.at) {
             self.scroll_to(to, Push::None, 0)?;
         }
         Ok(over || self.scroll_chrome.bar.dragging())

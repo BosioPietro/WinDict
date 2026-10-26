@@ -8,8 +8,7 @@ use windows::core::{Interface, Result};
 use windows::UI::Composition::*;
 
 use super::{
-    max_scroll, stretch, stretch_limit, v2, v3, Animator, Bursts, Glide, Push, ScrollFade,
-    Scrollbar, Text, Track, WHEEL_ROWS,
+    max_scroll, v2, v3, Animator, Push, ScrollFade, Scrollbar, Scroller, Text, Track, WHEEL_ROWS,
 };
 use crate::render::{Link, ListLayout, Mark, Renderer, Target};
 use crate::theme::Theme;
@@ -54,9 +53,7 @@ pub struct List {
     /// The height of all the rows, and of the band, in pixels.
     content_h: f32,
     viewport_h: f32,
-    scroll: f32,
-    scroll_anim: Option<Glide>,
-    bursts: Bursts,
+    scroller: Scroller,
 }
 
 impl List {
@@ -112,9 +109,7 @@ impl List {
             s: 1.0,
             content_h: 0.0,
             viewport_h: 0.0,
-            scroll: 0.0,
-            scroll_anim: None,
-            bursts: Bursts::default(),
+            scroller: Scroller::default(),
         })
     }
 
@@ -179,7 +174,7 @@ impl List {
         self.root.SetIsVisible(true)?;
 
         if !same {
-            (self.scroll, self.scroll_anim) = (0.0, None);
+            self.scroller.stop_at(0.0);
             Animator::stop(&self.content, &["Offset"]);
             self.content.SetOffset(v3(0.0, 0.0))?;
             // Whatever the fills were behind is gone.
@@ -191,7 +186,7 @@ impl List {
         }
         self.place_highlight(anim, list.highlight, same)?;
         if !self.reveal(anim, same)? {
-            let running = self.scroll_anim.is_some_and(|g| g.running());
+            let running = self.scroller.running().is_some();
             self.show_scroll(anim, running)?;
         }
         Ok(())
@@ -212,7 +207,7 @@ impl List {
         self.bar.release();
         self.links.clear();
         self.highlight = None;
-        (self.scroll, self.scroll_anim) = (0.0, None);
+        self.scroller.stop_at(0.0);
         Ok(())
     }
 
@@ -265,9 +260,9 @@ impl List {
         let row_h = self.row_h * self.s;
         let top = (row as f32 * row_h).round();
         let bottom = (top + row_h).round();
-        let to = if top < self.scroll {
+        let to = if top < self.scroller.at {
             top
-        } else if bottom > self.scroll + self.viewport_h {
+        } else if bottom > self.scroller.at + self.viewport_h {
             bottom - self.viewport_h
         } else {
             return Ok(false);
@@ -281,12 +276,6 @@ impl List {
         max_scroll(self.content_h, self.viewport_h, self.s)
     }
 
-    fn visible_scroll(&self) -> f32 {
-        self.scroll_anim
-            .filter(Glide::running)
-            .map_or(self.scroll, |glide| glide.at())
-    }
-
     /// Scrolls by a mouse wheel delta, as far as a notch goes in the
     /// card's content, giving a little past the ends.
     pub fn wheel(&mut self, anim: &Animator, delta: i32) -> Result<()> {
@@ -294,36 +283,22 @@ impl List {
         if max <= 0.0 {
             return Ok(());
         }
-        let mut step = -(delta as f32 / 120.0) * WHEEL_ROWS * self.row_h * self.s;
-        // A touchpad's scroll is smoothed already, so it follows at once.
-        let precise = self.bursts.precise(delta);
-        if precise {
-            step = self.bursts.precise_step(step, self.s);
+        let notch = WHEEL_ROWS * self.row_h * self.s;
+        match self.scroller.wheel(delta, notch, max, self.s, SCROLL_MS) {
+            Some((to, push, ms)) => self.glide_to(anim, to, push, ms),
+            None => Ok(()),
         }
-        if !self.bursts.take(self.scroll + step, max) {
-            return Ok(());
-        }
-        let visible = self.visible_scroll();
-        let (to, push) = stretch(visible, self.scroll, step, max, self.s);
-        let ms = if precise {
-            self.scroll_anim.map_or(0, |glide| glide.easing_left())
-        } else {
-            SCROLL_MS
-        };
-        self.glide_to(anim, to, push, ms)
     }
 
     /// Scrolls to `to`, pushed past it, over `ms`, from where the rows are
     /// on screen now.
     fn glide_to(&mut self, anim: &Animator, to: f32, push: Push, ms: u64) -> Result<()> {
-        let to = to.round();
-        if to == self.scroll && push == Push::None {
+        if to.round() == self.scroller.at && push == Push::None {
             return Ok(());
         }
-        let (max, most) = (self.max_scroll(), stretch_limit(self.s));
-        let glide = Glide::new(self.scroll_anim, self.scroll, to, push, max, most, ms);
-        self.scroll = to;
-        self.scroll_anim = Some(glide);
+        let glide = self
+            .scroller
+            .glide_to(to, push, self.max_scroll(), self.s, ms);
         glide.play(anim, &self.content, |scroll| v3(0.0, -scroll))?;
         self.show_scroll(anim, glide.running())
     }
@@ -349,15 +324,15 @@ impl List {
     fn show_scroll(&self, anim: &Animator, animate: bool) -> Result<()> {
         let (max, s) = (self.max_scroll(), self.s);
         let thumb = self.bar.visual();
-        self.fade.show(anim, self.scroll, max, s, animate)?;
+        self.fade.show(anim, self.scroller.at, max, s, animate)?;
         if max <= 0.0 {
             Animator::stop(thumb, &["Opacity"]);
             return thumb.SetOpacity(0.0);
         }
         let track = self.track();
-        let (top, h) = track.thumb(self.scroll);
+        let (top, h) = track.thumb(self.scroller.at);
         let x = self.bar.size(self.width(), h, s)?;
-        match self.scroll_anim.filter(|glide| animate && glide.running()) {
+        match self.scroller.running().filter(|_| animate) {
             Some(glide) => glide.play(anim, thumb, |scroll| v3(x, track.thumb(scroll).0))?,
             None => {
                 Animator::stop(thumb, &["Offset"]);
@@ -401,7 +376,7 @@ impl List {
         if !inside || y < 0.0 || y >= self.viewport_h {
             return None;
         }
-        let row = ((y + self.scroll) / (self.row_h * self.s)).floor() as usize;
+        let row = ((y + self.scroller.at) / (self.row_h * self.s)).floor() as usize;
         (row < self.links.len()).then_some(row)
     }
 
@@ -420,7 +395,7 @@ impl List {
         if !Scrollbar::over(x, y, self.width(), track) {
             return Ok(false);
         }
-        let scroll = self.visible_scroll().clamp(0.0, track.max);
+        let scroll = self.scroller.visible().clamp(0.0, track.max);
         let page = self.bar.press(y, scroll, track);
         self.bar.hover(anim, true)?;
         if let Some(to) = page {

@@ -102,7 +102,7 @@ impl Popup {
         // They're the body, under the box's field, and never scroll.
         let top = self.search.below_field();
         (self.header_h, self.body_h) = (top, size.Y);
-        (self.scroll, self.scroll_anim) = (0.0, None);
+        self.scroller.stop_at(0.0);
         self.content.keep_place(0.0, s)?;
         if glide {
             // From where they were on the translation, a little lower.
@@ -193,7 +193,7 @@ impl Popup {
         }
         // Nothing below the box: no body to scroll or click.
         (self.header_h, self.body_h) = (h, 0.0);
-        (self.scroll, self.scroll_anim) = (0.0, None);
+        self.scroller.stop_at(0.0);
         self.resize(h, in_place)?;
         self.update_scroll_chrome(false)?;
         self.sync_swap()

@@ -20,9 +20,7 @@ impl Settings {
     /// The scroll position on screen right now, following the running
     /// animation.
     pub(super) fn visible_scroll(&self) -> f32 {
-        self.scroll_anim
-            .filter(Glide::running)
-            .map_or(self.scroll, |glide| glide.at())
+        self.scroller.visible()
     }
 
     /// Scrolls to `to`.
@@ -34,14 +32,11 @@ impl Settings {
     /// content is on screen now, not from the last target, which would lag
     /// behind the wheel.
     pub(super) fn glide_to(&mut self, to: f32, push: Push, ms: u64) -> Result<()> {
-        let to = to.round();
-        if to == self.scroll && push == Push::None {
+        if to.round() == self.scroller.at && push == Push::None {
             return Ok(());
         }
-        let (max, most) = (self.max_scroll(), ui::stretch_limit(self.scale));
-        let glide = Glide::new(self.scroll_anim, self.scroll, to, push, max, most, ms);
-        self.scroll = to;
-        self.scroll_anim = Some(glide);
+        let max = self.max_scroll();
+        let glide = self.scroller.glide_to(to, push, max, self.scale, ms);
         self.show_tip(None)?;
         if let Some(view) = &self.view {
             glide.play(&self.anim, &view.scroller, |scroll| v3(0.0, -scroll))?;
@@ -58,9 +53,9 @@ impl Settings {
         let margin = ui::FOCUS_MARGIN * self.scale;
         let view_h = self.card.1 - view.header_h;
         let (top, bottom) = (rect.y - margin, rect.y + rect.h + margin);
-        if top < self.scroll {
+        if top < self.scroller.at {
             self.scroll_to(top)
-        } else if bottom > self.scroll + view_h {
+        } else if bottom > self.scroller.at + view_h {
             self.scroll_to(bottom - view_h)
         } else {
             Ok(())
@@ -75,17 +70,17 @@ impl Settings {
         let (anim, s) = (&self.anim, self.scale);
         let max = self.max_scroll();
         let thumb = view.bar.visual();
-        view.fade.show(anim, self.scroll, max, s, animate)?;
+        view.fade.show(anim, self.scroller.at, max, s, animate)?;
         if max <= 0.0 {
             Animator::stop(thumb, &["Opacity"]);
             return thumb.SetOpacity(0.0);
         }
         let viewport = self.card.1 - view.header_h;
         let content_h = view.height(&self.open);
-        let (top, h) = ui::thumb_span(viewport, content_h, self.scroll, max, s);
+        let (top, h) = ui::thumb_span(viewport, content_h, self.scroller.at, max, s);
         let x = view.bar.size(self.card.0, h, s)?;
         let to = v3(x, view.header_h + top);
-        let started = self.scroll_anim.filter(Glide::running);
+        let started = self.scroller.running();
         if let (true, Some(glide)) = (animate, started) {
             glide.play(anim, thumb, |scroll| {
                 let (top, _) = ui::thumb_span(viewport, content_h, scroll, max, s);

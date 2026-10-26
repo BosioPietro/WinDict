@@ -358,14 +358,14 @@ impl Settings {
             .find(|(hit, _)| *hit == over)
             .map(|(_, rect)| rect)
             // Not while it's under the header.
-            .filter(|rect| rect.y >= self.scroll);
+            .filter(|rect| rect.y >= self.scroller.at);
         let (true, Some(info)) = (on, info) else {
             return anim.scalar(&tip.root, "Opacity", 0.0, TIP_HIDE_MS, 0, &anim.accelerate);
         };
         let (w, h) = (tip.size.X, tip.size.Y);
         let gap = (TIP_GAP * s).round();
         let margin = (GROUP_X * s).round();
-        let top = view.header_h + info.y - self.scroll;
+        let top = view.header_h + info.y - self.scroller.at;
         let below = top + info.h + gap;
         let y = if below + h <= self.card.1 - margin {
             below

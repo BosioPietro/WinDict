@@ -46,8 +46,8 @@ use crate::render::{
 use crate::selection;
 use crate::theme::Theme;
 use crate::ui::{
-    self, scale, ts, v2, v3, Animator, Bursts, Frame, Glide, List, Push, Rect, ScrollFade,
-    Scrollbar, Text, Track, MARGIN,
+    self, scale, ts, v2, v3, Animator, Frame, List, Push, Rect, ScrollFade, Scrollbar, Scroller,
+    Text, Track, MARGIN,
 };
 use crate::win::{self, Window};
 
@@ -361,10 +361,8 @@ pub struct Settings {
     email_shift: f32,
     /// Whether the window is the active one, for the caret to show.
     active: bool,
-    scroll: f32,
+    scroller: Scroller,
     /// The scroll last started, which may still be running.
-    scroll_anim: Option<Glide>,
-    wheel_bursts: Bursts,
     /// Windows is asking whether UI access may change, and how many steps
     /// the dots after saying so have taken.
     waiting: bool,
@@ -422,9 +420,7 @@ impl Settings {
             email,
             email_shift: 0.0,
             active: true,
-            scroll: 0.0,
-            scroll_anim: None,
-            wheel_bursts: Bursts::default(),
+            scroller: Scroller::default(),
             waiting: false,
             dots: 0,
             visible: false,
@@ -443,8 +439,8 @@ impl Settings {
         let s = zoomed(work, s, values.config.zoom_factor());
         (self.theme, self.scale, self.values) = (theme, s, values);
         (self.hovered, self.pressed, self.focus) = (None, None, None);
-        (self.ring, self.recording, self.scroll) = (false, None, 0.0);
-        self.scroll_anim = None;
+        (self.ring, self.recording) = (false, None);
+        self.scroller.stop_at(0.0);
         self.notes = NOTES.map(|note| (note.usual(&self.values), false));
         self.retitle();
         (self.open, self.picking) = ([false; FOLDS.len()], None);
@@ -783,28 +779,17 @@ impl Settings {
             // The highlight moves to the row the pointer's on now.
             return self.hover(Some((x, y)));
         }
-        let mut step = -(delta as f32 / 120.0) * WHEEL_STEP * self.scale;
-        // Past the end, it gives a little, and springs back.
-        let max = self.max_scroll();
+        let (max, s) = (self.max_scroll(), self.scale);
         if max <= 0.0 {
             return Ok(());
         }
-        // A touchpad's scroll is smoothed already, so it follows at once.
-        let precise = self.wheel_bursts.precise(delta);
-        if precise {
-            step = self.wheel_bursts.precise_step(step, self.scale);
+        match self
+            .scroller
+            .wheel(delta, WHEEL_STEP * s, max, s, SCROLL_MS)
+        {
+            Some((to, push, ms)) => self.glide_to(to, push, ms),
+            None => Ok(()),
         }
-        if !self.wheel_bursts.take(self.scroll + step, max) {
-            return Ok(());
-        }
-        let visible = self.visible_scroll();
-        let (to, push) = ui::stretch(visible, self.scroll, step, max, self.scale);
-        let ms = if precise {
-            self.scroll_anim.map_or(0, |glide| glide.easing_left())
-        } else {
-            SCROLL_MS
-        };
-        self.glide_to(to, push, ms)
     }
 
     /// The shortcut just recorded couldn't be used: `shortcut` goes back
@@ -988,9 +973,9 @@ impl Settings {
         work: RECT,
         at: impl FnOnce(i32, i32) -> (i32, i32),
     ) -> Result<()> {
-        let scroll = self.scroll / self.scale * s;
-        (self.scale, self.scroll) = (s, 0.0);
-        self.scroll_anim = None;
+        let scroll = self.scroller.at / self.scale * s;
+        self.scale = s;
+        self.scroller.stop_at(0.0);
         self.frame.apply_theme(&self.renderer, &self.theme, s)?;
         self.replace_view(false)?;
         self.fit(work)?;
@@ -1180,7 +1165,7 @@ impl Settings {
         // clickable follows, once a smaller card has finished shrinking.
         self.set_region(old.max(h));
         win::set_timer(self.hwnd, TIMER_SETTLE, SETTLE_MS);
-        let scroll = self.scroll.min(self.max_scroll());
+        let scroll = self.scroller.at.min(self.max_scroll());
         self.scroll_to(scroll)?;
         self.show_scroll(true)
     }
@@ -1210,7 +1195,7 @@ impl Settings {
         if let Some((bx, by)) = in_boxes.filter(|&(bx, by)| self.list.contains(bx, by)) {
             return self.list.row_at(bx, by).map(Hit::Pick);
         }
-        let y = y - view.header_h + self.scroll;
+        let y = y - view.header_h + self.scroller.at;
         view.hits(&self.open)
             .find(|(_, r)| r.contains(x, y))
             .map(|(hit, _)| hit)
@@ -1225,7 +1210,7 @@ impl Settings {
             return None;
         }
         let at = view.boxes.at + view.boxes.group_at;
-        Some((x - at.X, y - view.header_h + self.scroll - at.Y))
+        Some((x - at.X, y - view.header_h + self.scroller.at - at.Y))
     }
 
     fn set_hovered(&mut self, hit: Option<Hit>) -> Result<()> {

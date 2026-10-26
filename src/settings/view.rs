@@ -167,10 +167,10 @@ impl Settings {
         let m = (MARGIN * s).round();
         self.frame.resize(&self.anim, w, h, v3(m, m), s, false)?;
         view.body.SetSize(v2(w, h - view.header_h))?;
-        self.scroll = self.scroll.min(self.max_scroll());
+        self.scroller.at = self.scroller.at.min(self.max_scroll());
         if let Some(view) = &self.view {
             Animator::stop(&view.scroller, &["Offset"]);
-            view.scroller.SetOffset(v3(0.0, -self.scroll))?;
+            view.scroller.SetOffset(v3(0.0, -self.scroller.at))?;
         }
         self.show_scroll(false)
     }
@@ -218,7 +218,7 @@ impl Settings {
         self.ring_shown = false;
         self.show_focus(false)?;
         if let Some(view) = &self.view {
-            view.scroller.SetOffset(v3(0.0, -self.scroll))?;
+            view.scroller.SetOffset(v3(0.0, -self.scroller.at))?;
         }
         self.show_scroll(false)
     }
