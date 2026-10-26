@@ -22,6 +22,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The release notes need the history and tags since the last release.
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --release
@@ -53,6 +56,18 @@ jobs:
           cargo build --release --features setup --bin windict-setup
           if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
           Copy-Item target/release/windict-setup.exe "dist/WinDict-$env:TAG-setup.exe"
+      # The features and fixes since the last release; see cliff.toml. Run from
+      # the Actions tab, the tag doesn't exist yet, so the commits since the
+      # last tag are named after it.
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+      - name: Write the release notes
+        shell: pwsh
+        run: |
+          $range = if (git tag -l $env:TAG) { @('--latest') } else { @('--unreleased', '--tag', $env:TAG) }
+          git cliff @range --strip all -o notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'git cliff failed' }
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
@@ -60,4 +75,4 @@ jobs:
           files: |
             WinDict-${{ env.TAG }}.exe
             dist/WinDict-${{ env.TAG }}-setup.exe
-          generate_release_notes: true
+          body_path: notes.md

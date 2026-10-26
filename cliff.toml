@@ -1,0 +1,29 @@
+# Release notes for GitHub Releases, built from the commit subjects by
+# git-cliff (https://git-cliff.org); see .github/workflows/release.yml.
+# Preview the next release's notes with `git cliff --unreleased --strip all`.
+
+[changelog]
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | upper_first | trim }}\
+{% endfor %}
+{% endfor %}
+{% if previous.version and version %}
+**Full Changelog**: https://github.com/BosioPietro/WinDict/compare/{{ previous.version }}...{{ version }}
+{% endif %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+tag_pattern = "v[0-9].*"
+# The <!-- n --> prefixes only order the groups; they're stripped above.
+commit_parsers = [
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Fixes" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = ".*", skip = true },
+]
