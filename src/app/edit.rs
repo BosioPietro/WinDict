@@ -168,8 +168,13 @@ impl LineEdit {
                 .next()
                 .map_or(self.caret, |c| self.caret + c.len_utf8()),
             Motion::WordBack => {
+                // Past the space before the word: a space may take more
+                // than a byte, as the ideographic one does.
                 let trimmed = before.trim_end();
-                trimmed.rfind(char::is_whitespace).map_or(0, |i| i + 1)
+                trimmed
+                    .char_indices()
+                    .rfind(|(_, c)| c.is_whitespace())
+                    .map_or(0, |(i, c)| i + c.len_utf8())
             }
             Motion::WordForward => {
                 let word = after.find(char::is_whitespace).unwrap_or(after.len());
@@ -252,6 +257,20 @@ mod tests {
         assert!(!edit.move_caret(Motion::CharBack));
         edit.move_caret(Motion::End);
         assert!(!edit.move_caret(Motion::CharForward));
+    }
+
+    #[test]
+    fn moves_by_words_past_wide_spaces() {
+        // The ideographic space Japanese input types, and a no-break one.
+        let mut edit = typed("日本\u{3000}語\u{a0}x");
+        edit.move_caret(Motion::WordBack);
+        assert_eq!(edit.caret_utf16(), 5);
+        edit.move_caret(Motion::WordBack);
+        assert_eq!(edit.caret_utf16(), 3);
+        edit.move_caret(Motion::End);
+        edit.type_unit(CTRL_BACKSPACE);
+        edit.type_unit(CTRL_BACKSPACE);
+        assert_eq!(edit.text(), "日本\u{3000}");
     }
 
     #[test]
