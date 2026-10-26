@@ -1,2 +1,1 @@
 *.wdict binary
-assets/intro/staging/reference/*.png filter=lfs diff=lfs merge=lfs -text
