@@ -128,7 +128,9 @@ fn placement(anchor: RECT, work: RECT, scale: f32, downward: bool) -> (RECT, boo
 
     let window_h = max_h + 2 * m;
     let window_y = if grow_up {
-        let card_bottom = (anchor.top - gap).max(work.top + edge + max_h);
+        let card_bottom = (anchor.top - gap)
+            .min(work.bottom - edge)
+            .max(work.top + edge + max_h);
         card_bottom + m - window_h
     } else {
         let card_top = (anchor.bottom + gap)
@@ -1007,8 +1009,8 @@ impl Popup {
     fn button_rect(&self, button: &IconButton) -> RECT {
         let s = self.scale;
         let at = button.card_offset(s);
-        let left = (MARGIN * s + at.X) as i32;
-        let top = (self.frame_y() + at.Y) as i32;
+        let left = (MARGIN * s + at.X).round() as i32;
+        let top = (self.frame_y() + at.Y).round() as i32;
         let size = (BACK_SIZE * s).round() as i32;
         RECT {
             left,
@@ -1037,13 +1039,13 @@ impl Popup {
 
     /// The card's bounds in screen pixels.
     pub fn card_rect(&self) -> RECT {
-        let left = self.window.left + (MARGIN * self.scale) as i32;
-        let top = self.window.top + self.frame_y() as i32;
+        let left = self.window.left + (MARGIN * self.scale).round() as i32;
+        let top = self.window.top + self.frame_y().round() as i32;
         RECT {
             left,
             top,
-            right: left + (CARD_W * self.scale) as i32,
-            bottom: top + self.card_h as i32,
+            right: left + (CARD_W * self.scale).round() as i32,
+            bottom: top + self.card_h.round() as i32,
         }
     }
 
@@ -1271,6 +1273,17 @@ mod tests {
         assert_eq!(
             window.bottom - MARGIN as i32,
             anchor.top - ANCHOR_GAP as i32
+        );
+    }
+
+    #[test]
+    fn grows_up_from_below_the_work_area() {
+        // A selection in the taskbar: the card stays above it, on screen.
+        let (window, grow_up) = placement(word_at(500, 1050), SCREEN, 1.0, false);
+        assert!(grow_up);
+        assert_eq!(
+            window.bottom - MARGIN as i32,
+            SCREEN.bottom - SCREEN_GAP as i32
         );
     }
 
