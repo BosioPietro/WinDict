@@ -20,7 +20,7 @@ impl App {
         };
         self.card.current = None;
         self.card.history.clear();
-        (self.card.translatable, self.card.translating) = (None, None);
+        self.card.clear_content();
         self.sync_back_keys();
         let previous = unsafe { GetForegroundWindow() };
         self.dismiss_menu();
@@ -322,7 +322,7 @@ impl App {
         if let Err(e) = popup.return_to_search(search.title, search.purpose) {
             return self.tray.notify(tr().draw_window_failed, &e.message());
         }
-        (self.card.translatable, self.card.translating) = (None, None);
+        self.card.clear_content();
         // Answers still on their way are for the translation.
         self.new_request();
         self.card.search = Some(search);

@@ -227,8 +227,7 @@ impl App {
         detail: &str,
         auto_hide: bool,
     ) {
-        (self.card.translatable, self.card.translating) = (None, None);
-        self.card.speakable = None;
+        self.card.clear_content();
         let anchor = anchor_or_cursor(anchor);
         self.show_body(
             anchor,

@@ -512,6 +512,12 @@ impl Card {
     fn hwnd(&self) -> Option<HWND> {
         self.popup.as_ref().map(|p| p.hwnd)
     }
+
+    /// What the card shows is going: there's nothing to translate, or to
+    /// say, until something else is shown.
+    fn clear_content(&mut self) {
+        (self.translatable, self.translating, self.speakable) = (None, None, None);
+    }
 }
 
 pub struct App {
@@ -993,7 +999,7 @@ impl App {
         self.card.current = None;
         self.card.search = None;
         self.card.history.clear();
-        (self.card.translatable, self.card.translating) = (None, None);
+        self.card.clear_content();
         self.sync_back_keys();
         let status = match self.card.to_translate {
             true => tr().translating,
