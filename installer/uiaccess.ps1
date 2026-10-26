@@ -38,11 +38,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 # Runs elevated: modules come only from the system's folders, not ones the
-# user can write to.
+# user can write to. Those come from Windows, not from environment
+# variables, which the user can change.
+$System = [Environment]::SystemDirectory
 $env:PSModulePath = @(
-    "$env:ProgramFiles\WindowsPowerShell\Modules"
-    "$env:SystemRoot\System32\WindowsPowerShell\v1.0\Modules"
+    Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules'
+    Join-Path $System 'WindowsPowerShell\v1.0\Modules'
 ) -join ';'
+$Explorer = Join-Path ([Environment]::GetFolderPath('Windows')) 'explorer.exe'
 
 $Exe = Join-Path $PSScriptRoot 'WinDict-uiaccess.exe'
 $Key = 'HKLM:\Software\WinDict'
@@ -59,7 +62,7 @@ function Restart-WinDict {
     Get-Process -Name WinDict, WinDict-uiaccess -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Milliseconds 300
     # Through Explorer, so WinDict runs as the user, not elevated.
-    Start-Process explorer.exe -ArgumentList "`"$(Join-Path $PSScriptRoot 'WinDict.exe')`""
+    Start-Process $Explorer -ArgumentList "`"$(Join-Path $PSScriptRoot 'WinDict.exe')`""
 }
 
 if ($Disable) {

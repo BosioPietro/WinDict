@@ -27,11 +27,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 # Any app of the user can start the task: modules come only from the
-# system's folders, not ones the user can write to.
+# system's folders, not ones the user can write to. Those come from
+# Windows, not from environment variables, which the user can change.
+$System = [Environment]::SystemDirectory
 $env:PSModulePath = @(
-    "$env:ProgramFiles\WindowsPowerShell\Modules"
-    "$env:SystemRoot\System32\WindowsPowerShell\v1.0\Modules"
+    Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'WindowsPowerShell\Modules'
+    Join-Path $System 'WindowsPowerShell\v1.0\Modules'
 ) -join ';'
+$Explorer = Join-Path ([Environment]::GetFolderPath('Windows')) 'explorer.exe'
 $Task = 'WinDict Update'
 
 if ($Unregister) {
@@ -39,8 +42,8 @@ if ($Unregister) {
     return
 }
 if ($Register) {
-    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\conhost.exe') `
+    $powershell = Join-Path $System 'WindowsPowerShell\v1.0\powershell.exe'
+    $action = New-ScheduledTaskAction -Execute (Join-Path $System 'conhost.exe') `
         -Argument "--headless `"$powershell`" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
@@ -85,7 +88,7 @@ try {
     $target = Join-Path $PSScriptRoot 'WinDict.exe'
     $running = Get-Process -Name WinDict, WinDict-uiaccess -ErrorAction SilentlyContinue
     if ((Test-Path $target) -and -not $running) {
-        Start-Process explorer.exe -ArgumentList "`"$target`""
+        Start-Process $Explorer -ArgumentList "`"$target`""
     }
 } finally {
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue

@@ -68,9 +68,8 @@ pub enum UiAccessError {
 /// script: call it off the UI thread.
 pub fn set_ui_access(on: bool) -> Result<(), UiAccessError> {
     let dir = dir().ok_or(UiAccessError::NotInstalled)?;
-    let system = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
     let powershell = HSTRING::from(
-        PathBuf::from(system)
+        crate::win::windows_dir()
             .join("System32\\WindowsPowerShell\\v1.0\\powershell.exe")
             .as_os_str(),
     );

@@ -8,7 +8,7 @@
 //! asking (see installer/update.ps1).
 
 use std::os::windows::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -174,8 +174,7 @@ pub fn install(release: &Release) -> Result<(), String> {
 }
 
 fn run_task() -> Result<(), String> {
-    let system = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-    let schtasks = Path::new(&system).join("System32\\schtasks.exe");
+    let schtasks = crate::win::windows_dir().join("System32\\schtasks.exe");
     let ran = std::process::Command::new(schtasks)
         .args(["/Run", "/TN", TASK])
         .creation_flags(CREATE_NO_WINDOW.0)

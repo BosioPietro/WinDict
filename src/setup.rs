@@ -979,8 +979,7 @@ fn run_installer(exe: &Path, switches: &[OsString]) -> std::io::Result<u32> {
 
 /// Explorer, which starts what it's given as the user signed in.
 fn explorer() -> PathBuf {
-    let windows = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-    Path::new(&windows).join("explorer.exe")
+    win::windows_dir().join("explorer.exe")
 }
 
 /// The scale of the window on a monitor of `scale` pixels per DIP: see
