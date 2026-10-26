@@ -359,7 +359,7 @@ strings! {
     /// `{hotkey}`.
     hotkey_no_key: "\"{hotkey}\" has no key besides modifiers",
     /// `{hotkey}`.
-    hotkey_no_modifier: "\"{hotkey}\" needs at least one modifier (Ctrl, Alt, Shift, Win)",
+    hotkey_no_modifier: "\"{hotkey}\" needs Ctrl, Alt or Win",
     network_unavailable: "Couldn't reach the dictionary. Check your connection.",
     network_init_failed: "Could not initialise the network stack.",
     response_too_large: "The dictionary response was unexpectedly large.",

@@ -172,11 +172,9 @@ impl Settings {
             return Ok(Some(Change::RecordingStopped));
         }
         let vk = key.0 as u32;
-        // Shift alone would take a capital letter away from every app.
-        let strong = modifiers.0 & (MOD_CONTROL | MOD_ALT | MOD_WIN).0 != 0;
         let complaint = if hotkey::key_name(vk).is_none() {
             Some(tr().unusable_key)
-        } else if !strong && !hotkey::is_function_key(vk) {
+        } else if !hotkey::is_usable(modifiers, vk) {
             Some(tr().needs_modifier)
         } else {
             None

@@ -72,7 +72,7 @@ pub fn parse(text: &str) -> Result<Hotkey, String> {
         }
     }
     let vk = vk.ok_or_else(|| fill(tr().hotkey_no_key, &[("hotkey", &text)]))?;
-    if modifiers.0 == 0 && !is_function_key(vk) {
+    if !is_usable(modifiers, vk) {
         return Err(fill(tr().hotkey_no_modifier, &[("hotkey", &text)]));
     }
     Ok(Hotkey { modifiers, vk })
@@ -103,6 +103,13 @@ pub fn modifier_names(modifiers: HOT_KEY_MODIFIERS) -> Vec<&'static str> {
         .filter(|(m, _)| modifiers.0 & m.0 != 0)
         .map(|&(_, name)| name)
         .collect()
+}
+
+/// Whether `modifiers` are enough to make `vk` a shortcut: Ctrl, Alt or
+/// Win, as Shift alone would take a capital letter away from every app,
+/// unless it's a function key.
+pub fn is_usable(modifiers: HOT_KEY_MODIFIERS, vk: u32) -> bool {
+    modifiers.0 & (MOD_CONTROL | MOD_ALT | MOD_WIN).0 != 0 || is_function_key(vk)
 }
 
 /// F1 to F24, which make shortcuts on their own.
@@ -198,6 +205,8 @@ mod tests {
         assert_eq!(parse("Ctrl+PgDn").unwrap().vk, VK_NEXT.0 as u32);
         assert!(parse("Ctrl+Alt").is_err());
         assert!(parse("D").is_err());
+        assert!(parse("Shift+D").is_err());
+        assert!(parse("Shift+F3").is_ok());
         assert!(parse("Ctrl+Foo").is_err());
     }
 

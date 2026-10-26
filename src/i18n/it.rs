@@ -268,7 +268,7 @@ pub const IT: Strings = Strings {
     hotkey_many_keys: "\"{hotkey}\" ha più di un tasto oltre ai modificatori",
     hotkey_unknown_key: "Tasto sconosciuto \"{key}\" in \"{hotkey}\"",
     hotkey_no_key: "\"{hotkey}\" non ha nessun tasto oltre ai modificatori",
-    hotkey_no_modifier: "\"{hotkey}\" richiede almeno un modificatore (Ctrl, Alt, Maiusc, Win)",
+    hotkey_no_modifier: "\"{hotkey}\" richiede Ctrl, Alt o Win",
     network_unavailable: "Impossibile raggiungere il dizionario. Controlla la connessione.",
     network_init_failed: "Impossibile connettersi alla rete.",
     response_too_large: "La risposta del dizionario era inaspettatamente grande.",
