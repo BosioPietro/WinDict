@@ -145,7 +145,21 @@ pub const MAX_LOOKUP_CHARS: usize = 60;
 
 /// Cleans up raw selected text into something worth looking up.
 pub fn normalize(raw: &str) -> Result<String, NormalizeError> {
-    let trimmed = raw.trim_matches(|c: char| !c.is_alphanumeric());
+    // Web pages and word processors write the apostrophe curly.
+    let folded: String = raw
+        .chars()
+        .map(|c| match c {
+            '\u{2018}' | '\u{2019}' | '\u{02BC}' => '\'',
+            c => c,
+        })
+        .collect();
+    let trimmed = folded.trim_matches(|c: char| !c.is_alphanumeric());
+    // A leading apostrophe is part of some words ("'ndrangheta", "'tis"),
+    // unless it opens a quote that closes at the end.
+    let outer = folded.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
+    let leading = outer
+        .strip_prefix('\'')
+        .is_some_and(|rest| rest.starts_with(char::is_alphanumeric) && !rest.ends_with('\''));
     let words: Vec<&str> = trimmed.split_whitespace().collect();
     if words.is_empty() {
         return Err(NormalizeError::Empty);
@@ -153,7 +167,8 @@ pub fn normalize(raw: &str) -> Result<String, NormalizeError> {
     if words.len() > MAX_LOOKUP_WORDS || trimmed.chars().count() > MAX_LOOKUP_CHARS {
         return Err(NormalizeError::TooLong);
     }
-    Ok(words.join(" ").to_lowercase())
+    let word = words.join(" ").to_lowercase();
+    Ok(if leading { format!("'{word}") } else { word })
 }
 
 /// Fills what the offline entry lacks (pronunciation, parts of speech the
@@ -246,6 +261,9 @@ mod tests {
         assert_eq!(normalize("“serendipity”.").unwrap(), "serendipity");
         assert_eq!(normalize("ice  cream\r\n").unwrap(), "ice cream");
         assert_eq!(normalize("don't").unwrap(), "don't");
+        assert_eq!(normalize("Don\u{2019}t").unwrap(), "don't");
+        assert_eq!(normalize("'ndrangheta,").unwrap(), "'ndrangheta");
+        assert_eq!(normalize("\u{2018}hello\u{2019}").unwrap(), "hello");
         assert_eq!(normalize(" ... "), Err(NormalizeError::Empty));
         assert_eq!(
             normalize("this is a much longer sentence than a word"),

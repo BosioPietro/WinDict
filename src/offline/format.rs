@@ -103,6 +103,17 @@ impl<'a> Dict<'a> {
     }
 
     fn entry(&self, key: &str) -> Option<Entry> {
+        self.entry_spelled(key)
+            // Some keys keep the curly apostrophe, which reading text folds.
+            .or_else(|| {
+                let curly = key.replace('\'', "\u{2019}");
+                (curly != key).then(|| self.entry_spelled(&curly))?
+            })
+            // A leading apostrophe may only have opened a quote.
+            .or_else(|| self.entry(key.strip_prefix('\'')?))
+    }
+
+    fn entry_spelled(&self, key: &str) -> Option<Entry> {
         let text = self.entry_block(self.block_of(key)?)?;
         let record = text
             .split('\x1e')
