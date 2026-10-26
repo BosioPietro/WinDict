@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+	<a href="https://windict.bosio.zip">windict.bosio.zip</a>
+</p>
+
+<p align="center">
 	<a href="https://github.com/BosioPietro/WinDict/releases/latest"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/BosioPietro/WinDict"></a>
 	<a href="https://github.com/BosioPietro/WinDict/releases"><img alt="Downloads" src="https://img.shields.io/github/downloads/BosioPietro/WinDict/total?color=limegreen"></a>
 	<img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0078D4">
