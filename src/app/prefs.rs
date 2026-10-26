@@ -169,10 +169,7 @@ impl App {
             }
             Change::Theme(mode) => {
                 self.config.theme = mode;
-                let theme = self.theme();
-                if let Some(settings) = self.settings.as_mut() {
-                    let _ = settings.retheme(theme);
-                }
+                self.on_colors_changed();
             }
             Change::Interface(language) => {
                 self.config.ui_language = language;
@@ -370,8 +367,8 @@ impl App {
         self.refresh_settings();
     }
 
-    /// The system's colors changed: the settings window and the
-    /// introduction follow them.
+    /// The colors changed, the system's or the setting: every window
+    /// follows them.
     pub(super) fn on_colors_changed(&mut self) {
         let theme = self.theme();
         if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
@@ -380,5 +377,13 @@ impl App {
         if let Some(intro) = self.intro.as_mut().filter(|i| i.visible) {
             let _ = intro.retheme(theme);
         }
+        self.each_card(|app| {
+            if let Some(popup) = app.card.popup.as_mut() {
+                let _ = popup.retheme(theme);
+            }
+        });
+        // The menu takes the colors when it next opens.
+        self.dismiss_menu();
+        self.sync_badge();
     }
 }

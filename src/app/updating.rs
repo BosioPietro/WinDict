@@ -53,11 +53,19 @@ impl App {
         if self.update == release {
             return;
         }
-        let accent = self.theme().accent;
-        self.tray
-            .set_badge(release.is_some().then_some((accent.R, accent.G, accent.B)));
         self.update = release;
+        self.sync_badge();
         self.sync_tip();
+    }
+
+    /// The tray icon's dot, in the accent, if there's an update.
+    pub(super) fn sync_badge(&mut self) {
+        let accent = self.theme().accent;
+        self.tray.set_badge(
+            self.update
+                .is_some()
+                .then_some((accent.R, accent.G, accent.B)),
+        );
     }
 
     /// Over the tray icon: the shortcut, and the update if there's one.

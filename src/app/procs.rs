@@ -163,6 +163,21 @@ pub(super) unsafe extern "system" fn main_proc(
             with_app(|app| app.on_timer(wparam.0));
             LRESULT(0)
         }
+        // Light or dark mode, the accent color or the animations changed.
+        // The main window hears it for every window, as it's always there.
+        WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED => {
+            let colors = msg == WM_DWMCOLORIZATIONCOLORCHANGED
+                || (lparam.0 != 0
+                    && unsafe { PCWSTR(lparam.0 as *const u16).to_string() }
+                        .is_ok_and(|area| area == "ImmersiveColorSet"));
+            if colors {
+                with_app(|app| app.on_colors_changed());
+            }
+            if msg == WM_SETTINGCHANGE && wparam.0 == SPI_SETCLIENTAREAANIMATION.0 as usize {
+                with_app(|app| app.on_motion_changed());
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
         WM_APP_TRAY => {
             let event = (lparam.0 & 0xFFFF) as u32;
             match event {
@@ -533,20 +548,6 @@ pub(super) unsafe extern "system" fn settings_proc(
             with_app(|app| app.in_settings(|s| s.rescale(dpi, suggested).map(|_| None)));
             LRESULT(0)
         }
-        // Light or dark mode, or the accent color, changed.
-        WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED => {
-            let colors = msg == WM_DWMCOLORIZATIONCOLORCHANGED
-                || (lparam.0 != 0
-                    && unsafe { PCWSTR(lparam.0 as *const u16).to_string() }
-                        .is_ok_and(|area| area == "ImmersiveColorSet"));
-            if colors {
-                with_app(|app| app.on_colors_changed());
-            }
-            if msg == WM_SETTINGCHANGE && wparam.0 == SPI_SETCLIENTAREAANIMATION.0 as usize {
-                with_app(|app| app.on_motion_changed());
-            }
-            default()
-        }
         _ => default(),
     }
 }
@@ -629,17 +630,6 @@ pub(super) unsafe extern "system" fn intro_proc(
             let dpi = (wparam.0 & 0xFFFF) as u32;
             with_app(|app| app.in_intro(|i| i.rescale(dpi, suggested).map(|_| None)));
             LRESULT(0)
-        }
-        // Light or dark mode, or the accent color, changed.
-        WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED => {
-            let colors = msg == WM_DWMCOLORIZATIONCOLORCHANGED
-                || (lparam.0 != 0
-                    && unsafe { PCWSTR(lparam.0 as *const u16).to_string() }
-                        .is_ok_and(|area| area == "ImmersiveColorSet"));
-            if colors {
-                with_app(|app| app.on_colors_changed());
-            }
-            default()
         }
         _ => default(),
     }

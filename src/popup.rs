@@ -868,6 +868,24 @@ impl Popup {
         Ok(())
     }
 
+    /// Draws the card in `theme` from now on, and what it shows again in it.
+    pub fn retheme(&mut self, theme: Theme) -> Result<()> {
+        if theme == self.theme {
+            return Ok(());
+        }
+        self.theme = theme;
+        self.apply_theme()?;
+        if let Some(shown) = self.shown.take() {
+            let drawn = match self.visible {
+                true => self.draw_content(&shown, Transition::Rescale, None),
+                false => Ok(()),
+            };
+            self.shown = Some(shown);
+            drawn?;
+        }
+        Ok(())
+    }
+
     /// The window was dragged somewhere else.
     pub fn moved(&mut self) {
         let mut r = RECT::default();
