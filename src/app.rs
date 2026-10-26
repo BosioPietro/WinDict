@@ -395,6 +395,9 @@ enum Event {
     Captured(Captured),
     Looked(Looked),
     Corrected(Corrected),
+    /// The words the search box suggests from, for the request it was
+    /// opened with.
+    Words(u64, offline::Words),
     /// How far the download of a language's dictionary has got, in percent.
     Installing(&'static str, u32),
     Installed(&'static str, Result<(), String>),
@@ -440,7 +443,8 @@ struct Search {
     error: bool,
     /// The words offered under the field.
     suggestions: Vec<offline::Suggestion>,
-    /// What they're picked from, read once something's typed.
+    /// What they're picked from, read on a thread of its own as the box
+    /// opens.
     words: Option<offline::Words>,
     /// Opened to translate: the languages it's translated between.
     languages: Option<Languages>,
@@ -955,6 +959,7 @@ impl App {
                 // The card waiting on it may be pinned.
                 Event::Looked(looked) => self.with_request(looked.id, |app| app.on_result(looked)),
                 Event::Corrected(c) => self.with_request(c.id, |app| app.on_corrected(c)),
+                Event::Words(id, words) => self.on_words(id, words),
                 Event::Installing(language, percent) => self.on_installing(language, percent),
                 Event::Installed(language, result) => self.on_installed(language, result),
                 Event::Translated(translated) => {

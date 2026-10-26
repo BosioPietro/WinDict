@@ -73,6 +73,13 @@ impl App {
             languages,
             ..Search::default()
         });
+        // Reading the words takes a few tens of ms per dictionary: not on
+        // this thread, which would stop drawing and taking keys meanwhile.
+        if purpose == Shortcut::Lookup {
+            self.new_request();
+            let (id, events) = (self.card.request, self.events.clone());
+            std::thread::spawn(move || events.send(Event::Words(id, offline::Words::load())));
+        }
         self.sync_link_keys();
         // The languages it'll be translated between show from the start.
         if purpose == Shortcut::Translate {
@@ -163,6 +170,19 @@ impl App {
         }
     }
 
+    /// The words to suggest from have been read: what's typed already gets
+    /// its suggestions.
+    pub(super) fn on_words(&mut self, id: u64, words: offline::Words) {
+        let Some(search) = self.card.search.as_mut() else {
+            return;
+        };
+        if id != self.card.request || search.words.is_some() {
+            return;
+        }
+        search.words = Some(words);
+        self.refresh_search();
+    }
+
     /// Shows what's typed in the search box, and the words it could be the
     /// start of.
     pub(super) fn refresh_search(&mut self) {
@@ -191,14 +211,15 @@ impl App {
         }
         let typed = search.edit.text().trim_start().to_lowercase();
         let typed_chars = typed.chars().count();
-        let suggest = typed_chars >= SUGGEST_AFTER;
+        // Until the words are read, there's nothing to say either way.
+        let suggest = typed_chars >= SUGGEST_AFTER && search.words.is_some();
         let mut multilingual = false;
-        search.suggestions = if suggest {
-            let words = search.words.get_or_insert_with(offline::Words::load);
-            multilingual = words.multilingual();
-            words.suggest(&typed, MAX_SUGGESTIONS)
-        } else {
-            Vec::new()
+        search.suggestions = match search.words.as_ref().filter(|_| suggest) {
+            Some(words) => {
+                multilingual = words.multilingual();
+                words.suggest(&typed, MAX_SUGGESTIONS)
+            }
+            None => Vec::new(),
         };
         // Suggestions come from the bundled dictionary only: say so when it
         // has nothing, and whether Enter will still look further.
