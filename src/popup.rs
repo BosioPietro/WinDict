@@ -835,6 +835,12 @@ impl Popup {
     /// place, from the next card on if it shows the search box.
     pub fn set_zoom(&mut self, zoom: f32) -> Result<()> {
         self.zoom = zoom;
+        self.rescale()
+    }
+
+    /// Draws the card at the scale of the monitor it's on, in place: it may
+    /// have been zoomed, or dragged to a monitor with another scale.
+    fn rescale(&mut self) -> Result<()> {
         let Some(shown) = self.shown.take().filter(|_| self.visible) else {
             return Ok(());
         };
@@ -845,7 +851,7 @@ impl Popup {
         };
         let (work, scale) = monitor_at(center);
         let old = self.scale;
-        self.scale = zoomed(work, scale, zoom);
+        self.scale = zoomed(work, scale, self.zoom);
         if self.scale != old {
             self.window = rescaled(self.window, self.grow_up, old, self.scale, work);
             let w = &self.window;
@@ -886,12 +892,14 @@ impl Popup {
         Ok(())
     }
 
-    /// The window was dragged somewhere else.
-    pub fn moved(&mut self) {
+    /// The window was dragged somewhere else, maybe to a monitor with
+    /// another scale.
+    pub fn moved(&mut self) -> Result<()> {
         let mut r = RECT::default();
         if unsafe { GetWindowRect(self.hwnd, &mut r) }.is_ok() {
             self.window = r;
         }
+        self.rescale()
     }
 
     /// Shows for a moment, at the bottom of the card, that something was

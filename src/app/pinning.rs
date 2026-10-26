@@ -164,7 +164,7 @@ impl App {
     pub(super) fn card_moved(&mut self, hwnd: HWND) {
         self.with_card(hwnd, |app| {
             if let Some(p) = app.card.popup.as_mut() {
-                p.moved();
+                let _ = p.moved();
                 if !app.card.pinned {
                     CARD_RECT.set(p.card_rect());
                 }
