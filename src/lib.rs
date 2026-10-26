@@ -21,6 +21,8 @@
 //! - `update`: looking for a new version, and installing it.
 //! - `installed`: the copy the installer put in Program Files, and handing
 //!   over to its UI access build.
+//! - `cli`: `wd`, which looks words up and translates them from the
+//!   command line, as the card would.
 //! - `setup`: the window of the setup downloaded from the releases page,
 //!   which runs that installer (the `windict-setup` executable).
 //! - `i18n`: every string the user reads, so a language is a table, not a
@@ -29,6 +31,7 @@
 
 mod app;
 mod autostart;
+mod cli;
 mod config;
 mod dictionary;
 mod dicts;
@@ -99,6 +102,12 @@ pub fn setup(installer: &'static [u8]) -> windows::core::Result<()> {
     }
     let (_queue, compositor) = unsafe { start_ui() }?;
     setup::run(compositor, installer)
+}
+
+/// Runs `wd`, a command given on the command line, until it has printed
+/// its answer; see `cli`.
+pub fn wd() -> std::process::ExitCode {
+    cli::run()
 }
 
 /// Makes this thread the UI thread: aware of each monitor's scale, and

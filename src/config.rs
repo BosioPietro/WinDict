@@ -205,6 +205,16 @@ fn load_from(path: &Path) -> Result<(Config, bool), String> {
     }
 }
 
+/// Reads the config as [`load`] does, but leaves writing the defaults to
+/// WinDict: `wd`'s settings are its, and a first run is still to come.
+pub fn read() -> Result<Config, String> {
+    match std::fs::read(path()) {
+        Ok(bytes) => parse(&bytes),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(Config::default()),
+        Err(e) => Err(format!("config.json: {e}")),
+    }
+}
+
 /// Writes the settings where [`load`] reads them.
 pub fn save(config: &Config) -> Result<(), String> {
     save_to(&path(), config)

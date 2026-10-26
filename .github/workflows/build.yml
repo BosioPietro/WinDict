@@ -30,6 +30,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target/release/windict.exe dist/WinDict.exe
+          Copy-Item target/release/wd.exe dist/wd.exe
           cargo build --release --features uiaccess
           if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
           Copy-Item target/release/windict.exe dist/WinDict-uiaccess.exe

@@ -58,6 +58,7 @@ theme and accent color.
 - Similar and opposite words, each a click away
 - Pronunciation in the word's own language, with Windows' own voices
 - A box to type into, for text that can't be selected
+- `wd`, to look up and translate from the command line
 - English and Italian dictionaries
 - Follows the system's light or dark theme and accent color
 - Adjustable text size and shortcuts
@@ -114,6 +115,26 @@ on they stay as you set them. Press Enter to translate; Back on the
 translation brings the box back as you left it.
 
 </details>
+
+## On the command line ⌨️
+
+The installer also puts `wd` on the PATH, which looks words up and translates
+them in a terminal, printing what the card would show:
+
+```powershell
+wd serendipity                   # or: wd define serendipity
+wd translate good morning        # or: wd t good morning
+wd t buongiorno --to German
+Get-Clipboard | wd t
+```
+
+It goes by WinDict's settings (dictionaries, languages, what's shown, the
+online dictionary), and what's given on the command line goes before them:
+`--lang`, `--senses`, `--synonyms` and `--[no-]examples` when looking up,
+`--from` and `--to` when translating (a code like `de`, or a name like
+`German`), and `--online` or `--offline` for both. `wd help` lists them all.
+It exits with 0 for an answer, 1 for none, and 2 for a command it couldn't
+make sense of.
 
 ## Above the Start menu 🪟
 

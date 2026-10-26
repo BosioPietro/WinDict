@@ -8,9 +8,10 @@
 ;
 ; An update replaces both builds, so after every install the signing is done
 ; again for those who turned UI access on. update.ps1 is the scheduled task's
-; script that downloads and runs the latest setup.
+; script that downloads and runs the latest setup. wd.exe is WinDict on the
+; command line, and the folder is put on the PATH for it.
 ;
-; Build with the two executables in ..\dist:
+; Build with the three executables in ..\dist:
 ;     iscc /DVersion=0.26.0 installer\windict.iss
 
 #ifndef Version
@@ -19,6 +20,8 @@
 #ifndef Dist
   #define Dist "..\dist"
 #endif
+
+#define EnvironmentKey "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
 
 [Setup]
 ; Never change it: it's how Windows and WinGet know an install is WinDict's.
@@ -50,6 +53,8 @@ LicenseFile=..\LICENSE
 WizardStyle=modern
 Compression=lzma2/ultra64
 SolidCompression=yes
+; The PATH, for wd.
+ChangesEnvironment=yes
 
 [Languages]
 Name: "en"; MessagesFile: "compiler:Default.isl"
@@ -58,6 +63,7 @@ Name: "it"; MessagesFile: "compiler:Languages\Italian.isl"
 [Files]
 Source: "{#Dist}\WinDict.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Dist}\WinDict-uiaccess.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Dist}\wd.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "uiaccess.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "update.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -69,6 +75,8 @@ Type: dirifempty; Name: "{app}"
 [Registry]
 ; How WinDict tells it's the installed copy. uiaccess.ps1 adds UIAccess here.
 Root: HKLM; Subkey: "Software\WinDict"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletekey
+; So wd can be run from any folder. Uninstalling takes it off (RemovePath).
+Root: HKLM; Subkey: "{#EnvironmentKey}"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: NeedsAddPath
 
 [Icons]
 Name: "{autoprograms}\WinDict"; Filename: "{app}\WinDict.exe"
@@ -128,6 +136,37 @@ begin
   Result := '';
 end;
 
+{ Whether the folder WinDict is in isn't on the PATH yet. }
+function NeedsAddPath: Boolean;
+var
+  Paths: String;
+begin
+  if RegQueryStringValue(HKLM, '{#EnvironmentKey}', 'Path', Paths) then
+    Result := Pos(';' + Lowercase(ExpandConstant('{app}')) + ';',
+      ';' + Lowercase(Paths) + ';') = 0
+  else
+    Result := True;
+end;
+
+{ Takes the folder WinDict is in off the PATH again. }
+procedure RemovePath;
+var
+  Paths, Dir: String;
+  At: Integer;
+begin
+  if not RegQueryStringValue(HKLM, '{#EnvironmentKey}', 'Path', Paths) then
+    Exit;
+  { Between semicolons, so it's never part of another folder's name. }
+  Dir := ';' + Lowercase(ExpandConstant('{app}')) + ';';
+  Paths := ';' + Paths + ';';
+  At := Pos(Dir, Lowercase(Paths));
+  if At = 0 then
+    Exit;
+  Delete(Paths, At, Length(Dir) - 1);
+  Paths := Copy(Paths, 2, Length(Paths) - 2);
+  RegWriteExpandStringValue(HKLM, '{#EnvironmentKey}', 'Path', Paths);
+end;
+
 { Removes "Start with Windows", if it starts this copy. }
 procedure RemoveAutostart;
 var
@@ -147,5 +186,6 @@ begin
     RunScript('uiaccess.ps1', '-Disable');
     RunScript('update.ps1', '-Unregister');
     RemoveAutostart;
+    RemovePath;
   end;
 end;

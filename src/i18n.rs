@@ -304,6 +304,53 @@ strings! {
         if an app gives the wrong text",
     languages: "Languages",
 
+    // The command line: `wd`. Options and commands stay as they are.
+    /// What `wd help` prints.
+    cli_help: concat!(
+        "Look up and translate words from the command line, as WinDict does.\n",
+        "\n",
+        "Usage:\n",
+        "  wd [define] <word> [options]    Look up a word or a short phrase\n",
+        "  wd translate <text> [options]   Translate a word, a phrase or a passage\n",
+        "  wd help                         Show this\n",
+        "\n",
+        "define and translate can be shortened to d and t. With no text, it\u{2019}s\n",
+        "read from what\u{2019}s piped in, as in: Get-Clipboard | wd t\n",
+        "\n",
+        "Looking up:\n",
+        "  -l, --lang <language>   Only in this language, like it or Italian\n",
+        "  -n, --senses <n>        Senses per part of speech\n",
+        "  -s, --synonyms <n>      Similar words per part of speech, 0 for none\n",
+        "      --examples          Show the example sentences\n",
+        "      --no-examples       Leave them out\n",
+        "\n",
+        "Translating:\n",
+        "  -f, --from <language>   The language it\u{2019}s in, like en or English\n",
+        "  -t, --to <language>     The language to translate it into\n",
+        "\n",
+        "Both:\n",
+        "      --online            Use the online dictionaries and translators\n",
+        "      --offline           Use only the dictionaries on this PC\n",
+        "  -V, --version           Show the version\n",
+        "\n",
+        "What isn\u{2019}t given is as in WinDict\u{2019}s settings.",
+    ),
+    /// `{option}`.
+    cli_unknown_option: "Unknown option {option}",
+    /// `{option}`.
+    cli_missing_value: "{option} needs a value",
+    /// `{option}`, `{value}`.
+    cli_not_a_number: "{option} takes a number, not \u{201C}{value}\u{201D}",
+    cli_see_help: "Run \u{201C}wd help\u{201D} to see how to use it.",
+    cli_no_word: "Give a word to look up.",
+    cli_no_text: "Give some text to translate.",
+    cli_translate_too_long: "Give a shorter passage to translate.",
+    cli_translate_offline_detail: "Turn on the online dictionary in Settings, or pass --online.",
+    /// `{language}`, as it was given.
+    cli_unknown_language: "\u{201C}{language}\u{201D} isn\u{2019}t a language WinDict translates.",
+    /// After `translate_ambiguous`. `{from}`, `{to}`.
+    cli_guessed_direction: "It was translated from {from} into {to}: --from or --to chooses.",
+
     // Errors, which reach the user as the detail of a message.
     /// `{hotkey}`.
     hotkey_many_keys: "\"{hotkey}\" has more than one non-modifier key",

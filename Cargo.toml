@@ -23,6 +23,13 @@ path = "src/bin/setup.rs"
 test = false
 required-features = ["setup"]
 
+# `wd`, which looks words up and translates them from the command line
+# (see `cli` in the library).
+[[bin]]
+name = "wd"
+path = "src/bin/wd.rs"
+test = false
+
 [features]
 # Builds the variant that can show the card above Start/Search. It must be
 # installed by the setup and signed by installer/uiaccess.ps1 to run.
@@ -71,6 +78,7 @@ features = [
     "Win32_Security",
     "Win32_Security_Cryptography",
     "Win32_System_Com",
+    "Win32_System_Console",
     "Win32_System_DataExchange",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",

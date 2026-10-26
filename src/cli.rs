@@ -1,0 +1,831 @@
+//! `wd`, WinDict on the command line: `wd define` looks a word up and
+//! `wd translate` translates text, the way the card does, and prints what
+//! the card would show. They go by WinDict's settings, and what's given on
+//! the command line goes before them.
+//!
+//! Answers go to stdout, styled and wrapped to the window when it's a
+//! console, as plain lines when it's piped or redirected; what went wrong
+//! goes to stderr. It exits with 0 for an answer, 1 for none, and 2 when
+//! the command line can't be made sense of.
+
+use std::io::{self, IsTerminal, Read, StdoutLock, Write};
+use std::process::ExitCode;
+
+use windows::Win32::System::Console::{
+    GetConsoleMode, GetConsoleScreenBufferInfo, GetStdHandle, SetConsoleMode, CONSOLE_MODE,
+    CONSOLE_SCREEN_BUFFER_INFO, ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_OUTPUT_HANDLE,
+};
+
+use crate::config::{self, Config};
+use crate::dictionary::{self, Definition, Detail, Lookup, NormalizeError};
+use crate::i18n::{self, fill, tr};
+use crate::lang::LangCode;
+use crate::render::capitalize;
+use crate::translate::{self, Direction, Translation};
+use crate::{dicts, offline, online};
+
+/// Exit codes, besides success.
+const NO_ANSWER: u8 = 1;
+const USAGE: u8 = 2;
+
+/// Where a sense's text starts, past its number.
+const SENSE_INDENT: usize = 4;
+/// Where the translations' meanings back start, past the widest of them,
+/// unless that's wider than this.
+const MAX_TERM_WIDTH: usize = 24;
+/// The widest lines are, however wide the window: longer ones are hard to
+/// read.
+const MAX_COLUMNS: usize = 88;
+
+/// Runs the command on the command line, and says how that went.
+pub fn run() -> ExitCode {
+    let (config, config_error) = match config::read() {
+        Ok(config) => (config, None),
+        Err(e) => (Config::default(), Some(e)),
+    };
+    i18n::set(config.ui_language);
+    if let Some(e) = config_error {
+        message(tr().settings_not_loaded, &e);
+    }
+    let given: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    // `wd` alone, typed at the prompt: how to use it.
+    if given.is_empty() && io::stdin().is_terminal() {
+        return help();
+    }
+    let args = match parse(given) {
+        Ok(args) => args,
+        Err(e) => return usage_error(&e),
+    };
+    let mut out = Printer::new();
+    match args.command {
+        Command::Help => help(),
+        Command::Version => {
+            let _ = writeln!(out.out, "WinDict {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Command::Define => define(&args, &config, &mut out),
+        Command::Translate => translate_text(&args, &config, &mut out),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Command {
+    Define,
+    Translate,
+    Help,
+    Version,
+}
+
+/// What the command line asks for. What it leaves out is as the settings
+/// have it.
+#[derive(Debug, PartialEq)]
+struct Args {
+    command: Command,
+    /// What's to be looked up or translated, a word to an argument.
+    text: Vec<String>,
+    /// `--lang`: only the definition in this language.
+    language: Option<String>,
+    /// `--from` and `--to`: which way to translate.
+    from: Option<String>,
+    to: Option<String>,
+    senses: Option<usize>,
+    synonyms: Option<usize>,
+    examples: Option<bool>,
+    online: Option<bool>,
+}
+
+/// Makes sense of the command line, without the program's name. A first
+/// word that isn't a command is the word to look up. The error says what
+/// couldn't be made sense of.
+fn parse(given: Vec<String>) -> Result<Args, String> {
+    let (command, rest) = match given.first().map(String::as_str) {
+        Some("define" | "d") => (Command::Define, &given[1..]),
+        Some("translate" | "t") => (Command::Translate, &given[1..]),
+        Some("help") => (Command::Help, &given[1..]),
+        _ => (Command::Define, &given[..]),
+    };
+    let mut args = Args {
+        command,
+        text: Vec::new(),
+        language: None,
+        from: None,
+        to: None,
+        senses: None,
+        synonyms: None,
+        examples: None,
+        online: None,
+    };
+    let mut rest = rest.iter();
+    let mut only_text = false;
+    while let Some(arg) = rest.next() {
+        // "-" alone, and anything after "--", is text, even "-5°C".
+        if only_text || !arg.starts_with('-') || arg == "-" {
+            args.text.push(arg.clone());
+            continue;
+        }
+        if arg == "--" {
+            only_text = true;
+            continue;
+        }
+        let (name, inline) = match arg.split_once('=') {
+            Some((name, value)) if name.starts_with("--") => (name, Some(value)),
+            _ => (arg.as_str(), None),
+        };
+        let mut value = || match inline {
+            Some(value) => Ok(value.to_string()),
+            None => rest
+                .next()
+                .cloned()
+                .ok_or_else(|| fill(tr().cli_missing_value, &[("option", &name)])),
+        };
+        let number = |value: String| {
+            value.parse::<usize>().map_err(|_| {
+                fill(
+                    tr().cli_not_a_number,
+                    &[("option", &name), ("value", &value)],
+                )
+            })
+        };
+        match (command, name) {
+            (_, "-h" | "--help") => args.command = Command::Help,
+            (_, "-V" | "--version") => args.command = Command::Version,
+            (_, "--online") => args.online = Some(true),
+            (_, "--offline") => args.online = Some(false),
+            (Command::Define, "-l" | "--lang") => args.language = Some(value()?),
+            (Command::Define, "-n" | "--senses") => args.senses = Some(number(value()?)?),
+            (Command::Define, "-s" | "--synonyms") => args.synonyms = Some(number(value()?)?),
+            (Command::Define, "--examples") => args.examples = Some(true),
+            (Command::Define, "--no-examples") => args.examples = Some(false),
+            (Command::Translate, "-f" | "--from") => args.from = Some(value()?),
+            (Command::Translate, "-t" | "--to") => args.to = Some(value()?),
+            _ => return Err(fill(tr().cli_unknown_option, &[("option", &name)])),
+        }
+    }
+    Ok(args)
+}
+
+/// Looks the word up, offline and then online, as the card does, and
+/// prints its definition, or what the word was likely a typo of.
+fn define(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
+    let word = match dictionary::normalize(&text(&args.text)) {
+        Ok(word) => word,
+        Err(NormalizeError::Empty) => return usage_error(tr().cli_no_word),
+        Err(NormalizeError::TooLong) => return failure(tr().too_long, tr().search_too_long),
+    };
+    let detail = Detail {
+        senses: args.senses.unwrap_or(config.max_definitions).max(1),
+        synonyms: args.synonyms.unwrap_or(config.max_synonyms),
+        examples: args.examples.unwrap_or(config.show_examples),
+    };
+    // In one language, its dictionary is used, if it's been downloaded,
+    // whether it's in the settings or not.
+    let language = args.language.as_deref().map(dictionary_language);
+    match &language {
+        Some(language) => {
+            let _ = offline::set_languages(std::slice::from_ref(language));
+        }
+        None => load_dictionaries(config),
+    }
+    let within = |def: Definition| match &language {
+        Some(language) => def.only(language),
+        None => Some(def),
+    };
+    let local = offline::lookup(&word, detail).and_then(within);
+    let online = args.online.unwrap_or(config.online_lookup).then(|| {
+        // The word the offline entry is of, when it's a form of another.
+        let key = match &local {
+            Some(def) => def.word.to_lowercase(),
+            None => word.clone(),
+        };
+        let languages = match &language {
+            Some(language) => vec![language.clone()],
+            None => offline::languages(),
+        };
+        let _waiting = Waiting::show(tr().looking_up);
+        online::lookup(&key, detail, &languages)
+    });
+    let result = match (local, online) {
+        (Some(local), online) => Lookup::Found(dictionary::merge(
+            local,
+            online.as_ref(),
+            &offline::languages(),
+        )),
+        (None, Some(online)) => online,
+        (None, None) => Lookup::NotFound,
+    };
+    let (title, detail) = match &result {
+        Lookup::Found(def) => {
+            out.definition(def);
+            return ExitCode::SUCCESS;
+        }
+        Lookup::NotFound => (tr().not_found, None),
+        Lookup::Failed(error) => (tr().lookup_failed, Some(error.as_str())),
+    };
+    let words = offline::Words::load();
+    let correction = words.correct(&word);
+    let detail = detail.unwrap_or(match correction {
+        Some(_) => tr().not_found_detail,
+        None => tr().not_found_check_spelling,
+    });
+    message(title, detail);
+    if let Some(correction) = correction {
+        eprintln!("{}", fill(tr().did_you_mean, &[("word", &correction)]));
+    }
+    ExitCode::from(NO_ANSWER)
+}
+
+/// Translates the text the way the translation shortcut does, and prints
+/// the translation.
+fn translate_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
+    let text = match translate::passage(&text(&args.text)) {
+        Ok(text) => text,
+        Err(NormalizeError::Empty) => return usage_error(tr().cli_no_text),
+        Err(NormalizeError::TooLong) => return failure(tr().too_long, tr().cli_translate_too_long),
+    };
+    let from = match args.from.as_deref().map(translation_language).transpose() {
+        Ok(from) => from,
+        Err(e) => return usage_error(&e),
+    };
+    let to = match args.to.as_deref().map(translation_language).transpose() {
+        Ok(to) => to,
+        Err(e) => return usage_error(&e),
+    };
+    // Translations come from the internet, like the online answers.
+    if !args.online.unwrap_or(config.online_lookup) {
+        return failure(tr().translate_offline, tr().cli_translate_offline_detail);
+    }
+    load_dictionaries(config);
+    // A word the dictionary has: which languages it's in tells which way
+    // it goes, and its first sense in the one it's from, what it means.
+    let brief = Detail {
+        senses: 1,
+        synonyms: 0,
+        examples: false,
+    };
+    let def = dictionary::normalize(&text)
+        .ok()
+        .and_then(|word| offline::lookup(&word, brief));
+    let direction = direction(&text, def.as_ref(), from, to, config);
+    if !direction.sure {
+        let word = translate::heading(&text);
+        let from = translate::name(&direction.from);
+        let to = translate::name(&direction.to);
+        let names: [(&str, &dyn std::fmt::Display); 3] =
+            [("word", &word), ("from", &from), ("to", &to)];
+        eprintln!(
+            "{} {}",
+            fill(tr().translate_ambiguous, &names),
+            fill(tr().cli_guessed_direction, &names[1..]),
+        );
+    }
+    let context = def.as_ref().and_then(|def| {
+        let section = def.sections().find(|s| s.language == direction.from)?;
+        Some(section.meanings.first()?.senses.first()?.text.as_str())
+    });
+    let result = {
+        let _waiting = Waiting::show(tr().translating);
+        translate::translate(
+            &text,
+            &direction.from,
+            &direction.to,
+            context,
+            &config.mymemory_email,
+        )
+    };
+    match result {
+        Ok(translation) => {
+            out.translation(&translation, &text, &direction);
+            ExitCode::SUCCESS
+        }
+        Err(e) => failure(tr().translate_failed, &e),
+    }
+}
+
+/// Which way to translate `text`, which the dictionary has as `def`, if
+/// it's a word it has: as the translation shortcut would, unless it's
+/// `from` or `to` a language given. Not `sure` only when it was a guess.
+fn direction(
+    text: &str,
+    def: Option<&Definition>,
+    from: Option<LangCode>,
+    to: Option<LangCode>,
+    config: &Config,
+) -> Direction {
+    let defaults = (config.translate_from.as_str(), config.translate_to.as_str());
+    let enabled = &config.languages;
+    let guess = || match def {
+        Some(def) => {
+            let found: Vec<&str> = def.sections().map(|s| s.language.as_str()).collect();
+            translate::pick(&found, enabled, defaults)
+        }
+        // Typed, as far as WinDict can tell: from the language most of its
+        // words are in.
+        None => translate::typed(offline::detect(text).as_deref(), enabled, defaults),
+    };
+    match (from, to) {
+        (Some(from), Some(to)) => Direction {
+            from,
+            to,
+            sure: true,
+        },
+        (Some(from), None) => Direction {
+            sure: true,
+            ..translate::typed(Some(&from), enabled, defaults)
+        },
+        // Into the language it seems to be in: then it's from the other.
+        (None, Some(to)) => {
+            let guess = guess();
+            let from = if guess.from == to {
+                guess.to
+            } else {
+                guess.from
+            };
+            Direction {
+                from,
+                to,
+                sure: true,
+            }
+        }
+        (None, None) => guess(),
+    }
+}
+
+/// The dictionaries of the settings, saying so on stderr when one can't
+/// be read.
+fn load_dictionaries(config: &Config) {
+    if let Err(e) = offline::set_languages(&config.languages) {
+        message(tr().dictionary_not_loaded, &e);
+    }
+}
+
+/// What's to be looked up or translated: what's on the command line, else
+/// what's piped in. Nothing when there's neither.
+fn text(given: &[String]) -> String {
+    if !given.is_empty() {
+        return given.join(" ");
+    }
+    let mut stdin = io::stdin();
+    if stdin.is_terminal() {
+        return String::new();
+    }
+    let mut bytes = Vec::new();
+    let _ = stdin.read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// A language to translate from or into, given as its code ("de") or its
+/// name ("German", "Deutsch"), whatever the case, or a part of it that's
+/// only its own ("germ").
+fn translation_language(given: &str) -> Result<LangCode, String> {
+    let given = given.trim();
+    let code = translate::LANGUAGES
+        .iter()
+        .map(|(code, _)| *code)
+        .find(|code| code.eq_ignore_ascii_case(given));
+    let code = code.or(match translate::search(given)[..] {
+        [code] => Some(code),
+        _ => None,
+    });
+    code.map(LangCode::new)
+        .ok_or_else(|| fill(tr().cli_unknown_language, &[("language", &given)]))
+}
+
+/// A language to look words up in, given as its code or its name, like a
+/// language to translate into; a code WinDict doesn't know is taken as it
+/// is, for Wiktionary.
+fn dictionary_language(given: &str) -> LangCode {
+    let given = given.trim();
+    dicts::languages()
+        .find(|(code, name)| code.eq_ignore_ascii_case(given) || name.eq_ignore_ascii_case(given))
+        .map(|(code, _)| LangCode::new(code))
+        .or_else(|| translation_language(given).ok())
+        .unwrap_or_else(|| LangCode::new(given.to_ascii_lowercase()))
+}
+
+fn help() -> ExitCode {
+    println!("{}", tr().cli_help);
+    ExitCode::SUCCESS
+}
+
+/// A message on stderr: what went wrong, then why, or what to do.
+fn message(title: &str, detail: &str) {
+    eprintln!("{title}");
+    if !detail.is_empty() {
+        eprintln!("{detail}");
+    }
+}
+
+fn failure(title: &str, detail: &str) -> ExitCode {
+    message(title, detail);
+    ExitCode::from(NO_ANSWER)
+}
+
+fn usage_error(error: &str) -> ExitCode {
+    message(error, tr().cli_see_help);
+    ExitCode::from(USAGE)
+}
+
+/// What's being waited for, on stderr while it's a console, rubbed out
+/// again once it's dropped.
+struct Waiting(usize);
+
+impl Waiting {
+    fn show(text: &str) -> Waiting {
+        if !io::stderr().is_terminal() {
+            return Waiting(0);
+        }
+        eprint!("{text}");
+        Waiting(text.chars().count())
+    }
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        if self.0 > 0 {
+            eprint!("\r{}\r", " ".repeat(self.0));
+        }
+    }
+}
+
+/// How a piece of the answer is printed, in a console that shows styles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Style {
+    Plain,
+    /// The word, and the translation.
+    Strong,
+    /// What's around them: pronunciations, notes, sources.
+    Faint,
+    /// The headings over the parts of speech, as the card has them.
+    Accent,
+    /// Examples.
+    Quote,
+}
+
+impl Style {
+    /// Its SGR parameters.
+    fn sgr(self) -> &'static str {
+        match self {
+            Style::Plain => "",
+            Style::Strong => "1",
+            Style::Faint => "2",
+            Style::Accent => "36",
+            Style::Quote => "2;3",
+        }
+    }
+}
+
+/// Prints answers to stdout.
+struct Printer {
+    out: StdoutLock<'static>,
+    styled: bool,
+    /// How wide lines can be.
+    columns: usize,
+}
+
+impl Printer {
+    fn new() -> Printer {
+        let (styled, columns) =
+            unsafe { console() }.map_or((false, usize::MAX), |(styled, columns)| {
+                // A column spare: the console moves to the next line once
+                // the last is written.
+                (styled, columns.saturating_sub(1).min(MAX_COLUMNS))
+            });
+        // https://no-color.org
+        let styled = styled && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
+        Printer {
+            out: io::stdout().lock(),
+            styled,
+            columns,
+        }
+    }
+
+    /// Writes `spans` as a paragraph, see [`wrap`]. Errors, like a pipe
+    /// closed early, aren't anything to tell anyone about.
+    fn line(&mut self, margin: usize, lead: (Style, &str), indent: usize, spans: &[(Style, &str)]) {
+        let text = wrap(
+            margin,
+            lead,
+            indent,
+            spans,
+            self.columns.max(indent + 20),
+            self.styled,
+        );
+        let _ = writeln!(self.out, "{text}");
+    }
+
+    fn text(&mut self, spans: &[(Style, &str)]) {
+        self.line(0, (Style::Plain, ""), 0, spans);
+    }
+
+    fn blank(&mut self) {
+        let _ = writeln!(self.out);
+    }
+
+    /// The word and how it's said, then each language's part (under its
+    /// name, when there are several) with its parts of speech, then where
+    /// it all comes from.
+    fn definition(&mut self, def: &Definition) {
+        let mut title = vec![(Style::Strong, def.word.as_str())];
+        if let Some(phonetic) = &def.phonetic {
+            title.push((Style::Faint, phonetic));
+        }
+        self.text(&title);
+        let grouped = !def.others.is_empty();
+        for section in def.sections() {
+            if grouped {
+                self.blank();
+                let name = dicts::name(&section.language);
+                let mut heading = vec![(Style::Strong, name.as_str())];
+                // The base form of what was looked up.
+                if section.word.to_lowercase() != def.word.to_lowercase() {
+                    heading.push((Style::Faint, &section.word));
+                }
+                self.text(&heading);
+            }
+            if let Some(note) = &section.note {
+                self.text(&[(Style::Faint, note)]);
+            }
+            for (i, meaning) in section.meanings.iter().enumerate() {
+                if i > 0 || !grouped {
+                    self.blank();
+                }
+                let pos = tr().part_of_speech(&meaning.part_of_speech).to_uppercase();
+                self.text(&[(Style::Accent, &pos)]);
+                for (n, sense) in meaning.senses.iter().enumerate() {
+                    let number = format!("{}.", n + 1);
+                    let lead = (Style::Faint, number.as_str());
+                    self.line(0, lead, SENSE_INDENT, &[(Style::Plain, &sense.text)]);
+                    if let Some(example) = &sense.example {
+                        let quoted = format!("\u{201C}{example}\u{201D}");
+                        let none = (Style::Plain, "");
+                        self.line(SENSE_INDENT, none, SENSE_INDENT, &[(Style::Quote, &quoted)]);
+                    }
+                }
+                for (label, words) in [
+                    (tr().similar, &meaning.synonyms),
+                    (tr().opposite, &meaning.antonyms),
+                ] {
+                    if !words.is_empty() {
+                        let label = format!("{label}:");
+                        let lead = (Style::Faint, label.as_str());
+                        let words = words.join(", ");
+                        self.line(SENSE_INDENT, lead, SENSE_INDENT, &[(Style::Plain, &words)]);
+                    }
+                }
+            }
+        }
+        self.blank();
+        for (source, word) in def.all_sources() {
+            let url = dictionary::source_url(source, word);
+            self.source(source, url.as_deref());
+        }
+    }
+
+    /// Which way it went, the translation and what the word was taken to
+    /// mean, the other translations by part of speech, each with what it
+    /// means back, then where it comes from.
+    fn translation(&mut self, translation: &Translation, text: &str, direction: &Direction) {
+        let (from, to) = (&direction.from, &direction.to);
+        let way = format!("{} \u{2192} {}", translate::name(from), translate::name(to));
+        self.text(&[(Style::Faint, &way)]);
+        // A passage is read, not glanced at.
+        let style = if translate::is_passage(&translation.text) {
+            Style::Plain
+        } else {
+            Style::Strong
+        };
+        self.text(&[(style, &capitalize(&translation.text))]);
+        if let Some(context) = &translation.context {
+            let quoted = format!("\u{201C}{}\u{201D}", capitalize(context));
+            self.text(&[(Style::Quote, &quoted)]);
+        }
+        for group in &translation.groups {
+            self.blank();
+            let label = match group.part_of_speech.as_str() {
+                "" => tr().also,
+                pos => tr().part_of_speech(pos),
+            };
+            self.text(&[(Style::Accent, &label.to_uppercase())]);
+            let widest = group.terms.iter().map(|t| t.text.chars().count()).max();
+            let indent = 2 + widest.unwrap_or(0).min(MAX_TERM_WIDTH) + 2;
+            for term in &group.terms {
+                let word = capitalize(&term.text);
+                let back = capitalize(&term.back.join(", "));
+                self.line(2, (Style::Plain, &word), indent, &[(Style::Faint, &back)]);
+            }
+        }
+        self.blank();
+        let source = translation.source;
+        let url = (source == translate::GOOGLE).then(|| {
+            format!(
+                "https://translate.google.com/?sl={from}&tl={to}&text={}&op=translate",
+                dictionary::percent_encode(text)
+            )
+        });
+        self.source(source, url.as_deref());
+    }
+
+    /// Where the answer comes from, and its page there, if it has one.
+    fn source(&mut self, name: &str, url: Option<&str>) {
+        let mut spans = vec![(Style::Faint, name)];
+        if let Some(url) = url {
+            spans.extend([(Style::Faint, "\u{B7}"), (Style::Faint, url)]);
+        }
+        self.text(&spans);
+    }
+}
+
+/// Whether the console stdout writes to shows styles, turning them on if
+/// they're off, and how many columns its window has; nothing when stdout
+/// isn't a console.
+unsafe fn console() -> Option<(bool, usize)> {
+    let handle = GetStdHandle(STD_OUTPUT_HANDLE).ok()?;
+    let mut mode = CONSOLE_MODE::default();
+    GetConsoleMode(handle, &mut mode).ok()?;
+    let styled = mode.contains(ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+        || SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING).is_ok();
+    let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
+    GetConsoleScreenBufferInfo(handle, &mut info).ok()?;
+    let columns = info.srWindow.Right - info.srWindow.Left + 1;
+    Some((styled, columns.max(0) as usize))
+}
+
+/// `spans` as a paragraph of lines at most `columns` wide, broken between
+/// words, which are one space apart. The first line starts `margin` in,
+/// with `lead` (a sense's number, say), and its text `indent` in, or a
+/// space after a longer lead; the others start `indent` in.
+fn wrap(
+    margin: usize,
+    lead: (Style, &str),
+    indent: usize,
+    spans: &[(Style, &str)],
+    columns: usize,
+    styled: bool,
+) -> String {
+    let paint = |out: &mut String, (style, text): (Style, &str)| {
+        if styled && style != Style::Plain {
+            out.push_str(&format!("\x1b[{}m{text}\x1b[0m", style.sgr()));
+        } else {
+            out.push_str(text);
+        }
+    };
+    let mut out = " ".repeat(margin);
+    paint(&mut out, lead);
+    let mut column = margin + lead.1.chars().count();
+    let mut start = true;
+    for &(style, text) in spans {
+        for word in text.split_whitespace() {
+            let width = word.chars().count();
+            if start {
+                let to = indent.max(column + usize::from(!lead.1.is_empty()));
+                out.push_str(&" ".repeat(to - column));
+                column = to;
+                start = false;
+            } else if column + 1 + width > columns {
+                out.push('\n');
+                out.push_str(&" ".repeat(indent));
+                column = indent;
+            } else {
+                out.push(' ');
+                column += 1;
+            }
+            paint(&mut out, (style, word));
+            column += width;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(line: &str) -> Result<Args, String> {
+        parse(
+            line.split(' ')
+                .filter(|a| !a.is_empty())
+                .map(String::from)
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn parses_commands() {
+        let define = args("define ice cream -n 2 --lang=it --no-examples").unwrap();
+        assert_eq!(define.command, Command::Define);
+        assert_eq!(define.text, ["ice", "cream"]);
+        assert_eq!(define.senses, Some(2));
+        assert_eq!(define.language.as_deref(), Some("it"));
+        assert_eq!(define.examples, Some(false));
+        // Without a command, it's a word to look up.
+        let bare = args("serendipity --offline").unwrap();
+        assert_eq!(
+            (bare.command, &bare.text[..]),
+            (Command::Define, &["serendipity".to_string()][..])
+        );
+        assert_eq!(bare.online, Some(false));
+        let translate = args("t hello -t de --from English").unwrap();
+        assert_eq!(translate.command, Command::Translate);
+        assert_eq!(
+            (translate.from.as_deref(), translate.to.as_deref()),
+            (Some("English"), Some("de"))
+        );
+        assert_eq!(args("translate -h").unwrap().command, Command::Help);
+        assert_eq!(args("-V").unwrap().command, Command::Version);
+        // After "--", and "-" alone, it's text.
+        assert_eq!(args("t -- -5 -h").unwrap().text, ["-5", "-h"]);
+    }
+
+    #[test]
+    fn rejects_what_it_cant_make_sense_of() {
+        // Each command's options are its own.
+        assert!(args("define cat --to it").is_err());
+        assert!(args("translate cat --lang it").is_err());
+        assert!(args("cat --frobnicate").is_err());
+        assert!(args("cat -n").is_err());
+        assert!(args("cat -n many").is_err());
+    }
+
+    #[test]
+    fn finds_languages() {
+        let found = |given| translation_language(given).map(|l| l.as_str().to_string());
+        assert_eq!(found("de").unwrap(), "de");
+        assert_eq!(found("ZH-cn").unwrap(), "zh-CN");
+        assert_eq!(found("German").unwrap(), "de");
+        assert_eq!(found("deutsch").unwrap(), "de");
+        assert!(found("klingon").is_err());
+        assert!(found("").is_err());
+        assert_eq!(dictionary_language("Italiano").as_str(), "it");
+        assert_eq!(dictionary_language("EN").as_str(), "en");
+    }
+
+    #[test]
+    fn picks_the_way_to_translate() {
+        let mut config = Config::default();
+        config.languages = vec!["en".into(), "it".into()];
+        (config.translate_from, config.translate_to) = ("en".into(), "it".into());
+        let way = |from: Option<&str>, to: Option<&str>| {
+            let d = direction(
+                "xyzzy",
+                None,
+                from.map(LangCode::new),
+                to.map(LangCode::new),
+                &config,
+            );
+            (
+                d.from.as_str().to_string(),
+                d.to.as_str().to_string(),
+                d.sure,
+            )
+        };
+        assert_eq!(
+            way(Some("fr"), Some("de")),
+            ("fr".into(), "de".into(), true)
+        );
+        // From Italian, into the other language in use.
+        assert_eq!(way(Some("it"), None), ("it".into(), "en".into(), true));
+        // Into what it was guessed to be in: from the other one.
+        assert_eq!(way(None, Some("en")), ("it".into(), "en".into(), true));
+        assert_eq!(way(None, Some("de")), ("en".into(), "de".into(), true));
+    }
+
+    #[test]
+    fn wraps_paragraphs() {
+        let plain = (Style::Plain, "");
+        let spans = [(Style::Plain, "one two three four")];
+        assert_eq!(wrap(0, plain, 0, &spans, 80, false), "one two three four");
+        assert_eq!(
+            wrap(0, plain, 2, &spans, 10, false),
+            "  one two\n  three\n  four"
+        );
+        // A lead, with its text from the indent on, or a space after it.
+        let number = (Style::Faint, "1.");
+        assert_eq!(
+            wrap(0, number, 4, &spans, 13, false),
+            "1.  one two\n    three\n    four"
+        );
+        let label = (Style::Faint, "Similar:");
+        assert_eq!(
+            wrap(4, label, 4, &[(Style::Plain, "a, b")], 80, false),
+            "    Similar: a, b"
+        );
+        // A word longer than the line has a line of its own.
+        assert_eq!(
+            wrap(0, plain, 0, &[(Style::Plain, "a bbbbbbbb c")], 4, false),
+            "a\nbbbbbbbb\nc"
+        );
+        // Styles are word by word, and none for plain text.
+        let styled = wrap(
+            0,
+            plain,
+            0,
+            &[(Style::Strong, "run"), (Style::Plain, "x")],
+            80,
+            true,
+        );
+        assert_eq!(styled, "\x1b[1mrun\x1b[0m x");
+    }
+}
