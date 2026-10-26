@@ -51,9 +51,19 @@ impl<'a> Dict<'a> {
         if dict.u32(4) != 4 {
             return None;
         }
+        let (entry_blocks, synset_blocks) = (dict.u32(8), dict.u32(12));
+        // The tables of blocks must be in the file: a broken header
+        // mustn't send a reader through billions of empty ones.
+        let tables = entry_blocks
+            .checked_mul(12)?
+            .checked_add(synset_blocks.checked_mul(8)?)?
+            .checked_add(HEADER)?;
+        if tables > data.len() {
+            return None;
+        }
         Some(Dict {
-            entry_blocks: dict.u32(8),
-            synset_blocks: dict.u32(12),
+            entry_blocks,
+            synset_blocks,
             synsets_per_block: dict.u32(16).max(1),
             ..dict
         })
@@ -347,6 +357,23 @@ mod tests {
     fn compares_words_but_for_case() {
         assert!(same_word("Señor", "señor"));
         assert!(!same_word("senor", "señor"));
+    }
+
+    #[test]
+    fn opens_only_whole_tables() {
+        let header = |entry_blocks: u32, synset_blocks: u32| {
+            let mut data = b"WDIC".to_vec();
+            for n in [4, entry_blocks, synset_blocks, 1, 0, 0] {
+                data.extend(n.to_le_bytes());
+            }
+            data
+        };
+        assert!(Dict::open(&header(0, 0)).is_some());
+        let mut one = header(1, 1);
+        one.extend([0; 20]);
+        assert!(Dict::open(&one).is_some());
+        assert!(Dict::open(&one[..one.len() - 1]).is_none());
+        assert!(Dict::open(&header(u32::MAX, u32::MAX)).is_none());
     }
 
     #[test]
