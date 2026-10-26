@@ -535,6 +535,16 @@ impl Intro {
         self.replace_view(true)
     }
 
+    /// The GPU went away: draws everything again with another.
+    pub fn recover(&mut self) -> Result<()> {
+        if self.renderer.recover()? {
+            self.frame
+                .apply_theme(&self.renderer, &self.theme, self.scale)?;
+            self.replace_view(false)?;
+        }
+        Ok(())
+    }
+
     /// The window moved to a monitor with another `dpi`. `suggested` is
     /// where Windows would put it, in screen pixels.
     pub fn rescale(&mut self, dpi: u32, suggested: RECT) -> Result<()> {

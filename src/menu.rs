@@ -243,6 +243,8 @@ impl Menu {
         autostart: bool,
         update: Option<&str>,
     ) -> Result<()> {
+        // Everything's drawn afresh: with another GPU, if it went away.
+        self.renderer.recover()?;
         let (work, s) = ui::monitor_at(cursor);
         self.theme = theme;
         self.scale = s;

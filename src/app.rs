@@ -787,7 +787,15 @@ fn spawn_capture_thread(events: Events) -> u32 {
 /// modal loop, some COM calls, a message sent to one of WinDict's windows).
 /// What the main window missed meanwhile is posted again once it's free.
 fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
-    let r = APP.with(|a| a.try_borrow_mut().ok().and_then(|mut a| a.as_mut().map(f)));
+    let r = APP.with(|a| {
+        let mut a = a.try_borrow_mut().ok()?;
+        let app = a.as_mut()?;
+        let r = f(app);
+        if render::take_device_lost() {
+            app.recover_device();
+        }
+        Some(r)
+    });
     if r.is_some() {
         for (msg, wparam, lparam) in MISSED.with(|m| m.take()) {
             unsafe {

@@ -369,6 +369,23 @@ impl App {
 
     /// The colors changed, the system's or the setting: every window
     /// follows them.
+    /// A drawing failed because the GPU went away, or the displays
+    /// changed, which can take it: every window draws everything again,
+    /// with another.
+    pub(super) fn recover_device(&mut self) {
+        if let Some(settings) = self.settings.as_mut() {
+            let _ = settings.recover();
+        }
+        if let Some(intro) = self.intro.as_mut() {
+            let _ = intro.recover();
+        }
+        self.each_card(|app| {
+            if let Some(popup) = app.card.popup.as_mut() {
+                let _ = popup.recover();
+            }
+        });
+    }
+
     pub(super) fn on_colors_changed(&mut self) {
         let theme = self.theme();
         if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {

@@ -439,7 +439,9 @@ impl Renderer {
         unsafe {
             let interop: ICompositionDrawingSurfaceInterop = surface.cast()?;
             let mut offset = POINT::default();
-            let dc: ID2D1DeviceContext = interop.BeginDraw(None, &mut offset)?;
+            let dc: ID2D1DeviceContext = interop
+                .BeginDraw(None, &mut offset)
+                .inspect_err(|_| self.note_if_lost())?;
             dc.SetDpi(96.0 * scale, 96.0 * scale);
             dc.SetTransform(&Matrix3x2::translation(
                 offset.x as f32 / scale,
@@ -454,8 +456,16 @@ impl Renderer {
                 a: 0.0,
             }));
             let result = draw(&dc);
-            interop.EndDraw()?;
+            interop.EndDraw().inspect_err(|_| self.note_if_lost())?;
             result
+        }
+    }
+
+    /// A drawing failed: if it's because the GPU went away, the app is told
+    /// to draw everything again.
+    fn note_if_lost(&self) {
+        if self.lost() {
+            super::DEVICE_LOST.set(true);
         }
     }
 }

@@ -866,6 +866,16 @@ impl Settings {
         self.replace_view(true)
     }
 
+    /// The GPU went away: draws everything again with another.
+    pub fn recover(&mut self) -> Result<()> {
+        if self.renderer.recover()? {
+            self.frame
+                .apply_theme(&self.renderer, &self.theme, self.scale)?;
+            self.replace_view(false)?;
+        }
+        Ok(())
+    }
+
     /// Shows the window in the language now current, cross-fading to it.
     pub fn relanguage(&mut self) -> Result<()> {
         self.notes = NOTES.map(|note| (note.usual(&self.values), false));

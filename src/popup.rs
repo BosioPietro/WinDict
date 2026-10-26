@@ -880,6 +880,18 @@ impl Popup {
             return Ok(());
         }
         self.theme = theme;
+        self.redraw()
+    }
+
+    /// The GPU went away: draws everything again with another.
+    pub fn recover(&mut self) -> Result<()> {
+        if self.renderer.recover()? {
+            self.redraw()?;
+        }
+        Ok(())
+    }
+
+    fn redraw(&mut self) -> Result<()> {
         self.apply_theme()?;
         if let Some(shown) = self.shown.take() {
             let drawn = match self.visible {

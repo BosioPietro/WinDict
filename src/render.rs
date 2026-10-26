@@ -8,6 +8,8 @@ mod body;
 mod draw;
 mod text;
 
+use std::cell::{Cell, RefCell};
+
 use windows::core::{w, Interface, Result, HSTRING};
 use windows::Foundation::Size;
 use windows::Graphics::DirectX::{DirectXAlphaMode, DirectXPixelFormat};
@@ -527,43 +529,87 @@ struct Formats {
     chrome: IDWriteTextFormat,
 }
 
+thread_local! {
+    /// A drawing failed because the GPU went away: a driver update, a
+    /// reset, a remote session.
+    static DEVICE_LOST: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether a drawing failed because the GPU went away since this was last
+/// asked: what every window shows is gone, and is to be drawn again.
+pub fn take_device_lost() -> bool {
+    DEVICE_LOST.take()
+}
+
 pub struct Renderer {
-    d3d: ID3D11Device,
-    _d2d_device: ID2D1Device,
+    d3d: RefCell<ID3D11Device>,
+    d2d_device: RefCell<ID2D1Device>,
     d2d: ID2D1Factory1,
     dwrite: IDWriteFactory,
     formats: Formats,
     pub graphics: CompositionGraphicsDevice,
+    /// How many times the devices were made again, the GPU gone.
+    generation: Cell<u32>,
 }
 
 impl Renderer {
     pub fn new(compositor: &Compositor) -> Result<Renderer> {
         unsafe {
             let d3d = create_d3d_device()?;
-            let dxgi: IDXGIDevice = d3d.cast()?;
             let factory: ID2D1Factory1 =
                 D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
-            let d2d_device = factory.CreateDevice(&dxgi)?;
+            let d2d_device = factory.CreateDevice(&d3d.cast::<IDXGIDevice>()?)?;
             let interop: ICompositorInterop = compositor.cast()?;
             let graphics = interop.CreateGraphicsDevice(&d2d_device)?;
             let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
             let formats = create_formats(&dwrite)?;
             Ok(Renderer {
-                d3d,
-                _d2d_device: d2d_device,
+                d3d: RefCell::new(d3d),
+                d2d_device: RefCell::new(d2d_device),
                 d2d: factory,
                 dwrite,
                 formats,
                 graphics,
+                generation: Cell::new(0),
             })
         }
     }
 
     /// Hands unused GPU memory back to the driver while we sit idle.
     pub fn trim(&self) {
-        if let Ok(dxgi) = self.d3d.cast::<IDXGIDevice3>() {
+        if let Ok(dxgi) = self.d3d.borrow().cast::<IDXGIDevice3>() {
             unsafe { dxgi.Trim() };
         }
+    }
+
+    /// Whether the GPU drawn with went away.
+    pub fn lost(&self) -> bool {
+        unsafe { self.d3d.borrow().GetDeviceRemovedReason() }.is_err()
+    }
+
+    /// Draws with a GPU again, if the one drawn with went away: the
+    /// surfaces stay, emptied, for the caller to draw everything again.
+    /// Returns whether it had gone.
+    pub fn recover(&self) -> Result<bool> {
+        if !self.lost() {
+            return Ok(false);
+        }
+        unsafe {
+            let d3d = create_d3d_device()?;
+            let d2d_device = self.d2d.CreateDevice(&d3d.cast::<IDXGIDevice>()?)?;
+            let interop: ICompositionGraphicsDeviceInterop = self.graphics.cast()?;
+            interop.SetRenderingDevice(&d2d_device)?;
+            *self.d3d.borrow_mut() = d3d;
+            *self.d2d_device.borrow_mut() = d2d_device;
+        }
+        self.generation.set(self.generation.get() + 1);
+        Ok(true)
+    }
+
+    /// Changes when the devices are made again: what was drawn before is
+    /// gone.
+    pub fn generation(&self) -> u32 {
+        self.generation.get()
     }
 
     fn text(

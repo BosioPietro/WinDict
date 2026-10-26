@@ -176,6 +176,12 @@ pub(super) unsafe extern "system" fn main_proc(
             with_app(|app| app.on_timer(wparam.0));
             LRESULT(0)
         }
+        // A display was added, removed or changed, which can take the GPU
+        // drawn with along.
+        WM_DISPLAYCHANGE => {
+            with_app(|app| app.recover_device());
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
         // Light or dark mode, the accent color or the animations changed.
         // The main window hears it for every window, as it's always there.
         WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED => {
