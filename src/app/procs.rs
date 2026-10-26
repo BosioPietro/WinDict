@@ -79,6 +79,9 @@ fn key_bit(vk: u16) -> (usize, u64) {
     ((vk as usize / 64) % 4, 1u64 << (vk % 64))
 }
 
+/// Ctrl held, in a mouse message's wparam.
+const MK_CONTROL: u32 = 0x0008;
+
 /// Enter or Space on the tray icon.
 const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 
@@ -266,7 +269,7 @@ pub(super) unsafe extern "system" fn popup_proc(
         // With Ctrl held, it zooms the card instead.
         WM_MOUSEWHEEL => {
             let delta = (wparam.0 >> 16) & 0xFFFF;
-            let ctrl = wparam.0 as u32 & 0x0008 != 0; // MK_CONTROL
+            let ctrl = wparam.0 as u32 & MK_CONTROL != 0;
             let msg = if ctrl { WM_APP_ZOOM } else { WM_APP_WHEEL };
             post(msg, WPARAM(delta), LPARAM(hwnd.0 as isize));
             LRESULT(0)
@@ -457,7 +460,7 @@ pub(super) unsafe extern "system" fn settings_proc(
         // With Ctrl held, it zooms the window instead.
         WM_MOUSEWHEEL => {
             let delta = (wparam.0 >> 16) as u16 as i16 as i32;
-            if wparam.0 as u32 & 0x0008 != 0 {
+            if wparam.0 as u32 & MK_CONTROL != 0 {
                 // MK_CONTROL
                 with_app(|app| app.zoom_settings_by_wheel(delta));
             } else {

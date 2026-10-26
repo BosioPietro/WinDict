@@ -92,13 +92,7 @@ impl App {
         if self.picking().is_some() {
             return self.type_language(unit);
         }
-        let Some(hwnd) = self
-            .card
-            .popup
-            .as_ref()
-            .filter(|p| p.visible)
-            .map(|p| p.hwnd)
-        else {
+        let Some(hwnd) = self.visible_popup().map(|p| p.hwnd) else {
             return;
         };
         let Some(search) = self.card.search.as_mut() else {
@@ -315,7 +309,7 @@ impl App {
     /// Back from the translation of what was typed: the box it was typed
     /// in comes back as it was, its text and languages and all.
     pub(super) fn reopen_search(&mut self, search: Search) {
-        let Some(popup) = self.card.popup.as_mut().filter(|p| p.visible) else {
+        let Some(popup) = self.visible_popup_mut() else {
             return;
         };
         popup.hold_region(false);

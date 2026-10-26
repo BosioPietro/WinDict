@@ -27,7 +27,7 @@ impl App {
         // Up and Down, likewise, only while there's further to scroll.
         let scroll = popup.is_some_and(|p| p.scrolls());
         // Ctrl+T, likewise, only while there's a translation to go to or from.
-        let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
+        let visible = self.visible_popup().is_some();
         let translate = visible && (self.can_translate() || self.has_definition_behind());
         // And Ctrl+C only while there's something to copy.
         let copy = popup.is_some() && self.copyable().is_some();
@@ -47,7 +47,7 @@ impl App {
 
     /// Tab or Shift+Tab: rings the next or previous link.
     pub(super) fn step_link(&mut self, forward: bool) {
-        if let Some(popup) = self.card.popup.as_mut().filter(|p| p.visible) {
+        if let Some(popup) = self.visible_popup_mut() {
             let _ = popup.step_link(forward);
         }
         self.sync_link_keys();
@@ -55,13 +55,7 @@ impl App {
 
     /// Enter: opens the link Tab moved to.
     pub(super) fn open_focused_link(&mut self) {
-        let target = self
-            .card
-            .popup
-            .as_ref()
-            .filter(|p| p.visible)
-            .and_then(|p| p.focused_link())
-            .cloned();
+        let target = self.visible_popup().and_then(|p| p.focused_link()).cloned();
         if let Some(target) = target {
             self.open_link(target);
         }
@@ -70,7 +64,7 @@ impl App {
     /// What Ctrl+C copies: the word Tab is on, or else the translation the
     /// card shows, or the word it defines.
     fn copyable(&self) -> Option<String> {
-        let popup = self.card.popup.as_ref().filter(|p| p.visible)?;
+        let popup = self.visible_popup()?;
         if let Some(Target::Word(word)) = popup.focused_link() {
             return Some(word.clone());
         }

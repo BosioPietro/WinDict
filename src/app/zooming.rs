@@ -8,7 +8,7 @@ impl App {
     /// Ctrl+0, with `None`, back to the usual size.
     pub(super) fn zoom(&mut self, by: Option<isize>) {
         // The search box keeps its size until it turns into a card.
-        let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
+        let visible = self.visible_popup().is_some();
         if !visible || self.card.search.is_some() {
             return;
         }

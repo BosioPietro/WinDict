@@ -81,7 +81,7 @@ impl App {
     /// it's in to the other one in use, or as the settings say when that
     /// can't be told.
     pub(super) fn translate(&mut self) {
-        let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
+        let visible = self.visible_popup().is_some();
         if !visible || !self.can_translate() {
             return;
         }
@@ -170,7 +170,7 @@ impl App {
             self.translations
                 .put(translated.key.clone(), translation.clone());
         }
-        let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
+        let visible = self.visible_popup().is_some();
         if translated.id != self.card.request || !visible {
             return;
         }

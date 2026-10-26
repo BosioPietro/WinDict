@@ -67,7 +67,7 @@ impl App {
         if !matches!(looked.result, Lookup::Failed(_)) {
             self.cache.put(looked.query.clone(), looked.result.clone());
         }
-        let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
+        let visible = self.visible_popup().is_some();
         if looked.id != self.card.request || !visible {
             return;
         }
@@ -158,7 +158,7 @@ impl App {
     }
 
     pub(super) fn on_corrected(&mut self, c: Corrected) {
-        let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
+        let visible = self.visible_popup().is_some();
         if c.id != self.card.request || (matches!(c.place, Place::Same(_)) && !visible) {
             return;
         }
@@ -303,7 +303,7 @@ impl App {
 
     /// Says the word the card shows out loud, in its own language.
     pub(super) fn speak(&mut self) {
-        let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
+        let visible = self.visible_popup().is_some();
         if let Some((word, voice)) = self.card.speakable.as_ref().filter(|_| visible) {
             self.speaker.say(word, voice);
         }
@@ -314,7 +314,7 @@ impl App {
         if selection::has_ui_access() {
             return;
         }
-        let Some(popup) = self.card.popup.as_ref().filter(|p| p.visible) else {
+        let Some(popup) = self.visible_popup() else {
             return;
         };
         let r = popup.card_rect();
@@ -355,7 +355,7 @@ impl App {
     /// Goes back to the word shown before the last synonym was followed, or
     /// from a translation to the definition it was of.
     pub(super) fn back(&mut self) {
-        if !self.card.popup.as_ref().is_some_and(|p| p.visible) {
+        if !self.visible_popup().is_some() {
             return;
         }
         // From the translation of what was typed, back to the box.

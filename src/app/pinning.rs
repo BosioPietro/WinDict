@@ -85,7 +85,7 @@ impl App {
 
     /// Pins the card open. Lookups open a card of their own from now on.
     fn pin(&mut self) {
-        let visible = self.card.popup.as_ref().is_some_and(|p| p.visible);
+        let visible = self.visible_popup().is_some();
         // Still on its way, its answer would go to the next card.
         if !visible || self.card.copying || self.card.search.is_some() {
             return;
