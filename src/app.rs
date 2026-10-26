@@ -46,7 +46,7 @@ use crate::lang::LangCode;
 use crate::menu::{Command, Menu};
 use crate::offline;
 use crate::online;
-use crate::popup::{self, Popup, Transition};
+use crate::popup::{self, CardButton, Popup, Transition};
 use crate::render::{self, Body, Side, Target, TranslationCard, PICKER_ROWS};
 use crate::searchbox::MAX_SUGGESTIONS;
 use crate::selection::{self, Capturer, Selection};
@@ -1253,7 +1253,8 @@ impl App {
 
     /// A click on the card in `hwnd`.
     fn on_click(&mut self, hwnd: HWND, x: i32, y: i32) {
-        if self.popup_of(hwnd).is_some_and(|p| p.pin_at(x, y)) {
+        let button = self.popup_of(hwnd).and_then(|p| p.button_at(x, y));
+        if button == Some(CardButton::Pin) {
             return self.toggle_pin(hwnd);
         }
         self.with_card(hwnd, |app| app.click(x, y));
@@ -1264,19 +1265,11 @@ impl App {
         if self.card.search.is_some() && suggestion.is_some() {
             return self.submit_search(suggestion);
         }
-        if self.card.popup.as_ref().is_some_and(|p| p.back_at(x, y)) {
-            return self.back();
-        }
-        if self
-            .card
-            .popup
-            .as_ref()
-            .is_some_and(|p| p.translate_at(x, y))
-        {
-            return self.translate();
-        }
-        if self.card.popup.as_ref().is_some_and(|p| p.speak_at(x, y)) {
-            return self.speak();
+        match self.card.popup.as_ref().and_then(|p| p.button_at(x, y)) {
+            Some(CardButton::Back) => return self.back(),
+            Some(CardButton::Translate) => return self.translate(),
+            Some(CardButton::Speak) => return self.speak(),
+            Some(CardButton::Pin) | None => {}
         }
         if let Some(target) = self
             .card

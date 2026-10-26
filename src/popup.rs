@@ -332,20 +332,47 @@ pub struct Popup {
     _window: Window,
 }
 
-/// Somewhere Tab stops in the card.
+/// One of the buttons on the card.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Stop {
+pub enum CardButton {
     Speak,
     Translate,
     Pin,
+    Back,
+}
+
+impl CardButton {
+    /// Every button, in the order Tab goes through them: the ones by the
+    /// word as they read, and the back button last, so Tab doesn't start on
+    /// it.
+    const ALL: [CardButton; 4] = [Self::Speak, Self::Translate, Self::Pin, Self::Back];
+
+    /// What pressing the button does.
+    fn target(self) -> &'static Target {
+        static SPEAK: Target = Target::Speak;
+        static TRANSLATE: Target = Target::Translate;
+        static PIN: Target = Target::Pin;
+        static BACK: Target = Target::Back;
+        match self {
+            Self::Speak => &SPEAK,
+            Self::Translate => &TRANSLATE,
+            Self::Pin => &PIN,
+            Self::Back => &BACK,
+        }
+    }
+}
+
+/// Somewhere Tab stops in the card.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Stop {
+    Button(CardButton),
     /// The link starting at this index in the body's links.
     Link(usize),
-    Back,
 }
 
 impl Stop {
     fn is_button(self) -> bool {
-        !matches!(self, Stop::Link(_))
+        matches!(self, Stop::Button(_))
     }
 }
 
@@ -627,14 +654,11 @@ impl Popup {
             Transition::Instant | Transition::Replace => None,
         };
         self.content.set_links(body_layout.links.clone());
-        if kept == Some(Target::Speak) && self.speak.shown() {
-            self.focus_speak(0)?;
-        } else if kept == Some(Target::Translate) && self.translate.shown() {
-            self.focus_translate(0)?;
-        } else if kept == Some(Target::Back) && self.back.shown() {
-            self.focus_back(0)?;
-        } else if kept == Some(Target::Pin) {
-            self.focus_pin(0)?;
+        let kept_button = CardButton::ALL
+            .into_iter()
+            .find(|&b| kept.as_ref() == Some(b.target()) && self.button(b).shown());
+        if let Some(button) = kept_button {
+            self.focus_button(button, 0)?;
         } else {
             let links = self.content.links();
             let focused = kept.and_then(|t| links.iter().position(|l| l.target == t));
@@ -816,9 +840,7 @@ impl Popup {
     /// the heading above the field.
     pub fn caption_at(&self, x: i32, y: i32) -> bool {
         let (cx, cy) = self.card_point(x, y);
-        let on_button = [&self.back, &self.translate, &self.speak, &self.pin]
-            .into_iter()
-            .any(|b| b.shown() && contains(self.button_rect(b), x, y));
+        let on_button = self.button_at(x, y).is_some();
         let heading_h = match self.search.active {
             true => self.search.field_top(),
             false => self.header_h,
@@ -932,14 +954,11 @@ impl Popup {
             // The languages under the field have a swap button to lighten.
             return self.sync_swap();
         }
-        let over_back = point.is_some_and(|(x, y)| self.back_at(x, y));
-        let over_translate = point.is_some_and(|(x, y)| self.translate_at(x, y));
-        let over_speak = point.is_some_and(|(x, y)| self.speak_at(x, y));
-        let over_pin = point.is_some_and(|(x, y)| self.pin_at(x, y));
-        self.back.set_hovered(&self.anim, over_back)?;
-        self.pin.set_hovered(&self.anim, over_pin)?;
-        self.translate.set_hovered(&self.anim, over_translate)?;
-        self.speak.set_hovered(&self.anim, over_speak)?;
+        let over = point.and_then(|(x, y)| self.button_at(x, y));
+        for button in CardButton::ALL {
+            let (button_ui, anim) = self.button_mut(button);
+            button_ui.set_hovered(anim, over == Some(button))?;
+        }
         self.sync_swap()
     }
 
@@ -980,24 +999,32 @@ impl Popup {
         }
     }
 
-    /// Whether a point in window pixels is on the back button.
-    pub fn back_at(&self, x: i32, y: i32) -> bool {
-        self.back.shown() && contains(self.button_rect(&self.back), x, y)
+    /// The button showing at a point in window pixels, if any.
+    pub fn button_at(&self, x: i32, y: i32) -> Option<CardButton> {
+        CardButton::ALL.into_iter().find(|&b| {
+            let button = self.button(b);
+            button.shown() && contains(self.button_rect(button), x, y)
+        })
     }
 
-    /// Whether a point in window pixels is on the translate button.
-    pub fn translate_at(&self, x: i32, y: i32) -> bool {
-        self.translate.shown() && contains(self.button_rect(&self.translate), x, y)
+    fn button(&self, button: CardButton) -> &IconButton {
+        match button {
+            CardButton::Speak => &self.speak,
+            CardButton::Translate => &self.translate,
+            CardButton::Pin => &self.pin,
+            CardButton::Back => &self.back,
+        }
     }
 
-    /// Whether a point in window pixels is on the button saying the word.
-    pub fn speak_at(&self, x: i32, y: i32) -> bool {
-        self.speak.shown() && contains(self.button_rect(&self.speak), x, y)
-    }
-
-    /// Whether a point in window pixels is on the pin button.
-    pub fn pin_at(&self, x: i32, y: i32) -> bool {
-        self.pin.shown() && contains(self.button_rect(&self.pin), x, y)
+    /// `button`, with what animates it.
+    fn button_mut(&mut self, button: CardButton) -> (&mut IconButton, &Animator) {
+        let ui = match button {
+            CardButton::Speak => &mut self.speak,
+            CardButton::Translate => &mut self.translate,
+            CardButton::Pin => &mut self.pin,
+            CardButton::Back => &mut self.back,
+        };
+        (ui, &self.anim)
     }
 
     /// A button in window pixels.
@@ -1017,7 +1044,7 @@ impl Popup {
 
     /// Keeps the tooltips over the buttons, and off while they're hidden.
     fn sync_tooltip(&self) {
-        for button in [&self.back, &self.translate, &self.speak, &self.pin] {
+        for button in CardButton::ALL.map(|b| self.button(b)) {
             let rect = if button.shown() {
                 self.button_rect(button)
             } else {

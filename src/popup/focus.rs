@@ -22,47 +22,25 @@ impl Popup {
 
     /// Whether the card has links, or buttons, to Tab through.
     pub fn has_links(&self) -> bool {
-        self.speak.shown()
-            || self.translate.shown()
-            || self.pin.shown()
-            || self.back.shown()
-            || !self.content.links().is_empty()
+        CardButton::ALL.iter().any(|&b| self.button(b).shown()) || !self.content.links().is_empty()
     }
 
     /// The link, or button, Tab moved to, if any.
     pub fn focused_link(&self) -> Option<&Target> {
-        static SPEAK: Target = Target::Speak;
-        static TRANSLATE: Target = Target::Translate;
-        static BACK: Target = Target::Back;
-        static PIN: Target = Target::Pin;
-        if self.speak.focused() {
-            return Some(&SPEAK);
+        match self.current_stop()? {
+            Stop::Button(button) => Some(button.target()),
+            Stop::Link(i) => Some(&self.content.links()[i].target),
         }
-        if self.translate.focused() {
-            return Some(&TRANSLATE);
-        }
-        if self.back.focused() {
-            return Some(&BACK);
-        }
-        if self.pin.focused() {
-            return Some(&PIN);
-        }
-        let links = self.content.links();
-        self.content.focused().map(|i| &links[i].target)
     }
 
     /// Where Tab is, if anywhere.
     pub(super) fn current_stop(&self) -> Option<Stop> {
-        if self.speak.focused() {
-            Some(Stop::Speak)
-        } else if self.translate.focused() {
-            Some(Stop::Translate)
-        } else if self.back.focused() {
-            Some(Stop::Back)
-        } else if self.pin.focused() {
-            Some(Stop::Pin)
-        } else {
-            self.content.focused().map(Stop::Link)
+        let button = CardButton::ALL
+            .into_iter()
+            .find(|&b| self.button(b).focused());
+        match button {
+            Some(button) => Some(Stop::Button(button)),
+            None => self.content.focused().map(Stop::Link),
         }
     }
 
@@ -71,20 +49,14 @@ impl Popup {
     /// The buttons by the word come first, as they do reading the card, and
     /// the back button last, so Tab doesn't start on it.
     pub fn step_link(&mut self, forward: bool) -> Result<()> {
-        let mut stops = Vec::new();
-        if self.speak.shown() {
-            stops.push(Stop::Speak);
-        }
-        if self.translate.shown() {
-            stops.push(Stop::Translate);
-        }
-        if self.pin.shown() {
-            stops.push(Stop::Pin);
-        }
+        let shown = |b: &CardButton| self.button(*b).shown();
+        let (by_word, back): (Vec<_>, Vec<_>) = CardButton::ALL
+            .into_iter()
+            .filter(shown)
+            .partition(|&b| b != CardButton::Back);
+        let mut stops: Vec<_> = by_word.into_iter().map(Stop::Button).collect();
         stops.extend(self.content.stops().into_iter().map(Stop::Link));
-        if self.back.shown() {
-            stops.push(Stop::Back);
-        }
+        stops.extend(back.into_iter().map(Stop::Button));
         if stops.is_empty() {
             return Ok(());
         }
@@ -96,7 +68,7 @@ impl Popup {
             // Backwards from nowhere is the last of the card, not its back button.
             (None, false) => stops
                 .iter()
-                .rposition(|&s| s != Stop::Back)
+                .rposition(|&s| s != Stop::Button(CardButton::Back))
                 .unwrap_or(n - 1),
             (Some(i), true) => (i + 1) % n,
             (Some(i), false) => (i + n - 1) % n,
@@ -112,10 +84,7 @@ impl Popup {
         // What the ring lands on shows once the one gliding over has arrived.
         let reveal = if across { FOCUS_MS } else { 0 };
         match to {
-            Stop::Speak => self.focus_speak(reveal)?,
-            Stop::Translate => self.focus_translate(reveal)?,
-            Stop::Back => self.focus_back(reveal)?,
-            Stop::Pin => self.focus_pin(reveal)?,
+            Stop::Button(button) => self.focus_button(button, reveal)?,
             Stop::Link(start) => {
                 self.focus_link(Some(start), reveal)?;
                 self.scroll_into_view(start)?;
@@ -134,13 +103,8 @@ impl Popup {
         let stroke = (ui::FOCUS_STROKE * s).round();
         let grow = stroke / 2.0;
         match stop {
-            Stop::Speak | Stop::Translate | Stop::Back | Stop::Pin => {
-                let button = match stop {
-                    Stop::Speak => &self.speak,
-                    Stop::Back => &self.back,
-                    Stop::Pin => &self.pin,
-                    _ => &self.translate,
-                };
+            Stop::Button(button) => {
+                let button = self.button(button);
                 let side = BACK_SIZE * s;
                 Some((
                     button.card_offset(s),
@@ -202,28 +166,11 @@ impl Popup {
         self.focus_link(None, 0)
     }
 
-    /// Rings the button saying the word, `reveal` ms from now.
-    pub(super) fn focus_speak(&mut self, reveal: u64) -> Result<()> {
+    /// Rings `button`, `reveal` ms from now.
+    pub(super) fn focus_button(&mut self, button: CardButton, reveal: u64) -> Result<()> {
         self.focus_link(None, reveal)?;
-        self.speak.reveal(&self.anim, reveal)
-    }
-
-    /// Rings the translate button, `reveal` ms from now.
-    pub(super) fn focus_translate(&mut self, reveal: u64) -> Result<()> {
-        self.focus_link(None, reveal)?;
-        self.translate.reveal(&self.anim, reveal)
-    }
-
-    /// Rings the back button, `reveal` ms from now.
-    pub(super) fn focus_back(&mut self, reveal: u64) -> Result<()> {
-        self.focus_link(None, reveal)?;
-        self.back.reveal(&self.anim, reveal)
-    }
-
-    /// Rings the pin button, `reveal` ms from now.
-    pub(super) fn focus_pin(&mut self, reveal: u64) -> Result<()> {
-        self.focus_link(None, reveal)?;
-        self.pin.reveal(&self.anim, reveal)
+        let (button, anim) = self.button_mut(button);
+        button.reveal(anim, reveal)
     }
 
     /// Rings the link starting at `start` in the body's links, or none,
