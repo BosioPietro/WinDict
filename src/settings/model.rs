@@ -85,8 +85,8 @@ impl Counter {
     /// The lowest and highest values.
     pub(super) fn range(self) -> (usize, usize) {
         match self {
-            Counter::Definitions => (1, 10),
-            Counter::Synonyms => (0, 12),
+            Counter::Definitions => config::DEFINITIONS,
+            Counter::Synonyms => config::SYNONYMS,
             Counter::Zoom => (0, ZOOMS.len() - 1),
         }
     }

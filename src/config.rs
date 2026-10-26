@@ -105,6 +105,11 @@ pub struct Config {
     pub version: String,
 }
 
+/// How many definitions can be shown per part of speech: at least one, or
+/// the card would be empty.
+pub const DEFINITIONS: (usize, usize) = (1, 10);
+/// How many synonyms can be shown per part of speech: 0 hides them.
+pub const SYNONYMS: (usize, usize) = (0, 12);
 /// The sizes the card can be zoomed to, in percent.
 pub const ZOOMS: [u32; 8] = [80, 90, 100, 110, 125, 150, 175, 200];
 
@@ -258,8 +263,8 @@ fn save_to(path: &Path, config: &Config) -> Result<(), String> {
 fn parse(bytes: &[u8]) -> Result<Config, String> {
     let mut config: Config =
         serde_json::from_slice(bytes).map_err(|e| format!("config.json: {e}"))?;
-    // At least one definition per part of speech, or the card would be empty.
-    config.max_definitions = config.max_definitions.max(1);
+    config.max_definitions = config.max_definitions.clamp(DEFINITIONS.0, DEFINITIONS.1);
+    config.max_synonyms = config.max_synonyms.clamp(SYNONYMS.0, SYNONYMS.1);
     // Each language once, and at least one, or nothing could be looked up.
     let mut languages: Vec<LangCode> = Vec::new();
     for language in config.languages.drain(..) {
@@ -336,6 +341,9 @@ mod tests {
             parse(br#"{"max_definitions": 0}"#).unwrap().max_definitions,
             1
         );
+        // Counts the settings can't step through are brought in range.
+        let config = parse(br#"{"max_definitions": 99, "max_synonyms": 99}"#).unwrap();
+        assert_eq!((config.max_definitions, config.max_synonyms), (10, 12));
     }
 
     #[test]
