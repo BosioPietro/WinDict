@@ -76,10 +76,16 @@ impl App {
     /// window shows them as they are now.
     pub(super) fn refresh_settings(&mut self) {
         let (theme, values) = (self.theme(), self.settings_values());
-        if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
-            let _ = settings.refresh(theme, values);
-        }
+        let Some(settings) = self.settings.as_mut().filter(|s| s.visible) else {
+            return;
+        };
+        // Which stops recording, which had put the shortcuts aside.
+        let recording = settings.recording();
+        let _ = settings.refresh(theme, values);
         self.sync_recording();
+        if recording {
+            self.register_hotkeys();
+        }
     }
 
     /// Runs `f` on the open settings window, and carries out what it asks for.
