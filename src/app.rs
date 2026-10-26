@@ -483,6 +483,8 @@ struct Card {
     pinned: bool,
     /// The id of the request the card waits on.
     request: u64,
+    /// The selection is being read for the request.
+    capturing: bool,
     /// The card is open on its way, while the capture waits for a copy.
     copying: bool,
     /// The selection being read is to be translated, not looked up.
@@ -939,6 +941,7 @@ impl App {
         self.card.to_translate = shortcut == Shortcut::Translate;
         // The capture may press Ctrl+C itself, which is the app's to read.
         self.copy_key.set(self.hwnd, false);
+        self.card.capturing = true;
         unsafe {
             let _ = PostThreadMessageW(
                 self.capture_thread,
@@ -1002,6 +1005,7 @@ impl App {
         if captured.id != self.card.request {
             return;
         }
+        self.card.capturing = false;
         // The card opened on its way turns into the answer in place, unless
         // it was closed meanwhile.
         let in_place = std::mem::take(&mut self.card.copying);

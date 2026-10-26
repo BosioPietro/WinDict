@@ -105,8 +105,23 @@ impl App {
         let mut card = std::mem::take(&mut self.card);
         card.pinned = true;
         card.return_focus = None;
+        // A selection still being read is for the next card, as lookups
+        // from now on are: it keeps the request, and this card a new one.
+        if std::mem::take(&mut card.capturing) {
+            self.card.capturing = true;
+            self.card.request = card.request;
+            self.card.to_translate = std::mem::take(&mut card.to_translate);
+            self.requests += 1;
+            card.request = self.requests;
+        }
+        // The search box is the next card's too: a translation of what was
+        // typed no longer goes back to it.
+        let typed = card.translating.as_mut().and_then(|t| t.typed.take());
         if let Some(popup) = card.popup.as_mut() {
             let _ = popup.set_pinned(true);
+            if typed.is_some() && card.current.is_none() {
+                let _ = popup.set_back(false);
+            }
         }
         self.pinned.push(card);
     }

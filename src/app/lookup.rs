@@ -193,6 +193,10 @@ impl App {
         };
         self.card.translating = None;
         match place {
+            // Pinned since it was asked for, the card stays where it is.
+            Place::New(_) if self.card.pinned => {
+                self.present_body(Place::Same(Transition::Replace), title, phonetic, body)
+            }
             Place::New(anchor) => self.show_body(anchor, title, phonetic, body, false),
             Place::Same(transition) => {
                 let back = !self.card.history.is_empty();
