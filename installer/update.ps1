@@ -60,11 +60,29 @@ if ($Register) {
 $ProgressPreference = 'SilentlyContinue'
 
 $Api = 'https://api.github.com/repos/BosioPietro/WinDict/releases/latest'
+# What the setup wrote when it installed WinDict: only administrators can
+# change it. The AppId is installer/windict.iss's.
+$Uninstall = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{DDA83B7B-331F-48D2-BD93-4B1945B33E32}_is1'
+
+# "v1.2.3" or "1.2.3" as a version, or $null.
+function ConvertTo-Version([string]$Tag) {
+    if ($Tag -match '^v?(\d+)\.(\d+)\.(\d+)$') {
+        return [version]::new([int]$Matches[1], [int]$Matches[2], [int]$Matches[3])
+    }
+    return $null
+}
+
 # The download goes where only administrators can write, so nothing can swap
 # it before it runs elevated.
 $work = Join-Path $PSScriptRoot ".download-$([guid]::NewGuid())"
 try {
     $release = Invoke-RestMethod $Api
+    # Any app of the user can start the task, but only to update: never to
+    # put back an older release, or this one again.
+    $latest = ConvertTo-Version $release.tag_name
+    if (-not $latest) { throw "Release $($release.tag_name) isn't a version" }
+    $installed = ConvertTo-Version (Get-ItemProperty $Uninstall -Name DisplayVersion).DisplayVersion
+    if (-not $installed -or $latest -le $installed) { throw "WinDict $installed is up to date" }
     $name = "WinDict-$($release.tag_name)-setup.exe"
     $asset = $release.assets | Where-Object name -eq $name | Select-Object -First 1
     if (-not $asset) { throw "Release $($release.tag_name) has no $name" }
