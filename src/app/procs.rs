@@ -186,12 +186,7 @@ pub(super) unsafe extern "system" fn main_proc(
         // animations changed. The main window hears it for every window, as
         // it's always there.
         WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED | WM_SYSCOLORCHANGE => {
-            let colors = msg != WM_SETTINGCHANGE
-                || wparam.0 == SPI_SETHIGHCONTRAST.0 as usize
-                || (lparam.0 != 0
-                    && unsafe { PCWSTR(lparam.0 as *const u16).to_string() }
-                        .is_ok_and(|area| area == "ImmersiveColorSet"));
-            if colors {
+            if win::colors_changed(msg, wparam, lparam) {
                 with_app(|app| app.on_colors_changed());
             }
             if msg == WM_SETTINGCHANGE && wparam.0 == SPI_SETCLIENTAREAANIMATION.0 as usize {
@@ -242,20 +237,9 @@ pub(super) unsafe extern "system" fn popup_proc(
         WM_MOUSEACTIVATE if win::activates(hwnd) => LRESULT(MA_ACTIVATE as isize),
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         // A card is dragged by its heading.
-        WM_NCHITTEST => {
-            let hit = default();
-            let (x, y) = win::lparam_point(lparam);
-            let mut pt = POINT { x, y };
-            let caption = hit.0 == HTCLIENT as isize
-                && unsafe { ScreenToClient(hwnd, &mut pt).as_bool() }
-                && with_app(|app| app.popup_of(hwnd).is_some_and(|p| p.caption_at(pt.x, pt.y)))
-                    .unwrap_or(false);
-            if caption {
-                LRESULT(HTCAPTION as isize)
-            } else {
-                hit
-            }
-        }
+        WM_NCHITTEST => win::caption_hit(hwnd, lparam, default(), |x, y| {
+            with_app(|app| app.popup_of(hwnd).is_some_and(|p| p.caption_at(x, y))).unwrap_or(false)
+        }),
         WM_EXITSIZEMOVE => {
             with_app(|app| app.card_moved(hwnd));
             LRESULT(0)
@@ -439,23 +423,10 @@ pub(super) unsafe extern "system" fn settings_proc(
     let default = || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     match msg {
         // The header drags the window.
-        WM_NCHITTEST => {
-            let hit = default();
-            let mut pt = POINT { x, y };
-            let caption = hit.0 == HTCLIENT as isize
-                && unsafe { ScreenToClient(hwnd, &mut pt).as_bool() }
-                && with_app(|app| {
-                    app.settings
-                        .as_ref()
-                        .is_some_and(|s| s.caption_at(pt.x, pt.y))
-                })
-                .unwrap_or(false);
-            if caption {
-                LRESULT(HTCAPTION as isize)
-            } else {
-                hit
-            }
-        }
+        WM_NCHITTEST => win::caption_hit(hwnd, lparam, default(), |x, y| {
+            with_app(|app| app.settings.as_ref().is_some_and(|s| s.caption_at(x, y)))
+                .unwrap_or(false)
+        }),
         WM_MOUSEMOVE => {
             // Ask for WM_MOUSELEAVE, to put out the hover when the pointer goes.
             win::track_mouse_leave(hwnd);
@@ -587,19 +558,9 @@ pub(super) unsafe extern "system" fn intro_proc(
     let default = || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     match msg {
         // The header drags the window.
-        WM_NCHITTEST => {
-            let hit = default();
-            let mut pt = POINT { x, y };
-            let caption = hit.0 == HTCLIENT as isize
-                && unsafe { ScreenToClient(hwnd, &mut pt).as_bool() }
-                && with_app(|app| app.intro.as_ref().is_some_and(|i| i.caption_at(pt.x, pt.y)))
-                    .unwrap_or(false);
-            if caption {
-                LRESULT(HTCAPTION as isize)
-            } else {
-                hit
-            }
-        }
+        WM_NCHITTEST => win::caption_hit(hwnd, lparam, default(), |x, y| {
+            with_app(|app| app.intro.as_ref().is_some_and(|i| i.caption_at(x, y))).unwrap_or(false)
+        }),
         WM_MOUSEMOVE => {
             // Ask for WM_MOUSELEAVE, to put out the hover when the pointer goes.
             win::track_mouse_leave(hwnd);

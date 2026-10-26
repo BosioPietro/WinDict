@@ -20,7 +20,6 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 
 use windows::core::{w, Interface, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -999,18 +998,9 @@ unsafe extern "system" fn setup_proc(
     let default = || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     match msg {
         // The top drags the window.
-        WM_NCHITTEST => {
-            let hit = default();
-            let mut pt = POINT { x, y };
-            let caption = hit.0 == HTCLIENT as isize
-                && unsafe { ScreenToClient(hwnd, &mut pt).as_bool() }
-                && with_setup(|s| s.caption_at(pt.x, pt.y)).unwrap_or(false);
-            if caption {
-                LRESULT(HTCAPTION as isize)
-            } else {
-                hit
-            }
-        }
+        WM_NCHITTEST => win::caption_hit(hwnd, lparam, default(), |x, y| {
+            with_setup(|s| s.caption_at(x, y)).unwrap_or(false)
+        }),
         WM_MOUSEMOVE => {
             // Ask for WM_MOUSELEAVE, to put out the hover when the pointer goes.
             win::track_mouse_leave(hwnd);
@@ -1069,7 +1059,7 @@ unsafe extern "system" fn setup_proc(
             LRESULT(0)
         }
         // Light or dark mode, the accent color or a contrast theme changed.
-        WM_SETTINGCHANGE | WM_DWMCOLORIZATIONCOLORCHANGED | WM_SYSCOLORCHANGE => {
+        _ if win::colors_changed(msg, wparam, lparam) => {
             with_setup(|s| s.retheme());
             default()
         }

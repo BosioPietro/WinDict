@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 
 use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, POINT, RECT};
-use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, SetWindowRgn};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, ScreenToClient, SetWindowRgn};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::SystemInformation::{GetSystemWindowsDirectoryW, GetTickCount64};
 use windows::Win32::UI::Accessibility::{
@@ -25,9 +25,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetClassNameW, GetCursorPos, GetWindowLongPtrW, KillTimer,
     SendMessageW, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, SetWindowsHookExW,
     ShowWindow, UnhookWindowsHookEx, CW_USEDEFAULT, GWL_EXSTYLE, GWL_STYLE, HHOOK, HOOKPROC,
-    HWND_TOPMOST, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
-    SW_HIDE, SW_SHOWNORMAL, WINDOWS_HOOK_ID, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
-    WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_SYSMENU,
+    HTCAPTION, HTCLIENT, HWND_TOPMOST, SPI_SETHIGHCONTRAST, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNORMAL, WINDOWS_HOOK_ID,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WM_DWMCOLORIZATIONCOLORCHANGED,
+    WM_SETTINGCHANGE, WM_SYSCOLORCHANGE, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_SYSMENU,
 };
 
 /// A window of ours, destroyed when dropped.
@@ -311,6 +313,42 @@ pub fn cursor_pos() -> POINT {
 /// The point a mouse message carries in its `lparam`.
 pub fn lparam_point(lparam: LPARAM) -> (i32, i32) {
     (lparam.0 as i16 as i32, (lparam.0 >> 16) as i16 as i32)
+}
+
+/// Answers WM_NCHITTEST on `hwnd`: `hit`, what Windows found, unless it's
+/// the client area and `caption_at` says the point, in client pixels,
+/// drags the window.
+pub fn caption_hit(
+    hwnd: HWND,
+    lparam: LPARAM,
+    hit: LRESULT,
+    caption_at: impl FnOnce(i32, i32) -> bool,
+) -> LRESULT {
+    let (x, y) = lparam_point(lparam);
+    let mut pt = POINT { x, y };
+    let caption = hit.0 == HTCLIENT as isize
+        && unsafe { ScreenToClient(hwnd, &mut pt).as_bool() }
+        && caption_at(pt.x, pt.y);
+    if caption {
+        LRESULT(HTCAPTION as isize)
+    } else {
+        hit
+    }
+}
+
+/// Whether a message to a top-level window says the colors changed: light
+/// or dark mode, the accent color, or a contrast theme.
+pub fn colors_changed(msg: u32, wparam: WPARAM, lparam: LPARAM) -> bool {
+    match msg {
+        WM_DWMCOLORIZATIONCOLORCHANGED | WM_SYSCOLORCHANGE => true,
+        WM_SETTINGCHANGE => {
+            wparam.0 == SPI_SETHIGHCONTRAST.0 as usize
+                || (lparam.0 != 0
+                    && unsafe { PCWSTR(lparam.0 as *const u16).to_string() }
+                        .is_ok_and(|area| area == "ImmersiveColorSet"))
+        }
+        _ => false,
+    }
 }
 
 /// Asks for WM_MOUSELEAVE once the pointer leaves `hwnd`.
