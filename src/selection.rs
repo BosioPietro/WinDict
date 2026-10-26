@@ -4,7 +4,7 @@
 //! us where the selection is on screen). Apps that don't expose a text pattern
 //! get the classic fallback: simulate Ctrl+C, read the clipboard, restore it.
 
-use std::cell::OnceCell;
+use std::cell::{OnceCell, RefCell};
 use std::time::{Duration, Instant};
 
 use windows::core::{w, Interface, Owned, BOOL, PWSTR};
@@ -34,6 +34,24 @@ const CF_UNICODETEXT_ID: u32 = 13;
 const CF_HDROP_ID: u32 = 15;
 const CF_LOCALE_ID: u32 = 16;
 const CF_DIBV5_ID: u32 = 17;
+
+/// How long a copy that didn't come in time is still watched for, to put
+/// the clipboard back if it comes after all.
+const LATE_COPY: Duration = Duration::from_millis(1000);
+const LATE_COPY_TIMER: usize = 0x5744;
+
+/// A copy given up on, and the clipboard from before it.
+struct LateCopy {
+    saved: SavedClipboard,
+    /// The clipboard's sequence number before the copy.
+    before: u32,
+    until: Instant,
+    owner: HWND,
+}
+
+thread_local! {
+    static LATE_COPY_PENDING: RefCell<Option<LateCopy>> = const { RefCell::new(None) };
+}
 
 pub struct Selection {
     pub text: String,
@@ -257,8 +275,10 @@ impl Capturer {
     }
 
     fn via_clipboard(&self) -> Option<String> {
+        settle_late_copy(true);
         release_modifiers();
-        let saved = SavedClipboard::take(self.clipboard_owner);
+        // What can't be saved can't be put back: the clipboard is left alone.
+        let saved = SavedClipboard::take(self.clipboard_owner)?;
         let before = unsafe { GetClipboardSequenceNumber() };
         send_copy();
 
@@ -280,9 +300,51 @@ impl Capturer {
         };
         if changed {
             saved.restore(self.clipboard_owner);
+        } else {
+            // The app may still copy, too late to be read: then the
+            // clipboard is put back once it does.
+            LATE_COPY_PENDING.with(|late| {
+                *late.borrow_mut() = Some(LateCopy {
+                    saved,
+                    before,
+                    until: Instant::now() + LATE_COPY,
+                    owner: self.clipboard_owner,
+                })
+            });
+            unsafe {
+                SetTimer(
+                    Some(self.clipboard_owner),
+                    LATE_COPY_TIMER,
+                    50,
+                    Some(late_copy_timer),
+                );
+            }
         }
         text.filter(|t| !t.trim().is_empty())
     }
+}
+
+/// Puts the clipboard back if a copy given up on came since. It's watched
+/// for until it comes, its time is up, or, with `done`, no longer.
+fn settle_late_copy(done: bool) {
+    let settled = LATE_COPY_PENDING.with(|late| {
+        let mut late = late.borrow_mut();
+        let copy = late.as_ref()?;
+        let came = unsafe { GetClipboardSequenceNumber() } != copy.before;
+        (came || done || Instant::now() >= copy.until).then(|| (late.take(), came))
+    });
+    if let Some((Some(copy), came)) = settled {
+        unsafe {
+            let _ = KillTimer(Some(copy.owner), LATE_COPY_TIMER);
+        }
+        if came {
+            copy.saved.restore(copy.owner);
+        }
+    }
+}
+
+unsafe extern "system" fn late_copy_timer(_: HWND, _: u32, _: usize, _: u32) {
+    settle_late_copy(false);
 }
 
 fn create_uia() -> Option<IUIAutomation> {
@@ -671,10 +733,11 @@ struct SavedClipboard {
 }
 
 impl SavedClipboard {
-    fn take(owner: HWND) -> SavedClipboard {
+    /// `None` if the clipboard couldn't be opened.
+    fn take(owner: HWND) -> Option<SavedClipboard> {
         let mut formats = Vec::new();
         if !open_clipboard(owner) {
-            return SavedClipboard { formats };
+            return None;
         }
         unsafe {
             let mut format = EnumClipboardFormats(0);
@@ -703,7 +766,7 @@ impl SavedClipboard {
             }
             let _ = CloseClipboard();
         }
-        SavedClipboard { formats }
+        Some(SavedClipboard { formats })
     }
 
     fn restore(self, owner: HWND) {
