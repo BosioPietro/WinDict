@@ -15,14 +15,17 @@ impl App {
         self.swallow_tray_release = closing;
     }
 
-    pub(super) fn on_tray_release(&mut self) {
+    /// A click on the tray icon, or a key on it, `at` the pointer or the icon.
+    pub(super) fn on_tray_release(&mut self, at: POINT) {
         if std::mem::take(&mut self.swallow_tray_release) {
             return;
         }
-        self.open_menu();
+        self.open_menu(at);
     }
 
-    pub(super) fn open_menu(&mut self) {
+    /// Opens the menu `at` a point, with the keyboard, so the arrows and
+    /// Enter work in it.
+    fn open_menu(&mut self, at: POINT) {
         if self.menu.as_ref().is_some_and(|m| m.visible) {
             return;
         }
@@ -37,10 +40,11 @@ impl App {
             return;
         };
         let autostart = autostart::is_enabled();
-        if let Err(e) = menu.show(win::cursor_pos(), theme, &hotkey, autostart, update) {
+        if let Err(e) = menu.show(at, theme, &hotkey, autostart, update) {
             self.tray.notify(tr().draw_menu_failed, &e.message());
             return;
         }
+        selection::take_foreground(menu.hwnd);
         CARD_RECT.set(menu.card_rect());
         win::kill_timer(self.hwnd, TIMER_MENU_HIDE);
         win::kill_timer(self.hwnd, TIMER_MENU_TEARDOWN);

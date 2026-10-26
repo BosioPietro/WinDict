@@ -9,6 +9,7 @@ use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Accessibility::HWINEVENTHOOK;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
+use windows::Win32::UI::Shell::{NINF_KEY, NIN_SELECT};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::*;
@@ -77,6 +78,9 @@ fn print_screen_snips() -> bool {
 fn key_bit(vk: u16) -> (usize, u64) {
     ((vk as usize / 64) % 4, 1u64 << (vk % 64))
 }
+
+/// Enter or Space on the tray icon.
+const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 
 pub(super) unsafe extern "system" fn main_proc(
     hwnd: HWND,
@@ -180,16 +184,17 @@ pub(super) unsafe extern "system" fn main_proc(
         }
         WM_APP_TRAY => {
             let event = (lparam.0 & 0xFFFF) as u32;
+            // Where: the pointer, or the icon when it's the keyboard.
+            let (x, y) = win::lparam_point(LPARAM(wparam.0 as isize));
+            let at = POINT { x, y };
             match event {
                 WM_LBUTTONDOWN | WM_RBUTTONDOWN => {
                     with_app(|app| app.on_tray_press());
                 }
-                // Either button opens the menu.
-                WM_LBUTTONUP | WM_RBUTTONUP => {
-                    with_app(|app| app.on_tray_release());
-                }
-                WM_CONTEXTMENU => {
-                    with_app(|app| app.open_menu());
+                // Either button opens the menu, as do Enter, Space and the
+                // menu key on the icon.
+                NIN_SELECT | NIN_KEYSELECT | WM_CONTEXTMENU => {
+                    with_app(|app| app.on_tray_release(at));
                 }
                 _ => {}
             }

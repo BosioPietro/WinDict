@@ -69,26 +69,30 @@ impl Tray {
             uID: ICON_ID,
             ..Default::default()
         };
-        data.Anonymous.uVersion = NOTIFYICON_VERSION;
+        data.Anonymous.uVersion = NOTIFYICON_VERSION_4;
         data
     }
 
     /// (Re-)adds the icon; also used after Explorer restarts.
+    ///
+    /// It speaks version 4: the keyboard can open its menu, and the
+    /// callback's `wParam` says where, the pointer or the icon.
     pub fn add(&self) {
         let mut data = self.data();
-        data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+        data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
         data.uCallbackMessage = self.callback;
         data.hIcon = self.badged.unwrap_or(self.icon);
         copy_into(&mut data.szTip, &self.tip);
         unsafe {
             let _ = Shell_NotifyIconW(NIM_ADD, &data);
+            let _ = Shell_NotifyIconW(NIM_SETVERSION, &self.data());
         }
     }
 
     pub fn set_tip(&mut self, tip: &str) {
         tip.clone_into(&mut self.tip);
         let mut data = self.data();
-        data.uFlags = NIF_TIP;
+        data.uFlags = NIF_TIP | NIF_SHOWTIP;
         copy_into(&mut data.szTip, tip);
         unsafe {
             let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
