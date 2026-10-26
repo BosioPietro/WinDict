@@ -26,16 +26,23 @@ impl App {
     }
 
     pub(super) fn check_for_update(&mut self) {
-        if !self.config.check_updates || self.updating {
+        if !self.config.check_updates {
             return;
+        }
+        // Installing one already: if that fails, the checks go on.
+        if self.updating {
+            return self.schedule_update_check(RETRY_MS);
         }
         let events = self.events.clone();
         std::thread::spawn(move || events.send(Event::UpdateChecked(update::check())));
     }
 
     pub(super) fn on_update_checked(&mut self, result: Result<Option<Release>, String>) {
-        if !self.config.check_updates || self.updating {
+        if !self.config.check_updates {
             return;
+        }
+        if self.updating {
+            return self.schedule_update_check(RETRY_MS);
         }
         let next = if result.is_ok() {
             CHECK_EVERY_MS
@@ -91,6 +98,8 @@ impl App {
 
     pub(super) fn on_updated(&mut self, result: Result<(), String>) {
         self.updating = false;
+        // Should the update not happen after all, it's looked for again.
+        self.schedule_update_check(RETRY_MS);
         match result {
             // The new version has started, and waits for this one to go.
             Ok(()) if !update::by_task() => self.on_command(Command::Quit),
