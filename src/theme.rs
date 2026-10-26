@@ -20,7 +20,7 @@ impl Theme {
         let dark = match mode {
             ThemeMode::Dark => true,
             ThemeMode::Light => false,
-            ThemeMode::System => read_personalize_dword("AppsUseLightTheme").is_none_or(|v| v == 0),
+            ThemeMode::System => read_personalize_dword("AppsUseLightTheme") == Some(0),
         };
         let transparency = read_personalize_dword("EnableTransparency") != Some(0);
         let fallback = if dark {
