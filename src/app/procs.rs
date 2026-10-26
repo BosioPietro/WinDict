@@ -88,6 +88,15 @@ pub(super) unsafe extern "system" fn main_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // What's posted here is for the app state: if a handler is using it,
+    // it's handled once that one's done, rather than lost. Timers come again
+    // by themselves.
+    let posted = msg == WM_HOTKEY || (WM_APP..0xC000).contains(&msg);
+    let taskbar = TASKBAR_CREATED.get();
+    if (posted || (msg == taskbar && taskbar != 0)) && app_busy() {
+        MISSED.with(|m| m.borrow_mut().push((msg, wparam, lparam)));
+        return LRESULT(0);
+    }
     match msg {
         WM_HOTKEY => {
             match wparam.0 as i32 {
@@ -201,7 +210,6 @@ pub(super) unsafe extern "system" fn main_proc(
             LRESULT(0)
         }
         _ => {
-            let taskbar = TASKBAR_CREATED.get();
             if msg == taskbar && taskbar != 0 {
                 with_app(|app| app.tray.add());
                 return LRESULT(0);

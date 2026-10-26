@@ -253,6 +253,9 @@ thread_local! {
     // The message Explorer broadcasts when it restarts, outside APP so it's
     // known even while APP is in use.
     static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
+    // Messages to the main window that came while APP was in use, posted
+    // again once it's free.
+    static MISSED: RefCell<Vec<(u32, WPARAM, LPARAM)>> = const { RefCell::new(Vec::new()) };
     // When the card last appeared (win::now_ms), read by the focus hook.
     static SHOWN_AT: Cell<u64> = const { Cell::new(0) };
     // Where the pointer last moved over the card, on screen (GetMessagePos).
@@ -775,10 +778,23 @@ fn spawn_capture_thread(events: Events) -> u32 {
 
 /// Runs `f` on the app state. Returns `None`, dropping the event, if the state
 /// is already borrowed: that only happens when a handler pumps messages (a
-/// modal loop, some COM calls), so handlers that do must release it first,
-/// as the tray menu does.
+/// modal loop, some COM calls, a message sent to one of WinDict's windows).
+/// What the main window missed meanwhile is posted again once it's free.
 fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
-    APP.with(|a| a.try_borrow_mut().ok().and_then(|mut a| a.as_mut().map(f)))
+    let r = APP.with(|a| a.try_borrow_mut().ok().and_then(|mut a| a.as_mut().map(f)));
+    if r.is_some() {
+        for (msg, wparam, lparam) in MISSED.with(|m| m.take()) {
+            unsafe {
+                let _ = PostMessageW(Some(MSG_HWND.get()), msg, wparam, lparam);
+            }
+        }
+    }
+    r
+}
+
+/// Whether the app state is in use, by a handler further up the stack.
+fn app_busy() -> bool {
+    APP.with(|a| a.try_borrow_mut().is_err())
 }
 
 impl App {
