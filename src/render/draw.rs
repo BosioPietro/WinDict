@@ -10,9 +10,10 @@ impl Renderer {
         scale: f32,
         theme: &Theme,
     ) -> Result<CompositionDrawingSurface> {
-        let px_w = (layout.width * scale).ceil().max(1.0);
-        let px_h = (layout.height * scale).ceil().clamp(1.0, 16_000.0);
-        let surface = self.surface(px_w, px_h)?;
+        let surface = self.surface(
+            (layout.width * scale).ceil(),
+            (layout.height * scale).ceil(),
+        )?;
         self.paint(&surface, scale, |dc| unsafe {
             let brush = |c: D2D1_COLOR_F| dc.CreateSolidColorBrush(&c, None);
             let primary = brush(theme.text())?;
@@ -327,7 +328,7 @@ impl Renderer {
         radius: f32,
         stroke: Option<f32>,
     ) -> Result<CompositionDrawingSurface> {
-        let surface = self.surface(w.max(1.0), h.max(1.0))?;
+        let surface = self.surface(w, h)?;
         self.paint(&surface, 1.0, |dc| unsafe {
             let white = dc.CreateSolidColorBrush(
                 &D2D1_COLOR_F {
@@ -419,11 +420,14 @@ impl Renderer {
         Ok(surface)
     }
 
+    /// A surface `w` by `h` pixels, at least one and at most `max_px`:
+    /// what's drawn past that is cut off.
     pub(super) fn surface(&self, w: f32, h: f32) -> Result<CompositionDrawingSurface> {
+        let most = self.max_px();
         self.graphics.CreateDrawingSurface(
             Size {
-                Width: w,
-                Height: h,
+                Width: w.clamp(1.0, most),
+                Height: h.clamp(1.0, most),
             },
             DirectXPixelFormat::B8G8R8A8UIntNormalized,
             DirectXAlphaMode::Premultiplied,

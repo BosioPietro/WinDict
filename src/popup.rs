@@ -612,7 +612,8 @@ impl Popup {
         let body_surface = self.renderer.draw(body_layout, s, &self.theme)?;
 
         let header_h = (PAD_TOP + heading.height + HEADER_GAP) * s;
-        let body_h = body_layout.height * s;
+        // Only as far as it's drawn can it scroll.
+        let body_h = (body_layout.height * s).min(self.renderer.max_px());
         let max_h = MAX_CARD_H * s;
         let card_h = (header_h + body_h.min(max_h - header_h)).ceil();
         let transition = if self.card_h > 0.0 {

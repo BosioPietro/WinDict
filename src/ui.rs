@@ -233,7 +233,11 @@ impl Text {
         theme: &Theme,
     ) -> Result<Vector2> {
         self.brush.SetSurface(&renderer.draw(layout, s, theme)?)?;
-        let size = v2((layout.width * s).ceil(), (layout.height * s).ceil());
+        let most = renderer.max_px();
+        let size = v2(
+            (layout.width * s).ceil().min(most),
+            (layout.height * s).ceil().min(most),
+        );
         self.visual.SetSize(size)?;
         Ok(size)
     }

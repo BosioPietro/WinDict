@@ -577,8 +577,27 @@ impl Renderer {
 
     /// Hands unused GPU memory back to the driver while we sit idle.
     pub fn trim(&self) {
-        if let Ok(dxgi) = self.d3d.borrow().cast::<IDXGIDevice3>() {
-            unsafe { dxgi.Trim() };
+        let d3d = self.d3d.borrow();
+        if let Ok(dxgi) = d3d.cast::<IDXGIDevice3>() {
+            unsafe {
+                // As Trim asks, nothing the context holds keeps memory.
+                if let Ok(context) = d3d.GetImmediateContext() {
+                    context.ClearState();
+                }
+                dxgi.Trim();
+            }
+        }
+    }
+
+    /// The widest and tallest surface the GPU draws, in pixels.
+    pub fn max_px(&self) -> f32 {
+        let level = unsafe { self.d3d.borrow().GetFeatureLevel() };
+        if level.0 >= D3D_FEATURE_LEVEL_11_0.0 {
+            16_384.0
+        } else if level.0 >= D3D_FEATURE_LEVEL_10_0.0 {
+            8_192.0
+        } else {
+            4_096.0
         }
     }
 
