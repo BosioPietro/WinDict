@@ -273,6 +273,7 @@ pub(super) unsafe extern "system" fn popup_proc(
         }
         WM_MOUSELEAVE => {
             POINTER_AT.set(None);
+            PRESSED_IN.set(HWND::default());
             card(&mut |app| app.hover_card(None));
             LRESULT(0)
         }
@@ -292,6 +293,8 @@ pub(super) unsafe extern "system" fn popup_proc(
             card(&mut |app| pressed = app.press_card(x, y));
             if pressed {
                 unsafe { SetCapture(hwnd) };
+            } else {
+                PRESSED_IN.set(hwnd);
             }
             LRESULT(0)
         }
@@ -302,7 +305,7 @@ pub(super) unsafe extern "system" fn popup_proc(
                 unsafe {
                     let _ = ReleaseCapture();
                 }
-            } else {
+            } else if PRESSED_IN.replace(HWND::default()) == hwnd {
                 post(WM_APP_CLICK, WPARAM(hwnd.0 as usize), lparam);
             }
             LRESULT(0)

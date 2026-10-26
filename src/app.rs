@@ -260,6 +260,9 @@ thread_local! {
     static SHOWN_AT: Cell<u64> = const { Cell::new(0) };
     // Where the pointer last moved over the card, on screen (GetMessagePos).
     static POINTER_AT: Cell<Option<u32>> = const { Cell::new(None) };
+    // The card the left button went down in, off the scrollbar: only there
+    // does it coming up click.
+    static PRESSED_IN: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) };
     // The settings window while it records a shortcut, read by the keyboard hook.
     static RECORDING_IN: Cell<HWND> = const { Cell::new(HWND(std::ptr::null_mut())) };
     // The keys the keyboard hook kept from Windows that are still down, by
