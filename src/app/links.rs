@@ -16,7 +16,7 @@ impl App {
             .card
             .translating
             .as_ref()
-            .is_some_and(|t| t.picking.is_some());
+            .is_some_and(|t| t.pair.picking.is_some());
         let popup = self
             .card
             .popup

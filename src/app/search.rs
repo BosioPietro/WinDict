@@ -57,9 +57,7 @@ impl App {
             Shortcut::Translate => {
                 let way = typed_direction("", &self.config);
                 let languages = Languages {
-                    from: way.from,
-                    to: way.to,
-                    picking: None,
+                    pair: LanguagePair::new(way.from, way.to),
                     picked: false,
                 };
                 let edit = LineEdit::new("", translate::MAX_PASSAGE_CHARS);
@@ -197,10 +195,10 @@ impl App {
                 return;
             }
             let way = typed_direction(search.edit.text(), &self.config);
-            if (&way.from, &way.to) == (&l.from, &l.to) {
+            if (&way.from, &way.to) == (&l.pair.from, &l.pair.to) {
                 return;
             }
-            (l.from, l.to) = (way.from, way.to);
+            (l.pair.from, l.pair.to) = (way.from, way.to);
             return self.show_typed_languages();
         }
         let typed = search.edit.text().trim_start().to_lowercase();
@@ -285,7 +283,7 @@ impl App {
         let Some(l) = search.languages.as_ref() else {
             return;
         };
-        let way = (l.from.clone(), l.to.clone());
+        let way = (l.pair.from.clone(), l.pair.to.clone());
         // The box takes no more than can be translated.
         let Ok(text) = translate::passage(search.edit.text()) else {
             if let Some(popup) = self.card.popup.as_ref() {

@@ -17,7 +17,7 @@ use crate::installed;
 use crate::lang::LangCode;
 use crate::offline;
 use crate::popup::{Popup, Transition};
-use crate::render::Target;
+use crate::render::{self, Side, Target};
 use crate::selection::Selection;
 use crate::translate::Translation;
 use crate::update::Release;
@@ -99,12 +99,9 @@ impl Translatable {
 /// The card turned into a translation of its word.
 pub(super) struct Translating {
     pub(super) about: Translatable,
-    pub(super) from: LangCode,
-    pub(super) to: LangCode,
+    pub(super) pair: LanguagePair,
     /// The word is in both languages: which way waits on the user.
     pub(super) asking: bool,
-    /// The list a language is being picked from, when it's open.
-    pub(super) picking: Option<Picking>,
     /// `None` while it's on its way.
     pub(super) result: Option<Result<Translation, String>>,
     /// The card waits a moment for it before showing it on its way, so a
@@ -208,12 +205,84 @@ pub(super) struct Search {
 /// The languages what's typed in the box is translated between, shown in
 /// boxes under the field.
 pub(super) struct Languages {
-    pub(super) from: LangCode,
-    pub(super) to: LangCode,
-    /// The list a language is being picked from, when it's open.
-    pub(super) picking: Option<Picking>,
+    pub(super) pair: LanguagePair,
     /// Picked by hand: what's typed no longer changes them.
     pub(super) picked: bool,
+}
+
+/// The languages a translation goes between, and the list one of them is
+/// being picked from, when it's open: on the translation card, and under
+/// the box what's to be translated is typed in.
+pub(super) struct LanguagePair {
+    pub(super) from: LangCode,
+    pub(super) to: LangCode,
+    pub(super) picking: Option<Picking>,
+}
+
+impl LanguagePair {
+    pub(super) fn new(from: LangCode, to: LangCode) -> LanguagePair {
+        LanguagePair {
+            from,
+            to,
+            picking: None,
+        }
+    }
+
+    /// The list, as it's drawn, while it's open.
+    pub(super) fn picker(&self) -> Option<render::Picker<'_>> {
+        self.picking.as_ref().map(|p| render::Picker {
+            side: p.side,
+            query: p.query.text(),
+            caret: p.query.caret_utf16(),
+            matches: &p.matches,
+            highlight: p.highlight,
+        })
+    }
+
+    /// The language on `side`.
+    pub(super) fn on(&self, side: Side) -> &LangCode {
+        match side {
+            Side::From => &self.from,
+            Side::To => &self.to,
+        }
+    }
+
+    /// Opens the list under `side`, or shuts it if it's open there. Returns
+    /// whether it opened.
+    pub(super) fn toggle(&mut self, side: Side) -> bool {
+        let open = self.picking.take().map(|p| p.side);
+        if open == Some(side) {
+            return false;
+        }
+        self.picking = Some(Picking::new(side, self.on(side)));
+        true
+    }
+
+    /// Swaps the languages round, shutting the list.
+    pub(super) fn swap(&mut self) {
+        self.picking = None;
+        std::mem::swap(&mut self.from, &mut self.to);
+    }
+
+    /// Picks `language` on the side the list is open under, and shuts it:
+    /// the other side's language swaps them round. Returns the side, and
+    /// whether the languages changed, or nothing when no list was open.
+    pub(super) fn pick(&mut self, language: LangCode) -> Option<(Side, bool)> {
+        let side = self.picking.take()?.side;
+        let (picked, other) = match side {
+            Side::From => (&mut self.from, &mut self.to),
+            Side::To => (&mut self.to, &mut self.from),
+        };
+        if language == *picked {
+            return Some((side, false));
+        }
+        if language == *other {
+            std::mem::swap(picked, other);
+        } else {
+            *picked = language;
+        }
+        Some((side, true))
+    }
 }
 
 /// Where a lookup's answer goes.

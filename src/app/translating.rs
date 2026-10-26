@@ -110,10 +110,8 @@ impl App {
     ) {
         self.card.translating = Some(Translating {
             about,
-            from,
-            to,
+            pair: LanguagePair::new(from, to),
             asking,
-            picking: None,
             result: None,
             waiting: false,
             focus: None,
@@ -135,12 +133,12 @@ impl App {
         let Some(t) = self.card.translating.as_ref() else {
             return;
         };
-        let key = (t.about.word.clone(), t.from.clone(), t.to.clone());
+        let key = (t.about.word.clone(), t.pair.from.clone(), t.pair.to.clone());
         let context = t
             .about
             .senses
             .iter()
-            .find(|(language, _)| *language == t.from)
+            .find(|(language, _)| *language == t.pair.from)
             .and_then(|(_, sense)| sense.clone());
         let cached = self.translations.get(&key);
         let Some(t) = self.card.translating.as_mut() else {
@@ -218,7 +216,7 @@ impl App {
             return;
         };
         // The list has the keyboard while it's open.
-        let focus = match t.picking {
+        let focus = match t.pair.picking {
             Some(_) => None,
             None => focus.or_else(|| popup.focused_link().cloned()),
         };
@@ -229,21 +227,14 @@ impl App {
             (Some(Ok(translation)), false) => render::Translated::Done(translation),
             (Some(Err(error)), false) => render::Translated::Failed(error),
         };
-        let picker = t.picking.as_ref().map(|p| render::Picker {
-            side: p.side,
-            query: p.query.text(),
-            caret: p.query.caret_utf16(),
-            matches: &p.matches,
-            highlight: p.highlight,
-        });
         let card = TranslationCard {
             word: &t.about.word,
-            from: &t.from,
-            to: &t.to,
+            from: &t.pair.from,
+            to: &t.pair.to,
             state,
-            picker,
+            picker: t.pair.picker(),
         };
-        popup.hold_region(t.picking.is_some());
+        popup.hold_region(t.pair.picking.is_some());
         let _ = popup.set_back(back);
         let _ = popup.set_translate(false);
         let _ = popup.set_speak(false);
@@ -253,7 +244,7 @@ impl App {
             return;
         }
         t.shown = true;
-        if t.picking.is_some() {
+        if t.pair.picking.is_some() {
             let _ = popup.unfocus();
         } else if let Some(target) = focus {
             let _ = popup.focus_target(&target);
@@ -267,19 +258,22 @@ impl App {
     /// language that side has now: on the translation card, or under the
     /// box what's to be translated is typed in.
     pub(super) fn picking(&mut self) -> Option<(&mut Picking, &str)> {
-        let typed = self.card.search.as_mut().and_then(|s| s.languages.as_mut());
-        let (picking, from, to) = match typed {
-            Some(l) => (l.picking.as_mut()?, &l.from, &l.to),
-            None => {
-                let t = self.card.translating.as_mut()?;
-                (t.picking.as_mut()?, &t.from, &t.to)
-            }
-        };
+        let pair = self.language_pair()?;
+        let picking = pair.picking.as_mut()?;
         let current = match picking.side {
-            Side::From => from,
-            Side::To => to,
+            Side::From => &pair.from,
+            Side::To => &pair.to,
         };
         Some((picking, current))
+    }
+
+    /// The languages being translated between: under the box what's to be
+    /// translated is typed in, or on the translation card.
+    fn language_pair(&mut self) -> Option<&mut LanguagePair> {
+        match self.card.search.as_mut() {
+            Some(search) => search.languages.as_mut().map(|l| &mut l.pair),
+            None => self.card.translating.as_mut().map(|t| &mut t.pair),
+        }
     }
 
     /// Shows the list of languages as it now is, the focus on `focus`,
@@ -295,12 +289,7 @@ impl App {
     /// Shuts the list of languages, if one's open. Returns the side it was
     /// open on.
     pub(super) fn shut_picker(&mut self) -> Option<Side> {
-        let typed = self.card.search.as_mut().and_then(|s| s.languages.as_mut());
-        let picking = match typed {
-            Some(l) => l.picking.take(),
-            None => self.card.translating.as_mut()?.picking.take(),
-        };
-        let side = picking?.side;
+        let side = self.language_pair()?.picking.take()?.side;
         self.show_picking(Some(Target::Language(side)));
         Some(side)
     }
@@ -315,15 +304,9 @@ impl App {
         let Some(l) = search.languages.as_ref() else {
             return;
         };
-        let picker = l.picking.as_ref().map(|p| render::Picker {
-            side: p.side,
-            query: p.query.text(),
-            caret: p.query.caret_utf16(),
-            matches: &p.matches,
-            highlight: p.highlight,
-        });
+        let picker = l.pair.picker();
         popup.hold_region(picker.is_some());
-        let _ = popup.set_search_languages(&l.from, &l.to, picker.as_ref());
+        let _ = popup.set_search_languages(&l.pair.from, &l.pair.to, picker.as_ref());
         self.on_resized();
     }
 
@@ -336,33 +319,15 @@ impl App {
         match target {
             // Open the list, or close it again.
             Target::Language(side) => {
-                let open = l.picking.take().map(|p| p.side);
-                if open != Some(side) {
-                    let current = match side {
-                        Side::From => &l.from,
-                        Side::To => &l.to,
-                    };
-                    l.picking = Some(Picking::new(side, current));
-                }
+                l.pair.toggle(side);
             }
             Target::Swap => {
-                l.picking = None;
-                std::mem::swap(&mut l.from, &mut l.to);
+                l.pair.swap();
                 l.picked = true;
             }
-            // The other side's language swaps them round.
             Target::Pick(language) => {
-                let Some(side) = l.picking.take().map(|p| p.side) else {
+                if l.pair.pick(language).is_none() {
                     return;
-                };
-                let (picked, other) = match side {
-                    Side::From => (&mut l.from, &mut l.to),
-                    Side::To => (&mut l.to, &mut l.from),
-                };
-                if language == *other {
-                    std::mem::swap(picked, other);
-                } else {
-                    *picked = language;
                 }
                 l.picked = true;
             }
@@ -459,40 +424,21 @@ impl App {
         match target {
             // Open the list, or close it again.
             Target::Language(side) => {
-                let open = t.picking.take().map(|p| p.side);
-                if open == Some(side) {
-                    focus = Some(Target::Language(side));
-                } else {
-                    let current = match side {
-                        Side::From => &t.from,
-                        Side::To => &t.to,
-                    };
-                    t.picking = Some(Picking::new(side, current));
+                if t.pair.toggle(side) {
                     self.take_keyboard();
+                } else {
+                    focus = Some(Target::Language(side));
                 }
                 return self.show_translation(Transition::Refine, focus);
             }
-            Target::Swap => {
-                t.picking = None;
-                std::mem::swap(&mut t.from, &mut t.to);
-            }
-            // The other side's language swaps them round.
+            Target::Swap => t.pair.swap(),
             Target::Pick(language) => {
-                let Some(side) = t.picking.take().map(|p| p.side) else {
+                let Some((side, changed)) = t.pair.pick(language) else {
                     return;
                 };
                 focus = Some(Target::Language(side));
-                let (picked, other) = match side {
-                    Side::From => (&mut t.from, &mut t.to),
-                    Side::To => (&mut t.to, &mut t.from),
-                };
-                if language == *picked {
+                if !changed {
                     return self.show_translation(Transition::Refine, focus);
-                }
-                if language == *other {
-                    std::mem::swap(picked, other);
-                } else {
-                    *picked = language;
                 }
             }
             Target::Confirm => t.asking = false,

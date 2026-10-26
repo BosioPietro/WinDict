@@ -400,7 +400,7 @@ impl App {
             .card
             .translating
             .as_ref()
-            .is_some_and(|t| t.picking.is_some());
+            .is_some_and(|t| t.pair.picking.is_some());
         let wanted = (!self.card.history.is_empty() || self.has_definition_behind()) && !picking;
         self.back_keys.set(self.hwnd, wanted);
     }
