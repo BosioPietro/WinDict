@@ -394,6 +394,10 @@ impl App {
     /// changed, which can take it: every window draws everything again,
     /// with another.
     pub(super) fn recover_device(&mut self) {
+        let recovered = self.renderer.as_ref().map(|r| r.recover());
+        if !matches!(recovered, Some(Ok(true))) {
+            return;
+        }
         if let Some(settings) = self.settings.as_mut() {
             let _ = settings.recover();
         }

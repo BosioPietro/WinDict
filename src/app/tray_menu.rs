@@ -30,6 +30,8 @@ impl App {
             return;
         }
         self.dismiss();
+        // Everything's drawn afresh: with another GPU, if it went away.
+        self.recover_device();
         let (theme, hotkey) = (self.theme(), self.config.hotkey.clone());
         let update = self.update.is_some().then_some(if self.updating {
             tr().menu_updating

@@ -10,6 +10,8 @@ mod placement;
 mod scrolling;
 mod search;
 
+use std::rc::Rc;
+
 use windows::core::{Interface, Result, HSTRING};
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -133,7 +135,7 @@ struct Shown {
 pub struct Popup {
     pub hwnd: HWND,
     _target: DesktopWindowTarget,
-    renderer: Renderer,
+    renderer: Rc<Renderer>,
     anim: Animator,
 
     /// Everything on the window; moves and fades as one when showing and hiding.
@@ -240,10 +242,15 @@ impl Stop {
 // ---------------------------------------------------------------------------
 
 impl Popup {
-    pub fn new(window: Window, compositor: Compositor, theme: Theme, zoom: f32) -> Result<Popup> {
+    pub fn new(
+        window: Window,
+        compositor: Compositor,
+        renderer: Rc<Renderer>,
+        theme: Theme,
+        zoom: f32,
+    ) -> Result<Popup> {
         let hwnd = window.hwnd();
         let target = attach(hwnd, &compositor)?;
-        let renderer = Renderer::new(&compositor)?;
         let c = &compositor;
 
         // Creation order is stacking order: later visuals draw on top.
@@ -762,12 +769,10 @@ impl Popup {
         self.redraw()
     }
 
-    /// The GPU went away: draws everything again with another.
+    /// The GPU went away, and the renderer draws with another: draws
+    /// everything again.
     pub fn recover(&mut self) -> Result<()> {
-        if self.renderer.recover()? {
-            self.redraw()?;
-        }
-        Ok(())
+        self.redraw()
     }
 
     fn redraw(&mut self) -> Result<()> {

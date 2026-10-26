@@ -2,6 +2,8 @@
 //! card, it's a composition visual tree, so it fades and slides in, and a
 //! highlight glides between the rows, all on the system compositor.
 
+use std::rc::Rc;
+
 use windows::core::Result;
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -173,7 +175,7 @@ impl Highlight {
 pub struct Menu {
     pub hwnd: HWND,
     _target: DesktopWindowTarget,
-    renderer: Renderer,
+    renderer: Rc<Renderer>,
     anim: Animator,
     /// Everything on the window; fades and scales as one when showing and hiding.
     root: ContainerVisual,
@@ -196,10 +198,14 @@ pub struct Menu {
 }
 
 impl Menu {
-    pub fn new(window: Window, compositor: Compositor, theme: Theme) -> Result<Menu> {
+    pub fn new(
+        window: Window,
+        compositor: Compositor,
+        renderer: Rc<Renderer>,
+        theme: Theme,
+    ) -> Result<Menu> {
         let hwnd = window.hwnd();
         let target = ui::attach(hwnd, &compositor)?;
-        let renderer = Renderer::new(&compositor)?;
         let c = &compositor;
 
         let root = c.CreateContainerVisual()?;
@@ -243,8 +249,6 @@ impl Menu {
         autostart: bool,
         update: Option<&str>,
     ) -> Result<()> {
-        // Everything's drawn afresh: with another GPU, if it went away.
-        self.renderer.recover()?;
         let (work, s) = ui::monitor_at(cursor);
         self.theme = theme;
         self.scale = s;

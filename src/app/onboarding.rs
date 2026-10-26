@@ -199,7 +199,10 @@ impl App {
                 WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX,
             )
             .ok()?;
-            self.intro = Intro::new(window, self.compositor.clone(), theme).ok();
+            self.intro = self
+                .renderer()
+                .and_then(|renderer| Intro::new(window, self.compositor.clone(), renderer, theme))
+                .ok();
         }
         self.intro.as_mut()
     }

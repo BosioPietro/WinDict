@@ -24,6 +24,7 @@ mod view;
 mod widgets;
 
 use std::cell::Cell;
+use std::rc::Rc;
 
 use windows::core::{Result, HSTRING};
 use windows::Win32::Foundation::*;
@@ -318,7 +319,7 @@ struct SpareView {
 pub struct Settings {
     pub hwnd: HWND,
     _target: DesktopWindowTarget,
-    renderer: Renderer,
+    renderer: Rc<Renderer>,
     anim: Animator,
     /// Everything on the window; fades and scales as one when showing and hiding.
     root: ContainerVisual,
@@ -379,12 +380,12 @@ impl Settings {
     pub fn new(
         window: Window,
         compositor: Compositor,
+        renderer: Rc<Renderer>,
         theme: Theme,
         values: Values,
     ) -> Result<Self> {
         let hwnd = window.hwnd();
         let target = ui::attach(hwnd, &compositor)?;
-        let renderer = Renderer::new(&compositor)?;
         let root = compositor.CreateContainerVisual()?;
         target.SetRoot(&root)?;
         let frame = Frame::new(&compositor, &root, &theme)?;
@@ -851,14 +852,12 @@ impl Settings {
         self.replace_view(true)
     }
 
-    /// The GPU went away: draws everything again with another.
+    /// The GPU went away, and the renderer draws with another: draws
+    /// everything again.
     pub fn recover(&mut self) -> Result<()> {
-        if self.renderer.recover()? {
-            self.frame
-                .apply_theme(&self.renderer, &self.theme, self.scale)?;
-            self.replace_view(false)?;
-        }
-        Ok(())
+        self.frame
+            .apply_theme(&self.renderer, &self.theme, self.scale)?;
+        self.replace_view(false)
     }
 
     /// Shows the window in the language now current, cross-fading to it.

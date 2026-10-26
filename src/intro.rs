@@ -13,6 +13,8 @@
 //! The pictures are close-ups of WinDict on the Windows desktop, in light
 //! and dark: the one for the system's theme shows.
 
+use std::rc::Rc;
+
 use windows::core::{Interface, Result, HSTRING};
 use windows::Win32::Foundation::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -262,7 +264,7 @@ struct View {
 pub struct Intro {
     pub hwnd: HWND,
     _target: DesktopWindowTarget,
-    renderer: Renderer,
+    renderer: Rc<Renderer>,
     anim: Animator,
     /// Everything on the window; fades and scales as one when showing and hiding.
     root: ContainerVisual,
@@ -294,10 +296,14 @@ pub struct Intro {
 }
 
 impl Intro {
-    pub fn new(window: Window, compositor: Compositor, theme: Theme) -> Result<Self> {
+    pub fn new(
+        window: Window,
+        compositor: Compositor,
+        renderer: Rc<Renderer>,
+        theme: Theme,
+    ) -> Result<Self> {
         let hwnd = window.hwnd();
         let target = ui::attach(hwnd, &compositor)?;
-        let renderer = Renderer::new(&compositor)?;
         let root = compositor.CreateContainerVisual()?;
         target.SetRoot(&root)?;
         let frame = Frame::new(&compositor, &root, &theme)?;
@@ -535,14 +541,12 @@ impl Intro {
         self.replace_view(true)
     }
 
-    /// The GPU went away: draws everything again with another.
+    /// The GPU went away, and the renderer draws with another: draws
+    /// everything again.
     pub fn recover(&mut self) -> Result<()> {
-        if self.renderer.recover()? {
-            self.frame
-                .apply_theme(&self.renderer, &self.theme, self.scale)?;
-            self.replace_view(false)?;
-        }
-        Ok(())
+        self.frame
+            .apply_theme(&self.renderer, &self.theme, self.scale)?;
+        self.replace_view(false)
     }
 
     /// The window moved to a monitor with another `dpi`. `suggested` is

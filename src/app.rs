@@ -24,6 +24,7 @@ mod updating;
 mod zooming;
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver};
 
 use windows::core::{w, HSTRING, PCWSTR};
@@ -48,7 +49,7 @@ use crate::menu::{Command, Menu};
 use crate::offline;
 use crate::online;
 use crate::popup::{self, CardButton, Popup, Transition};
-use crate::render::{self, Body, Side, Target, TranslationCard, PICKER_ROWS};
+use crate::render::{self, Body, Renderer, Side, Target, TranslationCard, PICKER_ROWS};
 use crate::searchbox::MAX_SUGGESTIONS;
 use crate::selection::{self, Capturer};
 use crate::settings::{Change, Settings, Values};
@@ -279,6 +280,8 @@ pub struct App {
     config: Config,
     hwnd: HWND,
     compositor: Compositor,
+    /// What every window draws with, made when the first one's drawn.
+    renderer: Option<Rc<Renderer>>,
     /// The card that opens for a lookup and closes on a click away, and
     /// while a pinned card's window is being handled, that one.
     card: Card,
@@ -389,6 +392,7 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             config,
             hwnd,
             compositor,
+            renderer: None,
             card: Card::default(),
             pinned: Vec::new(),
             closing: Vec::new(),
@@ -620,12 +624,31 @@ impl App {
         Theme::current(self.config.theme)
     }
 
+    /// What every window draws with, made the first time it's asked for.
+    fn renderer(&mut self) -> windows::core::Result<Rc<Renderer>> {
+        if let Some(renderer) = &self.renderer {
+            return Ok(renderer.clone());
+        }
+        let renderer = Rc::new(Renderer::new(&self.compositor)?);
+        self.renderer = Some(renderer.clone());
+        Ok(renderer)
+    }
+
     fn ensure_popup(&mut self) -> Option<&mut Popup> {
         if self.card.popup.is_none() {
             let window =
                 Window::create(POPUP_CLASS, w!("WinDict"), FLYOUT_EX_STYLE, WS_POPUP).ok()?;
             let zoom = self.config.zoom_factor();
-            match Popup::new(window, self.compositor.clone(), self.theme(), zoom) {
+            let popup = self.renderer().and_then(|renderer| {
+                Popup::new(
+                    window,
+                    self.compositor.clone(),
+                    renderer,
+                    self.theme(),
+                    zoom,
+                )
+            });
+            match popup {
                 Ok(p) => self.card.popup = Some(p),
                 Err(e) => {
                     self.tray.notify(tr().draw_window_failed, &e.message());
@@ -642,7 +665,10 @@ impl App {
             // as soon as something else is activated.
             let window =
                 Window::create(MENU_CLASS, w!("WinDict"), FLYOUT_EX_STYLE, WS_POPUP).ok()?;
-            match Menu::new(window, self.compositor.clone(), self.theme()) {
+            let menu = self.renderer().and_then(|renderer| {
+                Menu::new(window, self.compositor.clone(), renderer, self.theme())
+            });
+            match menu {
                 Ok(m) => self.menu = Some(m),
                 Err(e) => {
                     self.tray.notify(tr().draw_menu_failed, &e.message());
@@ -663,7 +689,10 @@ impl App {
                 WS_POPUP | WS_SYSMENU | WS_MINIMIZEBOX,
             )
             .ok()?;
-            match Settings::new(window, self.compositor.clone(), theme, values) {
+            let settings = self.renderer().and_then(|renderer| {
+                Settings::new(window, self.compositor.clone(), renderer, theme, values)
+            });
+            match settings {
                 Ok(s) => self.settings = Some(s),
                 Err(e) => {
                     self.tray.notify(tr().draw_settings_failed, &e.message());
