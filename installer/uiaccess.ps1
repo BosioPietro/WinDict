@@ -11,9 +11,9 @@
 
     The installer takes care of 1 and 3, putting WinDict-uiaccess.exe beside
     WinDict.exe unsigned; this script does 2. It creates a fresh self-signed
-    code-signing certificate, trusts it on this machine, signs
-    WinDict-uiaccess.exe with it and then deletes the certificate's private
-    key, so nothing else can ever be signed with it. It records the choice as
+    code-signing certificate, signs WinDict-uiaccess.exe with it, deletes
+    the certificate's private key, so nothing else can ever be signed with
+    it, and only then trusts it on this machine. It records the choice as
     UIAccess in HKLM\Software\WinDict, where WinDict.exe reads it to start
     WinDict-uiaccess.exe in its place.
 
@@ -78,24 +78,32 @@ if ($Resign) {
 }
 if (-not (Test-Path $Exe)) { throw "Executable not found: $Exe" }
 
-# A fresh certificate every time; old ones are removed.
+# A fresh certificate every time; old ones are removed. Its key is made in
+# the machine's store, which only administrators can read, not the user's.
 Remove-WinDictCertificates
 $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject $Subject `
-    -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy NonExportable `
+    -CertStoreLocation Cert:\LocalMachine\My -KeyExportPolicy NonExportable `
     -NotAfter (Get-Date).AddYears(20)
 # Exported where only administrators can write, so it can't be swapped
 # before it's trusted.
 $cer = Join-Path $PSScriptRoot "windict-$($cert.Thumbprint).cer"
 try {
+    # Signed while nothing trusts the certificate yet, which Windows reports
+    # but doesn't stop.
+    Set-AuthenticodeSignature -FilePath $Exe -Certificate $cert -HashAlgorithm SHA256 | Out-Null
     Export-Certificate -Cert $cert -FilePath $cer | Out-Null
+} finally {
+    # Without its private key the certificate can't sign anything else: it's
+    # gone before the machine trusts it, whatever happens.
+    Remove-Item "Cert:\LocalMachine\My\$($cert.Thumbprint)" -DeleteKey
+}
+try {
     Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
     Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
-    $signature = Set-AuthenticodeSignature -FilePath $Exe -Certificate $cert -HashAlgorithm SHA256
 } finally {
     Remove-Item $cer -ErrorAction SilentlyContinue
-    # Without its private key the certificate can't sign anything else.
-    Remove-Item "Cert:\CurrentUser\My\$($cert.Thumbprint)" -DeleteKey
 }
+$signature = Get-AuthenticodeSignature -FilePath $Exe
 if ($signature.Status -ne 'Valid') {
     Remove-WinDictCertificates
     throw "Signing failed: $($signature.StatusMessage)"
