@@ -469,8 +469,21 @@ struct MyMemoryResponse {
     quota_finished: Option<bool>,
     #[serde(rename = "responseStatus", default)]
     status: Value,
-    #[serde(default)]
+    /// An empty string, not a list, when the request failed.
+    #[serde(default, deserialize_with = "list_or_nothing")]
     matches: Vec<MyMemoryMatch>,
+}
+
+/// A list, or nothing when there's something else in its place.
+fn list_or_nothing<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    Ok(match Value::deserialize(deserializer)? {
+        list @ Value::Array(_) => serde_json::from_value(list).unwrap_or_default(),
+        _ => Vec::new(),
+    })
 }
 
 #[derive(Deserialize)]
@@ -720,8 +733,11 @@ mod tests {
             parse_mymemory(warned, "dog").unwrap_err(),
             tr().mymemory_quota
         );
-        let failed = br#"{"responseData":{"translatedText":""},"responseStatus":"403"}"#;
-        assert!(parse_mymemory(failed, "dog").is_err());
+        let failed = br#"{"responseData":{"translatedText":"INVALID LANGUAGE PAIR"},"responseStatus":"403","matches":""}"#;
+        assert_eq!(
+            parse_mymemory(failed, "dog").unwrap_err(),
+            tr().mymemory_no_translation
+        );
     }
 
     #[test]
