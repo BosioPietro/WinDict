@@ -260,6 +260,21 @@ impl App {
     /// Makes sure `download` is in place, fetching it if it isn't, then
     /// looks words up in its language too. Asked for again while it
     /// downloads, the download under way carries on.
+    /// Opens the chosen languages' dictionaries. One downloaded that's
+    /// gone, or isn't the one this version lists, is fetched again, and
+    /// failing to is told then. Returns what else went wrong.
+    pub(super) fn load_dictionaries(&mut self) -> Option<String> {
+        let error = offline::set_languages(&self.config.languages).err();
+        let languages = self.config.languages.clone();
+        for download in languages.iter().filter_map(|l| dicts::find(l)) {
+            self.install(download, true);
+        }
+        let fetched = languages
+            .iter()
+            .all(|l| l == "en" || dicts::find(l).is_some());
+        error.filter(|_| !fetched)
+    }
+
     pub(super) fn install(&mut self, download: &'static dicts::Download, quiet: bool) {
         let language = download.language;
         if let Some(installing) = self

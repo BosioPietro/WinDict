@@ -671,19 +671,7 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             keyboard_hook: None,
         };
         app.register_hotkeys();
-        let mut dictionary_error = offline::set_languages(&app.config.languages).err();
-        // A downloaded dictionary that's gone, or isn't the one this version
-        // lists, is fetched again; failing to is told then.
-        let languages = app.config.languages.clone();
-        if languages
-            .iter()
-            .all(|l| l == "en" || dicts::find(l).is_some())
-        {
-            dictionary_error = None;
-        }
-        for download in languages.iter().filter_map(|l| dicts::find(l)) {
-            app.install(download, true);
-        }
+        let dictionary_error = app.load_dictionaries();
         app.schedule_update_check(updating::FIRST_CHECK_MS);
         // However the new version came: from the menu, the setup or WinGet.
         let version = env!("CARGO_PKG_VERSION");
@@ -1325,7 +1313,8 @@ impl App {
                 self.register_hotkeys();
                 self.schedule_update_check(updating::FIRST_CHECK_MS);
                 self.refresh_settings();
-                if let Err(e) = offline::set_languages(&self.config.languages) {
+                self.refresh_intro();
+                if let Some(e) = self.load_dictionaries() {
                     self.tray.notify(tr().dictionary_not_loaded, &e);
                 } else if self.hotkey_ok {
                     self.tray.notify(
