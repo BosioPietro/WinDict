@@ -330,6 +330,7 @@ impl Setup {
         };
         let language = match self.language {
             Language::Italian => "it",
+            Language::Spanish => "es",
             Language::English => "en",
         };
         let switches: Vec<OsString> = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]

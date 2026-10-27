@@ -1,6 +1,7 @@
 //! The online dictionaries: the Free Dictionary API
 //! (<https://dictionaryapi.dev>, built from Wiktionary), with Wiktionary's own
-//! API as a fallback, and for Italian, Wikizionario (`wikizionario`).
+//! API as a fallback, and for the languages that have one, their own
+//! Wiktionary (`kaikki`).
 
 use std::sync::mpsc;
 use std::thread;
@@ -13,8 +14,8 @@ use crate::dictionary::{
 };
 use crate::http;
 use crate::i18n::{fill, tr};
+use crate::kaikki;
 use crate::lang::LangCode;
-use crate::wikizionario;
 
 /// How long the first source for a language gets to answer alone before
 /// the second is asked too.
@@ -24,13 +25,14 @@ const FALLBACK_DELAY: Duration = Duration::from_millis(500);
 /// within `FALLBACK_DELAY` (or fails or has no entry sooner), Wiktionary is
 /// asked as well, and the first definition to arrive wins. The Free
 /// Dictionary API is built from Wiktionary, so once Wiktionary has no entry
-/// the word isn't waited on any longer. Italian is the same with
-/// Wikizionario's extract and its pages. The other `languages` are only
-/// looked for in English Wiktionary, all at once, while those two are.
+/// the word isn't waited on any longer. The languages with a Wiktionary of
+/// their own are looked for in its extract, and Italian also in its pages,
+/// raced the same way. The other `languages` are only looked for in English
+/// Wiktionary, all at once, while those are.
 pub fn lookup(word: &str, detail: Detail, languages: &[LangCode]) -> Lookup {
     let others: Vec<LangCode> = languages
         .iter()
-        .filter(|l| *l != "en" && *l != "it")
+        .filter(|l| *l != "en" && kaikki::edition(l).is_none())
         .cloned()
         .collect();
     let has = |language: &str| languages.iter().any(|l| l == language);
@@ -44,21 +46,29 @@ pub fn lookup(word: &str, detail: Detail, languages: &[LangCode]) -> Lookup {
             )
         })
     });
-    let italian = has("it").then(|| {
-        let (w1, w2) = (word.to_string(), word.to_string());
-        thread::spawn(move || {
-            race(
-                move || wikizionario::lookup_extract(&w1, detail.senses, detail.synonyms),
-                move || wikizionario::lookup_page(&w2, detail.senses, detail.synonyms),
-                FALLBACK_DELAY,
-            )
+    let own: Vec<_> = languages
+        .iter()
+        .filter_map(|l| kaikki::edition(l))
+        .map(|edition| {
+            let (w1, w2) = (word.to_string(), word.to_string());
+            thread::spawn(move || {
+                let extract = move || kaikki::lookup(edition, &w1, detail.senses, detail.synonyms);
+                match edition.pages {
+                    Some(pages) => race(
+                        extract,
+                        move || pages(&w2, detail.senses, detail.synonyms),
+                        FALLBACK_DELAY,
+                    ),
+                    None => extract(),
+                }
+            })
         })
-    });
+        .collect();
     let mut results = Vec::new();
     if !others.is_empty() {
         results.push(lookup_wiktionary(word, detail.senses, &others));
     }
-    for language in [italian, english].into_iter().flatten() {
+    for language in own.into_iter().chain(english) {
         results.push(language.join().unwrap_or(Lookup::NotFound));
     }
     match together(results, languages) {

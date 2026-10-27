@@ -24,13 +24,22 @@ pub struct Download {
     sha256: &'static str,
 }
 
-pub const DOWNLOADS: &[Download] = &[Download {
-    language: "it",
-    name: "Italiano",
-    file: "it-caf16c6d0c49.wdict",
-    size: 8_413_024,
-    sha256: "caf16c6d0c49272bdcbe61861997b4c27b26c20392000cfe397a99d705aff2e2",
-}];
+pub const DOWNLOADS: &[Download] = &[
+    Download {
+        language: "it",
+        name: "Italiano",
+        file: "it-caf16c6d0c49.wdict",
+        size: 8_413_024,
+        sha256: "caf16c6d0c49272bdcbe61861997b4c27b26c20392000cfe397a99d705aff2e2",
+    },
+    Download {
+        language: "es",
+        name: "Espa\u{F1}ol",
+        file: "es-b6f25a06f010.wdict",
+        size: 16_947_418,
+        sha256: "b6f25a06f010fb5e55eaac4fe4a2d6cf7d74f8c162ead82eea298a49c8bb4663",
+    },
+];
 
 const HOST: &str = "github.com";
 const RELEASES: &str = "/BosioPietro/WinDict/releases/download/";
@@ -206,6 +215,7 @@ mod tests {
             assert_ne!(d.language, "en");
         }
         assert!(find("it").is_some());
+        assert!(find("es").is_some());
         assert!(find("en").is_none());
     }
 

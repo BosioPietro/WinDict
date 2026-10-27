@@ -59,6 +59,7 @@ ChangesEnvironment=yes
 [Languages]
 Name: "en"; MessagesFile: "compiler:Default.isl"
 Name: "it"; MessagesFile: "compiler:Languages\Italian.isl"
+Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
 
 [Files]
 Source: "{#Dist}\WinDict.exe"; DestDir: "{app}"; Flags: ignoreversion

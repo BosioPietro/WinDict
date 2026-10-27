@@ -106,6 +106,8 @@ impl Detail {
 pub const WIKTIONARY: &str = "Wiktionary";
 /// The Italian Wiktionary, as the Italian dictionary also credits it.
 pub const WIKIZIONARIO: &str = "Wikizionario";
+/// The Spanish one, likewise.
+pub const WIKCIONARIO: &str = "Wikcionario";
 
 #[derive(Clone, Debug)]
 pub struct Meaning {
@@ -227,11 +229,14 @@ pub fn source_url(source: &str, word: &str) -> Option<String> {
             "https://en.wiktionary.org/wiki/{}",
             percent_encode(&word.replace(' ', "_"))
         )),
-        WIKIZIONARIO => Some(format!(
-            "https://it.wiktionary.org/wiki/{}",
-            percent_encode(&word.replace(' ', "_"))
-        )),
-        _ => crate::offline::link(source, word),
+        _ => match crate::kaikki::EDITIONS.iter().find(|e| e.source == source) {
+            Some(edition) => Some(format!(
+                "https://{}/wiki/{}",
+                edition.host,
+                percent_encode(&word.replace(' ', "_"))
+            )),
+            None => crate::offline::link(source, word),
+        },
     }
 }
 
@@ -399,6 +404,10 @@ mod tests {
         assert_eq!(
             source_url(WIKIZIONARIO, "a priori").as_deref(),
             Some("https://it.wiktionary.org/wiki/a_priori")
+        );
+        assert_eq!(
+            source_url(WIKCIONARIO, "casa").as_deref(),
+            Some("https://es.wiktionary.org/wiki/casa")
         );
         assert_eq!(source_url("Elsewhere", "x"), None);
     }

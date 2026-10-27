@@ -9,9 +9,10 @@
 //!   settings, and the window procedures that feed them.
 //! - `selection`: reads the selected text (UI Automation, else the clipboard).
 //! - `dictionary`: entries as the card shows them; `offline` (the bundled
-//!   WordNet) and `online` (Free Dictionary API, Wiktionary, and
-//!   `wikizionario` for Italian, over `http`) fill them; `translate`
-//!   translates the word (Google Translate, else MyMemory).
+//!   WordNet) and `online` (Free Dictionary API, Wiktionary, and each
+//!   language's own Wiktionary, through `kaikki` and `wikizionario`, over
+//!   `http`) fill them; `translate` translates the word (Google Translate,
+//!   else MyMemory).
 //! - `popup` (the card, with `searchbox`), `menu`, `settings` and `intro`:
 //!   the windows, each a composition visual tree built from `ui`, drawn by
 //!   `render` in the colors of `theme`.
@@ -40,6 +41,7 @@ mod http;
 mod i18n;
 mod installed;
 mod intro;
+mod kaikki;
 mod lang;
 mod menu;
 mod offline;

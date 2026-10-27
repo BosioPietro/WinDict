@@ -13,6 +13,7 @@
 //! What stays as it is: names of languages (each in itself, so they can be
 //! found whichever language WinDict is in), key names, and "WinDict".
 
+mod es;
 mod it;
 
 use std::fmt::Display;
@@ -394,15 +395,17 @@ strings! {
 pub enum Language {
     English,
     Italian,
+    Spanish,
 }
 
 impl Language {
-    pub const ALL: &'static [Language] = &[Language::English, Language::Italian];
+    pub const ALL: &'static [Language] = &[Language::English, Language::Italian, Language::Spanish];
 
     fn strings(self) -> &'static Strings {
         match self {
             Language::English => &EN,
             Language::Italian => &it::IT,
+            Language::Spanish => &es::ES,
         }
     }
 
@@ -411,6 +414,7 @@ impl Language {
         match self {
             Language::English => "English",
             Language::Italian => "Italiano",
+            Language::Spanish => "Espa\u{F1}ol",
         }
     }
 
@@ -424,8 +428,10 @@ impl Language {
     /// its region: the low ten bits are the language, the rest the region.
     fn from_lang_id(id: u16) -> Language {
         const LANG_ITALIAN: u16 = 0x10;
+        const LANG_SPANISH: u16 = 0x0A;
         match id & 0x3FF {
             LANG_ITALIAN => Language::Italian,
+            LANG_SPANISH => Language::Spanish,
             _ => Language::English,
         }
     }
@@ -532,6 +538,10 @@ mod tests {
         // Italy's, Switzerland's, and the neutral Italian.
         for id in [0x0410, 0x0810, 0x0010] {
             assert_eq!(Language::from_lang_id(id), Language::Italian);
+        }
+        // Spain's, Mexico's, and the neutral Spanish.
+        for id in [0x0C0A, 0x080A, 0x000A] {
+            assert_eq!(Language::from_lang_id(id), Language::Spanish);
         }
         // English, and what WinDict has no translation for.
         for id in [0x0409, 0x0809, 0x040C, 0x0000] {
