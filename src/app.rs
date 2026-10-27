@@ -128,6 +128,12 @@ const HOTKEY_ZOOM_OUT_PAD: i32 = 15;
 const HOTKEY_ZOOM_RESET: i32 = 16;
 const HOTKEY_ZOOM_RESET_PAD: i32 = 17;
 const HOTKEY_TRANSLATE_SELECTION: i32 = 18;
+const HOTKEY_MENU_UP: i32 = 19;
+const HOTKEY_MENU_DOWN: i32 = 20;
+const HOTKEY_MENU_HOME: i32 = 21;
+const HOTKEY_MENU_END: i32 = 22;
+const HOTKEY_MENU_ENTER: i32 = 23;
+const HOTKEY_MENU_SPACE: i32 = 24;
 
 /// The id `shortcut` is registered with.
 fn hotkey_id(shortcut: Shortcut) -> i32 {
@@ -185,6 +191,21 @@ const SCROLL_KEYS: Keys = &[
     (HOTKEY_SCROLL_UP, HOT_KEY_MODIFIERS(0), VK_UP),
     (HOTKEY_SCROLL_DOWN, HOT_KEY_MODIFIERS(0), VK_DOWN),
 ];
+/// The tray menu's, which never takes the keyboard: held down, Up and
+/// Down keep moving.
+const MENU_KEYS: Keys = &[
+    (HOTKEY_MENU_UP, HOT_KEY_MODIFIERS(0), VK_UP),
+    (HOTKEY_MENU_DOWN, HOT_KEY_MODIFIERS(0), VK_DOWN),
+    (HOTKEY_MENU_HOME, MOD_NOREPEAT, VK_HOME),
+    (HOTKEY_MENU_END, MOD_NOREPEAT, VK_END),
+    (HOTKEY_MENU_ENTER, MOD_NOREPEAT, VK_RETURN),
+    (HOTKEY_MENU_SPACE, MOD_NOREPEAT, VK_SPACE),
+];
+
+/// The key a hotkey of [`MENU_KEYS`] is for.
+fn menu_key_of(id: i32) -> Option<VIRTUAL_KEY> {
+    MENU_KEYS.iter().find(|k| k.0 == id).map(|k| k.2)
+}
 const OPEN_KEY: Keys = &[(HOTKEY_OPEN_LINK, MOD_NOREPEAT, VK_RETURN)];
 const TRANSLATE_KEY: Keys = &[(
     HOTKEY_TRANSLATE,
@@ -323,6 +344,8 @@ pub struct App {
     scroll_keys: KeySet,
     /// Ctrl+C.
     copy_key: KeySet,
+    /// The tray menu's arrows, Home, End, Enter and Space.
+    menu_keys: KeySet,
     /// Ctrl+plus, Ctrl+minus and Ctrl+0.
     zoom_keys: KeySet,
     /// How far the wheel has turned with Ctrl held, towards the next step
@@ -416,6 +439,7 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             open_key: KeySet::new(OPEN_KEY),
             scroll_keys: KeySet::new(SCROLL_KEYS),
             copy_key: KeySet::new(COPY_KEY),
+            menu_keys: KeySet::new(MENU_KEYS),
             zoom_keys: KeySet::new(ZOOM_KEYS),
             zoom_wheel: 0,
             installing: Vec::new(),

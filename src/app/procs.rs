@@ -117,7 +117,7 @@ pub(super) unsafe extern "system" fn main_proc(
                 HOTKEY_ZOOM_IN | HOTKEY_ZOOM_IN_PAD => with_app(|app| app.zoom(Some(1))),
                 HOTKEY_ZOOM_OUT | HOTKEY_ZOOM_OUT_PAD => with_app(|app| app.zoom(Some(-1))),
                 HOTKEY_ZOOM_RESET | HOTKEY_ZOOM_RESET_PAD => with_app(|app| app.zoom(None)),
-                _ => None,
+                id => menu_key_of(id).and_then(|key| with_app(|app| app.menu_key(key))),
             };
             LRESULT(0)
         }
@@ -403,10 +403,6 @@ pub(super) unsafe extern "system" fn menu_proc(
             LRESULT(0)
         }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
-        WM_KEYDOWN => {
-            with_app(|app| app.menu_key(VIRTUAL_KEY(wparam.0 as u16)));
-            LRESULT(0)
-        }
         // We size ourselves for the target monitor's DPI already.
         WM_DPICHANGED => LRESULT(0),
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },

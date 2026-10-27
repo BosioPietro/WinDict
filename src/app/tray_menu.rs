@@ -23,8 +23,9 @@ impl App {
         self.open_menu(at);
     }
 
-    /// Opens the menu `at` a point, with the keyboard, so the arrows and
-    /// Enter work in it.
+    /// Opens the menu `at` a point, with its keys, so the arrows and Enter
+    /// work in it without it taking the keyboard: the taskbar's overflow
+    /// flyout would close.
     fn open_menu(&mut self, at: POINT) {
         if self.menu.as_ref().is_some_and(|m| m.visible) {
             return;
@@ -46,8 +47,8 @@ impl App {
             self.tray.notify(tr().draw_menu_failed, &e.message());
             return;
         }
-        selection::take_foreground(menu.hwnd);
         CARD_RECT.set(menu.card_rect());
+        self.menu_keys.set(self.hwnd, true);
         win::kill_timer(self.hwnd, TIMER_MENU_HIDE);
         win::kill_timer(self.hwnd, TIMER_MENU_TEARDOWN);
         SHOWN_AT.set(win::now_ms());
@@ -61,6 +62,7 @@ impl App {
         };
         let _ = menu.begin_hide();
         self.menu_closed_at = win::now_ms();
+        self.menu_keys.set(self.hwnd, false);
         win::set_timer(self.hwnd, TIMER_MENU_HIDE, HIDE_DONE_MS);
     }
 
@@ -96,7 +98,6 @@ impl App {
                 }
                 return;
             }
-            VK_ESCAPE => return self.dismiss(),
             _ => return,
         };
     }
