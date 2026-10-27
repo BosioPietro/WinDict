@@ -19,6 +19,9 @@ pub struct Tray {
     hwnd: HWND,
     callback: u32,
     icon: HICON,
+    /// Notifications' icon: with `NIIF_LARGE_ICON`, Windows refuses any
+    /// smaller than `SM_CXICON`.
+    large_icon: HICON,
     /// The icon with a dot on it, while there's an update.
     badged: Option<HICON>,
     /// Shown over the icon, kept to show again once Explorer restarts.
@@ -37,14 +40,14 @@ fn copy_into(dst: &mut [u16], text: &str) {
 
 impl Tray {
     pub fn new(hwnd: HWND, callback: u32) -> Tray {
-        let icon = unsafe {
+        let load = |cx, cy| unsafe {
             let module = GetModuleHandleW(None).unwrap_or_default();
             LoadImageW(
                 Some(HINSTANCE(module.0)),
                 PCWSTR(ICON_ID as usize as *const u16),
                 IMAGE_ICON,
-                GetSystemMetrics(SM_CXSMICON),
-                GetSystemMetrics(SM_CYSMICON),
+                GetSystemMetrics(cx),
+                GetSystemMetrics(cy),
                 LR_DEFAULTCOLOR,
             )
             .map(|h| HICON(h.0))
@@ -54,7 +57,8 @@ impl Tray {
         let tray = Tray {
             hwnd,
             callback,
-            icon,
+            icon: load(SM_CXSMICON, SM_CYSMICON),
+            large_icon: load(SM_CXICON, SM_CYICON),
             badged: None,
             tip: "WinDict".into(),
         };
@@ -119,7 +123,7 @@ impl Tray {
         let mut data = self.data();
         data.uFlags = NIF_INFO;
         data.dwInfoFlags = NIIF_USER | NIIF_LARGE_ICON;
-        data.hBalloonIcon = self.icon;
+        data.hBalloonIcon = self.large_icon;
         copy_into(&mut data.szInfoTitle, title);
         copy_into(&mut data.szInfo, text);
         unsafe {
