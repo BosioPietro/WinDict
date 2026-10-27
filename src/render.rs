@@ -7,6 +7,7 @@
 mod body;
 mod draw;
 mod flags;
+mod page;
 mod text;
 
 use std::cell::{Cell, RefCell};
@@ -35,6 +36,7 @@ use crate::lang::LangCode;
 use crate::theme::{to_d2d, Theme};
 use crate::translate::{self, Translation};
 use flags::Flag;
+pub use page::{Font, Line, Patch};
 
 #[derive(Clone, Copy)]
 pub enum Ink {
@@ -46,6 +48,8 @@ pub enum Ink {
     Critical,
     /// On the accent, as a ticked box's tick is.
     OnAccent,
+    /// Whatever color, as 0xRRGGBB: a page's, whose own colors are its.
+    Rgb(u32),
 }
 
 /// Where a line of text sits in the width it's given.
@@ -102,6 +106,23 @@ enum Item {
     },
 }
 
+/// What's drawn over a picture, in its own pixels: what's `under` a card,
+/// the `card` as the picture has it, then what's `on` it.
+pub struct Scene<'a> {
+    pub under: Vec<Over<'a>>,
+    pub card: Option<D2D1_ROUNDED_RECT>,
+    pub on: Vec<Over<'a>>,
+}
+
+/// A layout over a picture, its top left at `x`, `y` in the picture's
+/// pixels, `scale` of them to a DIP.
+pub struct Over<'a> {
+    pub layout: &'a Layout,
+    pub x: f32,
+    pub y: f32,
+    pub scale: f32,
+}
+
 /// The colors of an [`Item::Shape`].
 #[derive(Clone, Copy)]
 enum Paint {
@@ -118,6 +139,8 @@ enum Paint {
     Sunken,
     StrongStroke,
     Disabled,
+    /// As [`Ink::Rgb`].
+    Rgb(u32),
 }
 
 /// Laid-out content, in DIPs.

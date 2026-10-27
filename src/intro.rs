@@ -44,6 +44,8 @@ use crate::ui::{
 };
 use crate::win::{self, Window};
 
+mod scene;
+
 // Geometry, in DIPs.
 const CARD_W: f32 = 720.0;
 const CARD_H: f32 = 440.0;
@@ -181,26 +183,23 @@ impl Step {
         }
     }
 
-    /// The picture, in light or `dark`: the languages have the
-    /// translation's, and the dictionaries the definition's.
+    /// The picture drawn live, in the language WinDict's shown in: the
+    /// languages have a translation's, and the dictionaries a definition's.
+    fn scene(self) -> Option<scene::Shot> {
+        match self {
+            Step::Lookup | Step::Dictionaries => Some(scene::Shot::Lookup),
+            Step::Translate | Step::Languages => Some(scene::Shot::Translate),
+            Step::AboveStart | Step::Ready => None,
+        }
+    }
+
+    /// The picture, in light or `dark`, of a step that isn't drawn live.
     fn picture(self, dark: bool) -> &'static [u8] {
         match (self, dark) {
-            (Step::Lookup | Step::Dictionaries, false) => {
-                include_bytes!("../assets/intro/lookup-light.jpg")
-            }
-            (Step::Lookup | Step::Dictionaries, true) => {
-                include_bytes!("../assets/intro/lookup-dark.jpg")
-            }
-            (Step::Translate | Step::Languages, false) => {
-                include_bytes!("../assets/intro/translate-light.jpg")
-            }
-            (Step::Translate | Step::Languages, true) => {
-                include_bytes!("../assets/intro/translate-dark.jpg")
-            }
             (Step::AboveStart, false) => include_bytes!("../assets/intro/start-light.jpg"),
             (Step::AboveStart, true) => include_bytes!("../assets/intro/start-dark.jpg"),
-            (Step::Ready, false) => include_bytes!("../assets/intro/tray-light.jpg"),
-            (Step::Ready, true) => include_bytes!("../assets/intro/tray-dark.jpg"),
+            (_, false) => include_bytes!("../assets/intro/tray-light.jpg"),
+            (_, true) => include_bytes!("../assets/intro/tray-dark.jpg"),
         }
     }
 }
@@ -1499,7 +1498,12 @@ impl Intro {
         let (c, r, s) = (&self.anim.compositor, &self.renderer, self.scale);
         let size = v2((PANE_W * s).round(), (PANE_H * s).round());
         let step = self.steps[self.at];
-        let surface = r.draw_picture(step.picture(self.theme.dark), size.X, size.Y)?;
+        let surface = match step.scene() {
+            Some(shot) => {
+                scene::draw(r, shot, crate::i18n::current(), &self.theme, size.X, size.Y)?
+            }
+            None => r.draw_picture(step.picture(self.theme.dark), size.X, size.Y)?,
+        };
         let picture = c.CreateSpriteVisual()?;
         picture.SetBrush(&c.CreateSurfaceBrushWithSurface(&surface)?)?;
         picture.SetSize(size)?;

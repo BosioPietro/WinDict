@@ -1116,3 +1116,52 @@ impl Popup {
 fn contains(r: RECT, x: i32, y: i32) -> bool {
     x >= r.left && x < r.right && y >= r.top && y < r.bottom
 }
+
+/// Each layout of a card's content at its place, in DIPs, and the card's
+/// height.
+pub(crate) type Still = (Vec<(render::Layout, f32, f32)>, f32);
+
+/// The card's content, still: each layout at its place on a card showing
+/// `word` and `body`, in DIPs, and the card's height. With `speak` and
+/// `translate`, those buttons show, as they do on a definition.
+pub(crate) fn still(
+    renderer: &Renderer,
+    word: &str,
+    body: &Body,
+    speak: bool,
+    translate: bool,
+) -> Result<Still> {
+    let content_w = CARD_W - 2.0 * PAD_X;
+    let room = if translate { TRANSLATE_ROOM } else { PIN_ROOM };
+    let button = speak.then_some(BACK_SIZE);
+    let heading = renderer.layout_header(word, None, content_w - room, 0.0, button, false)?;
+    let glyph = |icon, face, ink| renderer.layout_line(icon, face, ink, BACK_SIZE);
+    let mut out = Vec::new();
+    // The buttons sit level with the word.
+    let top = PAD_TOP + (heading.word.first_line_bottom() - BACK_SIZE) / 2.0;
+    let mut buttons = vec![(PIN_GLYPH, Face::Button, Ink::Secondary, PIN_X, top)];
+    if translate {
+        buttons.push((
+            TRANSLATE_GLYPH,
+            Face::LargeButton,
+            Ink::Accent,
+            TRANSLATE_X,
+            top,
+        ));
+    }
+    if let Some((x, middle)) = heading.button {
+        let top = PAD_TOP + middle - BACK_SIZE / 2.0;
+        buttons.push((SPEAK_GLYPH, Face::Button, Ink::Secondary, PAD_X + x, top));
+    }
+    for (icon, face, ink, x, top) in buttons {
+        let layout = glyph(icon, face, ink)?;
+        let y = top + (BACK_SIZE - layout.height) / 2.0;
+        out.push((layout, x, y));
+    }
+    let header_h = PAD_TOP + heading.height + HEADER_GAP;
+    let body = renderer.layout_body(body, content_w, PAD_BOTTOM)?;
+    let height = header_h + body.height;
+    out.push((heading.word, PAD_X, PAD_TOP));
+    out.push((body, PAD_X, header_h));
+    Ok((out, height))
+}

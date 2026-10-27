@@ -15,153 +15,171 @@ impl Renderer {
             (layout.height * scale).ceil(),
         )?;
         self.paint(&surface, scale, |dc| unsafe {
-            let brush = |c: D2D1_COLOR_F| dc.CreateSolidColorBrush(&c, None);
-            let primary = brush(theme.text())?;
-            let secondary = brush(theme.text_secondary())?;
-            let tertiary = brush(theme.text_tertiary())?;
-            let accent = brush(theme.accent_d2d())?;
-            let critical = brush(theme.critical())?;
-            let on_accent = brush(to_d2d(theme.knob(true)))?;
-            let divider = brush(theme.divider())?;
-            let key = brush(theme.key())?;
-            let flag_edge = brush(theme.flag_edge())?;
-            for item in &layout.items {
-                match item {
-                    Item::Text {
+            self.draw_items(dc, layout, scale, theme)
+        })?;
+        Ok(surface)
+    }
+
+    /// Draws `layout`'s items on `dc`, whose transform places them; `scale`
+    /// is pixels per DIP.
+    unsafe fn draw_items(
+        &self,
+        dc: &ID2D1DeviceContext,
+        layout: &Layout,
+        scale: f32,
+        theme: &Theme,
+    ) -> Result<()> {
+        let brush = |c: D2D1_COLOR_F| dc.CreateSolidColorBrush(&c, None);
+        let primary = brush(theme.text())?;
+        let secondary = brush(theme.text_secondary())?;
+        let tertiary = brush(theme.text_tertiary())?;
+        let accent = brush(theme.accent_d2d())?;
+        let critical = brush(theme.critical())?;
+        let on_accent = brush(to_d2d(theme.knob(true)))?;
+        let divider = brush(theme.divider())?;
+        let key = brush(theme.key())?;
+        let flag_edge = brush(theme.flag_edge())?;
+        for item in &layout.items {
+            match item {
+                Item::Text {
+                    layout,
+                    x,
+                    y,
+                    ink,
+                    accents,
+                } => {
+                    for range in accents {
+                        let _ = layout.SetDrawingEffect(&accent, *range);
+                    }
+                    let own;
+                    let b = match ink {
+                        Ink::Rgb(c) => {
+                            own = brush(hex(*c))?;
+                            &own
+                        }
+                        Ink::Primary => &primary,
+                        Ink::Secondary => &secondary,
+                        Ink::Tertiary => &tertiary,
+                        Ink::Accent => &accent,
+                        Ink::Critical => &critical,
+                        Ink::OnAccent => &on_accent,
+                    };
+                    dc.DrawTextLayout(
+                        Vector2 { X: *x, Y: *y },
                         layout,
-                        x,
-                        y,
-                        ink,
-                        accents,
-                    } => {
-                        for range in accents {
-                            let _ = layout.SetDrawingEffect(&accent, *range);
-                        }
-                        let b = match ink {
-                            Ink::Primary => &primary,
-                            Ink::Secondary => &secondary,
-                            Ink::Tertiary => &tertiary,
-                            Ink::Accent => &accent,
-                            Ink::Critical => &critical,
-                            Ink::OnAccent => &on_accent,
-                        };
-                        dc.DrawTextLayout(
-                            Vector2 { X: *x, Y: *y },
-                            layout,
-                            b,
-                            D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
-                        );
-                    }
-                    Item::Rule { y, x, width } => {
+                        b,
+                        D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
+                    );
+                }
+                Item::Rule { y, x, width } => {
+                    let rect = D2D_RECT_F {
+                        left: *x,
+                        top: *y,
+                        right: x + width,
+                        bottom: y + 1.0 / scale,
+                    };
+                    dc.FillRectangle(&rect, &divider);
+                }
+                Item::Key {
+                    x,
+                    y,
+                    width,
+                    height,
+                } => {
+                    // Inset by half the hairline, so it lands on whole pixels.
+                    let half = 0.5 / scale;
+                    let cap = D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F {
+                            left: x + half,
+                            top: y + half,
+                            right: x + width - half,
+                            bottom: y + height - half,
+                        },
+                        radiusX: 4.0,
+                        radiusY: 4.0,
+                    };
+                    dc.FillRoundedRectangle(&cap, &key);
+                    dc.DrawRoundedRectangle(&cap, &divider, 1.0 / scale, None);
+                }
+                Item::Logo { x, y, size } => {
+                    // On whole pixels, so the panes stay crisp.
+                    let snap = |v: f32| (v * scale).round() / scale;
+                    let gap = (LOGO_GAP * scale).round().max(1.0) / scale;
+                    let pane = snap((size - gap) / 2.0);
+                    let (left, top) = (snap(*x), snap(*y));
+                    for (dx, dy) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+                        let (l, t) = (left + dx * (pane + gap), top + dy * (pane + gap));
                         let rect = D2D_RECT_F {
-                            left: *x,
-                            top: *y,
-                            right: x + width,
-                            bottom: y + 1.0 / scale,
+                            left: l,
+                            top: t,
+                            right: l + pane,
+                            bottom: t + pane,
                         };
-                        dc.FillRectangle(&rect, &divider);
+                        dc.FillRectangle(&rect, &primary);
                     }
-                    Item::Key {
-                        x,
-                        y,
-                        width,
-                        height,
-                    } => {
-                        // Inset by half the hairline, so it lands on whole pixels.
-                        let half = 0.5 / scale;
-                        let cap = D2D1_ROUNDED_RECT {
-                            rect: D2D_RECT_F {
-                                left: x + half,
-                                top: y + half,
-                                right: x + width - half,
-                                bottom: y + height - half,
-                            },
-                            radiusX: 4.0,
-                            radiusY: 4.0,
-                        };
-                        dc.FillRoundedRectangle(&cap, &key);
-                        dc.DrawRoundedRectangle(&cap, &divider, 1.0 / scale, None);
+                }
+                Item::Flag {
+                    flag,
+                    x,
+                    y,
+                    width,
+                    height,
+                } => {
+                    let rect = D2D_RECT_F {
+                        left: *x,
+                        top: *y,
+                        right: x + width,
+                        bottom: y + height,
+                    };
+                    self.draw_flag_item(dc, *flag, rect, scale, &flag_edge)?;
+                }
+                Item::Shape {
+                    x,
+                    y,
+                    width,
+                    height,
+                    radius,
+                    fill,
+                    stroke,
+                } => {
+                    let paint = |p: Paint| {
+                        brush(match p {
+                            Paint::Control => to_d2d(theme.control()),
+                            Paint::ControlStroke => to_d2d(theme.control_stroke()),
+                            Paint::Field => to_d2d(theme.field()),
+                            Paint::Focus | Paint::Accent => theme.accent_d2d(),
+                            Paint::Sunken => to_d2d(theme.sunken()),
+                            Paint::StrongStroke => to_d2d(theme.strong_stroke()),
+                            Paint::Disabled => theme.text_tertiary(),
+                            Paint::Rgb(c) => hex(c),
+                        })
+                    };
+                    // Inset by half the stroke, so it lands on whole pixels.
+                    let stroke_w = match stroke {
+                        Some(Paint::Focus) => (FOCUS_STROKE * scale).round() / scale,
+                        _ => 1.0 / scale,
+                    };
+                    let half = stroke_w / 2.0;
+                    let shape = D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F {
+                            left: x + half,
+                            top: y + half,
+                            right: x + width - half,
+                            bottom: y + height - half,
+                        },
+                        radiusX: *radius,
+                        radiusY: *radius,
+                    };
+                    if let Some(p) = fill {
+                        dc.FillRoundedRectangle(&shape, &paint(*p)?);
                     }
-                    Item::Logo { x, y, size } => {
-                        // On whole pixels, so the panes stay crisp.
-                        let snap = |v: f32| (v * scale).round() / scale;
-                        let gap = (LOGO_GAP * scale).round().max(1.0) / scale;
-                        let pane = snap((size - gap) / 2.0);
-                        let (left, top) = (snap(*x), snap(*y));
-                        for (dx, dy) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
-                            let (l, t) = (left + dx * (pane + gap), top + dy * (pane + gap));
-                            let rect = D2D_RECT_F {
-                                left: l,
-                                top: t,
-                                right: l + pane,
-                                bottom: t + pane,
-                            };
-                            dc.FillRectangle(&rect, &primary);
-                        }
-                    }
-                    Item::Flag {
-                        flag,
-                        x,
-                        y,
-                        width,
-                        height,
-                    } => {
-                        let rect = D2D_RECT_F {
-                            left: *x,
-                            top: *y,
-                            right: x + width,
-                            bottom: y + height,
-                        };
-                        self.draw_flag_item(dc, *flag, rect, scale, &flag_edge)?;
-                    }
-                    Item::Shape {
-                        x,
-                        y,
-                        width,
-                        height,
-                        radius,
-                        fill,
-                        stroke,
-                    } => {
-                        let paint = |p: Paint| {
-                            brush(match p {
-                                Paint::Control => to_d2d(theme.control()),
-                                Paint::ControlStroke => to_d2d(theme.control_stroke()),
-                                Paint::Field => to_d2d(theme.field()),
-                                Paint::Focus | Paint::Accent => theme.accent_d2d(),
-                                Paint::Sunken => to_d2d(theme.sunken()),
-                                Paint::StrongStroke => to_d2d(theme.strong_stroke()),
-                                Paint::Disabled => theme.text_tertiary(),
-                            })
-                        };
-                        // Inset by half the stroke, so it lands on whole pixels.
-                        let stroke_w = match stroke {
-                            Some(Paint::Focus) => (FOCUS_STROKE * scale).round() / scale,
-                            _ => 1.0 / scale,
-                        };
-                        let half = stroke_w / 2.0;
-                        let shape = D2D1_ROUNDED_RECT {
-                            rect: D2D_RECT_F {
-                                left: x + half,
-                                top: y + half,
-                                right: x + width - half,
-                                bottom: y + height - half,
-                            },
-                            radiusX: *radius,
-                            radiusY: *radius,
-                        };
-                        if let Some(p) = fill {
-                            dc.FillRoundedRectangle(&shape, &paint(*p)?);
-                        }
-                        if let Some(p) = stroke {
-                            dc.DrawRoundedRectangle(&shape, &paint(*p)?, stroke_w, None);
-                        }
+                    if let Some(p) = stroke {
+                        dc.DrawRoundedRectangle(&shape, &paint(*p)?, stroke_w, None);
                     }
                 }
             }
-            Ok(())
-        })?;
-        Ok(surface)
+        }
+        Ok(())
     }
 
     /// Draws `flag` clipped to the rounded `rect`, with a hairline edge.
@@ -373,45 +391,69 @@ impl Renderer {
         w: f32,
         h: f32,
     ) -> Result<CompositionDrawingSurface> {
+        self.draw_scene(encoded, w, h, None)
+    }
+
+    /// The picture `encoded` as [`Renderer::draw_picture`] has it, with
+    /// `scene` drawn over it in its theme.
+    pub fn draw_scene(
+        &self,
+        encoded: &[u8],
+        w: f32,
+        h: f32,
+        scene: Option<(&Scene, &Theme)>,
+    ) -> Result<CompositionDrawingSurface> {
         let (w, h) = (w.round().max(1.0), h.round().max(1.0));
         let surface = self.surface(w, h)?;
         self.paint(&surface, 1.0, |dc| unsafe {
-            let wic: IWICImagingFactory =
-                CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
-            let stream = wic.CreateStream()?;
-            stream.InitializeFromMemory(encoded)?;
-            let decoder = wic.CreateDecoderFromStream(
-                &stream,
-                std::ptr::null(),
-                WICDecodeMetadataCacheOnDemand,
-            )?;
-            let frame = decoder.GetFrame(0)?;
-            let converter = wic.CreateFormatConverter()?;
-            converter.Initialize(
-                &frame,
-                &GUID_WICPixelFormat32bppPBGRA,
-                WICBitmapDitherTypeNone,
-                None,
-                0.0,
-                WICBitmapPaletteTypeMedianCut,
-            )?;
-            let bitmap = dc.CreateBitmapFromWicBitmap(&converter, None)?;
-            let size = bitmap.GetPixelSize();
-            let (pw, ph) = (size.width as f32, size.height as f32);
-            let k = (w / pw).max(h / ph);
-            let (cw, ch) = (w / k, h / k);
-            let source = D2D_RECT_F {
-                left: (pw - cw) / 2.0,
-                top: (ph - ch) / 2.0,
-                right: (pw + cw) / 2.0,
-                bottom: (ph + ch) / 2.0,
-            };
-            let dest = D2D_RECT_F {
-                left: 0.0,
-                top: 0.0,
-                right: w,
-                bottom: h,
-            };
+            self.paint_scene(dc, encoded, w, h, scene)
+        })?;
+        Ok(surface)
+    }
+
+    /// What [`Renderer::draw_scene`] draws, on `dc`, in pixels.
+    unsafe fn paint_scene(
+        &self,
+        dc: &ID2D1DeviceContext,
+        encoded: &[u8],
+        w: f32,
+        h: f32,
+        scene: Option<(&Scene, &Theme)>,
+    ) -> Result<()> {
+        let wic: IWICImagingFactory =
+            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+        let stream = wic.CreateStream()?;
+        stream.InitializeFromMemory(encoded)?;
+        let decoder =
+            wic.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)?;
+        let frame = decoder.GetFrame(0)?;
+        let converter = wic.CreateFormatConverter()?;
+        converter.Initialize(
+            &frame,
+            &GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone,
+            None,
+            0.0,
+            WICBitmapPaletteTypeMedianCut,
+        )?;
+        let bitmap = dc.CreateBitmapFromWicBitmap(&converter, None)?;
+        let size = bitmap.GetPixelSize();
+        let (pw, ph) = (size.width as f32, size.height as f32);
+        let k = (w / pw).max(h / ph);
+        let (cw, ch) = (w / k, h / k);
+        let source = D2D_RECT_F {
+            left: (pw - cw) / 2.0,
+            top: (ph - ch) / 2.0,
+            right: (pw + cw) / 2.0,
+            bottom: (ph + ch) / 2.0,
+        };
+        let dest = D2D_RECT_F {
+            left: 0.0,
+            top: 0.0,
+            right: w,
+            bottom: h,
+        };
+        let picture = || {
             dc.DrawBitmap(
                 &bitmap,
                 Some(&dest),
@@ -419,10 +461,52 @@ impl Renderer {
                 D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC,
                 Some(&source),
                 None,
+            )
+        };
+        picture();
+        let Some((scene, theme)) = scene else {
+            return Ok(());
+        };
+        let mut outer = Matrix3x2::default();
+        dc.GetTransform(&mut outer);
+        // The picture's own pixels, from here on.
+        let own =
+            Matrix3x2::translation(-source.left, -source.top) * Matrix3x2::scale(k, k) * outer;
+        let draw = |over: &Over| {
+            dc.SetTransform(
+                &(Matrix3x2::scale(over.scale, over.scale)
+                    * Matrix3x2::translation(over.x, over.y)
+                    * own),
             );
-            Ok(())
-        })?;
-        Ok(surface)
+            self.draw_items(dc, over.layout, k * over.scale, theme)
+        };
+        for over in &scene.under {
+            draw(over)?;
+        }
+        if let Some(card) = scene.card {
+            // The card, as it was, over what's under it.
+            dc.SetTransform(&own);
+            let mask = self.d2d.CreateRoundedRectangleGeometry(&card)?;
+            let mut layer = D2D1_LAYER_PARAMETERS1 {
+                contentBounds: card.rect,
+                geometricMask: std::mem::ManuallyDrop::new(Some(mask.cast()?)),
+                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                maskTransform: Matrix3x2::identity(),
+                opacity: 1.0,
+                opacityBrush: std::mem::ManuallyDrop::new(None),
+                layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+            };
+            dc.PushLayer(&layer, None);
+            dc.SetTransform(&outer);
+            picture();
+            dc.PopLayer();
+            std::mem::ManuallyDrop::drop(&mut layer.geometricMask);
+        }
+        for over in &scene.on {
+            draw(over)?;
+        }
+        dc.SetTransform(&outer);
+        Ok(())
     }
 
     /// A surface `w` by `h` pixels, at least one and at most `max_px`:
@@ -503,5 +587,71 @@ fn erfc(x: f32) -> f32 {
         r
     } else {
         2.0 - r
+    }
+}
+
+/// 0xRRGGBB, as Direct2D has colors.
+fn hex(c: u32) -> D2D1_COLOR_F {
+    let [_, r, g, b] = c.to_be_bytes();
+    to_d2d(crate::theme::rgb(r, g, b))
+}
+
+#[cfg(test)]
+impl Renderer {
+    /// What [`Renderer::draw_scene`] draws, as rows of BGRA bytes, premultiplied.
+    pub fn scene_pixels(
+        &self,
+        encoded: &[u8],
+        w: u32,
+        h: u32,
+        scene: Option<(&Scene, &Theme)>,
+    ) -> Result<Vec<u8>> {
+        unsafe {
+            let dc =
+                (self.d2d_device.borrow()).CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
+            let format = D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            };
+            let props = |options| D2D1_BITMAP_PROPERTIES1 {
+                pixelFormat: format,
+                dpiX: 96.0,
+                dpiY: 96.0,
+                bitmapOptions: options,
+                colorContext: std::mem::ManuallyDrop::new(None),
+            };
+            let size = D2D_SIZE_U {
+                width: w,
+                height: h,
+            };
+            let target = dc.CreateBitmap(
+                size,
+                None,
+                0,
+                &props(D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW),
+            )?;
+            dc.SetTarget(&target);
+            dc.BeginDraw();
+            dc.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+            dc.Clear(None);
+            let drawn = self.paint_scene(&dc, encoded, w as f32, h as f32, scene);
+            dc.EndDraw(None, None)?;
+            drawn?;
+            let read = dc.CreateBitmap(
+                size,
+                None,
+                0,
+                &props(D2D1_BITMAP_OPTIONS_CPU_READ | D2D1_BITMAP_OPTIONS_CANNOT_DRAW),
+            )?;
+            read.CopyFromBitmap(None, &target, None)?;
+            let mapped = read.Map(D2D1_MAP_OPTIONS_READ)?;
+            let mut out = Vec::with_capacity((w * h * 4) as usize);
+            for row in 0..h as usize {
+                let p = mapped.bits.add(row * mapped.pitch as usize);
+                out.extend_from_slice(std::slice::from_raw_parts(p, w as usize * 4));
+            }
+            read.Unmap()?;
+            Ok(out)
+        }
     }
 }
