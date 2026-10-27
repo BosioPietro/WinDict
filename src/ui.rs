@@ -3,6 +3,7 @@
 //! text sprites, and the animations they move with. The introduction and
 //! the setup share more still, in [`picture_card`].
 
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -20,7 +21,7 @@ use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::{Vector2, Vector3};
 
-use crate::render::{Layout, Renderer};
+use crate::render::{Layout, Moving, Placed, Renderer};
 use crate::theme::Theme;
 
 mod button;
@@ -244,6 +245,142 @@ impl Text {
 
     pub fn clear(&self) {
         let _ = self.brush.SetSurface(None::<&ICompositionSurface>);
+    }
+}
+
+/// How long a box takes to change between shut and open.
+pub const MORPH_MS: u64 = 167;
+
+/// A box's [`Text`] turning between shut and open: what's the same in
+/// both, the language's name and the chevron, moves from where it was to
+/// where it goes, the chevron turning over, as the rest of what it showed
+/// fades away over what it shows now.
+pub struct Morph {
+    /// The rest of what it showed, under what moves and what's on it.
+    visual: SpriteVisual,
+    brush: CompositionSurfaceBrush,
+    name: Part,
+    chevron: Part,
+    open: Cell<bool>,
+}
+
+/// One of what moves in a box: what it shows now, and what it showed,
+/// leaving.
+struct Part {
+    now: Text,
+    was: Text,
+}
+
+impl Part {
+    fn new(c: &Compositor, parent: &ContainerVisual) -> Result<Part> {
+        let was = Text::new(c, parent)?;
+        was.visual.SetOpacity(0.0)?;
+        Ok(Part {
+            now: Text::new(c, parent)?,
+            was,
+        })
+    }
+
+    /// Shows `placed`; when `turn`, what it showed leaves as it comes, the
+    /// one fading into the other on its way from where it was to where it
+    /// goes, turning `turn` degrees.
+    fn show(
+        &self,
+        anim: &Animator,
+        r: &Renderer,
+        placed: &Placed,
+        s: f32,
+        theme: &Theme,
+        turn: Option<f32>,
+    ) -> Result<()> {
+        let (now, was) = (&self.now.visual, &self.was.visual);
+        let at = v3((placed.x * s).round(), (placed.y * s).round());
+        let properties = ["Offset", "Opacity", "RotationAngleInDegrees"];
+        if turn.is_some() {
+            Animator::stop(now, &properties);
+            Animator::stop(was, &properties);
+            self.was.brush.SetSurface(&self.now.brush.Surface()?)?;
+            was.SetSize(now.Size()?)?;
+            was.SetCenterPoint(now.CenterPoint()?)?;
+            was.SetOffset(now.Offset()?)?;
+        }
+        let size = self.now.show(r, &placed.layout, s, theme)?;
+        now.SetCenterPoint(v3(size.X / 2.0, size.Y / 2.0))?;
+        let Some(degrees) = turn else {
+            now.SetOffset(at)?;
+            return Ok(());
+        };
+        was.SetRotationAngleInDegrees(0.0)?;
+        was.SetOpacity(1.0)?;
+        now.SetOffset(was.Offset()?)?;
+        now.SetRotationAngleInDegrees(-degrees)?;
+        now.SetOpacity(0.0)?;
+        let ease = &anim.fade;
+        for (visual, opacity, angle) in [(was, 0.0, degrees), (now, 1.0, 0.0)] {
+            anim.vector3(visual, "Offset", at, MORPH_MS, 0, ease)?;
+            anim.scalar(visual, "Opacity", opacity, MORPH_MS, 0, ease)?;
+            anim.scalar(visual, "RotationAngleInDegrees", angle, MORPH_MS, 0, ease)?;
+        }
+        Ok(())
+    }
+
+    fn hide(&self) -> Result<()> {
+        self.now.clear();
+        self.was.clear();
+        Ok(())
+    }
+}
+
+impl Morph {
+    pub fn new(c: &Compositor, text: &Text, open: bool) -> Result<Morph> {
+        let (visual, brush) = text_sprite(c)?;
+        visual.SetOpacity(0.0)?;
+        let parent = text.visual.cast::<ContainerVisual>()?;
+        parent.Children()?.InsertAtBottom(&visual)?;
+        // Over what fades, as it moves through it.
+        let chevron = Part::new(c, &parent)?;
+        let name = Part::new(c, &parent)?;
+        Ok(Morph {
+            visual,
+            brush,
+            name,
+            chevron,
+            open: Cell::new(open),
+        })
+    }
+
+    /// Shows `layout` on `text`, open if it has a caret, with what moves in
+    /// it, `moving`, over it: if it's going from shut to open or back, it
+    /// turns from the one into the other.
+    #[allow(clippy::too_many_arguments)]
+    pub fn show(
+        &self,
+        anim: &Animator,
+        r: &Renderer,
+        text: &Text,
+        layout: &Layout,
+        moving: Option<&Moving>,
+        s: f32,
+        theme: &Theme,
+    ) -> Result<()> {
+        let open = layout.caret.is_some();
+        let turning = self.open.replace(open) != open;
+        if turning {
+            self.brush.SetSurface(&text.brush.Surface()?)?;
+            self.visual.SetSize(text.visual.Size()?)?;
+            Animator::stop(&self.visual, &["Opacity"]);
+            self.visual.SetOpacity(1.0)?;
+            anim.scalar(&self.visual, "Opacity", 0.0, MORPH_MS, 0, &anim.fade)?;
+        }
+        text.show(r, layout, s, theme)?;
+        let Some(moving) = moving else {
+            self.name.hide()?;
+            return self.chevron.hide();
+        };
+        let turn = |degrees| turning.then_some(degrees);
+        self.name.show(anim, r, &moving.name, s, theme, turn(0.0))?;
+        self.chevron
+            .show(anim, r, &moving.chevron, s, theme, turn(180.0))
     }
 }
 

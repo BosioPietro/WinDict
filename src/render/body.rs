@@ -334,27 +334,35 @@ impl Renderer {
     }
 
     /// The box of the language WinDict is shown in, `language`'s code,
-    /// `width` wide, with `picker`'s list under it while it's open.
+    /// `width` wide, with `picker`'s list under it while it's open, and
+    /// what moves in it as it opens or shuts, apart.
     pub fn layout_interface(
         &self,
         language: &str,
         picker: Option<&Picker>,
         width: f32,
-    ) -> Result<Layout> {
+    ) -> Result<(Layout, Moving)> {
         let mut out = Stack::default();
-        self.layout_select(&mut out, 0.0, width, Target::Interface, language, picker)?;
+        let (chevron, name) =
+            self.layout_select(&mut out, 0.0, width, Target::Interface, language, picker)?;
+        // The name was laid out after the chevron, so it goes first. It has
+        // room for what overhangs its box; the chevron turns about its
+        // middle, so it has none.
+        let name = take(&mut out.items, name, 2.0);
+        let chevron = take(&mut out.items, chevron, 0.0);
         out.y += SELECT_H;
         if let Some(picker) = picker {
             self.layout_picker(&mut out, picker, language, width)?;
         }
-        Ok(Layout {
+        let layout = Layout {
             items: out.items,
             width,
             height: out.y,
             links: out.links,
             caret: out.caret,
             list: out.list,
-        })
+        };
+        Ok((layout, Moving { name, chevron }))
     }
 
     /// A box for each language, which lists the others to pick from, and
@@ -396,7 +404,8 @@ impl Renderer {
 
     /// The box showing `language`, `x` from the left and `width` wide,
     /// which a click on opens to `target`. While `picker` is open on it, it
-    /// shows what's typed instead.
+    /// shows what's typed instead. Returns where in `out`'s items its
+    /// chevron and its text are.
     pub(super) fn layout_select(
         &self,
         out: &mut Stack,
@@ -405,7 +414,7 @@ impl Renderer {
         target: Target,
         language: &str,
         picker: Option<&Picker>,
-    ) -> Result<()> {
+    ) -> Result<(usize, usize)> {
         let y = out.y;
         out.items.push(Item::Shape {
             x,
@@ -441,6 +450,7 @@ impl Renderer {
         let chevron = self.text(chevron, &self.formats.icon, width)?;
         let (chevron_w, chevron_h, _) = metrics(&chevron);
         let chevron_x = x + width - SELECT_PAD - chevron_w;
+        let chevron_at = out.items.len();
         out.items.push(Item::Text {
             layout: chevron,
             x: chevron_x,
@@ -455,6 +465,7 @@ impl Renderer {
                 left += w + 8.0;
             }
             let name = self.text(&translate::name(language), format, chevron_x - left)?;
+            let name_at = out.items.len();
             out.items.push(Item::Text {
                 layout: name,
                 x: left,
@@ -462,7 +473,7 @@ impl Renderer {
                 ink: Ink::Primary,
                 accents: Vec::new(),
             });
-            return Ok(());
+            return Ok((chevron_at, name_at));
         };
         let glyph = self.text(SEARCH_ICON, &self.formats.icon, width)?;
         let (glyph_w, glyph_h, _) = metrics(&glyph);
@@ -484,6 +495,7 @@ impl Renderer {
         let (mut caret_x, mut caret_y) = (0.0, 0.0);
         let mut hit = DWRITE_HIT_TEST_METRICS::default();
         unsafe { line.HitTestTextPosition(at, false, &mut caret_x, &mut caret_y, &mut hit)? };
+        let line_at = out.items.len();
         out.items.push(Item::Text {
             layout: line,
             x: left,
@@ -497,7 +509,7 @@ impl Renderer {
             width: CARET_W,
             height: hit.height,
         });
-        Ok(())
+        Ok((chevron_at, line_at))
     }
 
     /// The list of the languages `picker` lists, under the box it's open
@@ -938,5 +950,35 @@ fn list_panel(width: f32, height: f32) -> Layout {
         links: Vec::new(),
         caret: None,
         list: None,
+    }
+}
+
+/// Takes the text at `i` out of `items`, to draw apart: it, from its own top
+/// left with `room` to spare at its right, and where it was.
+fn take(items: &mut Vec<Item>, i: usize, room: f32) -> Placed {
+    let mut item = items.remove(i);
+    let (mut x, mut y, mut size) = (0.0, 0.0, (0.0, 0.0));
+    if let Item::Text {
+        layout,
+        x: at_x,
+        y: at_y,
+        ..
+    } = &mut item
+    {
+        let (w, h, _) = metrics(layout);
+        (x, y, size) = (*at_x, *at_y, (w, h));
+        (*at_x, *at_y) = (0.0, 0.0);
+    }
+    Placed {
+        layout: Layout {
+            items: vec![item],
+            width: size.0 + room,
+            height: size.1,
+            links: Vec::new(),
+            caret: None,
+            list: None,
+        },
+        x,
+        y,
     }
 }

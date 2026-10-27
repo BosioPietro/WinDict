@@ -115,13 +115,13 @@ impl Settings {
     /// view as it is: it keeps its height, its list covering the rows
     /// under it.
     pub(super) fn refresh_interface(&self) -> Result<()> {
-        let layout = self.layout_interface()?;
+        let (layout, moving) = self.layout_interface()?;
         let Some(view) = &self.view else {
             return Ok(());
         };
         let v = &view.interface;
-        v.text
-            .show(&self.renderer, &layout, self.scale, &self.theme)?;
+        let (r, s, t) = (&self.renderer, self.scale, &self.theme);
+        (v.morph).show(&self.anim, r, &v.text, &layout, Some(&moving), s, t)?;
         self.show_caret(&v.caret, &layout)
     }
 
@@ -155,9 +155,10 @@ impl Settings {
     pub(super) fn show_list(&mut self) -> Result<()> {
         let open = self.picking.as_ref().map(|p| p.on);
         let (layout, parent) = match (open, &self.view) {
-            (Some(Select::Interface), Some(view)) => {
-                (self.layout_interface()?, view.interface.text.visual.cast()?)
-            }
+            (Some(Select::Interface), Some(view)) => (
+                self.layout_interface()?.0,
+                view.interface.text.visual.cast()?,
+            ),
             (Some(Select::Translate(_)), Some(view)) => {
                 (self.layout_languages()?.0, view.boxes.text.visual.cast()?)
             }
@@ -1112,10 +1113,11 @@ impl Settings {
             .overlay
             .as_ref()
             .ok_or_else(|| windows::core::Error::from(E_UNEXPECTED))?;
-        let layout = self.layout_interface()?;
+        let (layout, moving) = self.layout_interface()?;
         let text = Text::new(c, overlay)?;
-        text.show(r, &layout, s, t)?;
         text.visual.SetOffset(at)?;
+        let morph = Morph::new(c, &text, layout.caret.is_some())?;
+        morph.show(&self.anim, r, &text, &layout, Some(&moving), s, t)?;
         let parent = text.visual.cast::<ContainerVisual>()?;
         let (caret, _) = rounded(c, r, &parent, Rect::default(), 0.0, t.accent)?;
         self.show_caret(&caret, &layout)?;
@@ -1136,7 +1138,12 @@ impl Settings {
                 .stops
                 .push((Stop::Select(Select::Interface), rect, radius));
         }
-        Ok(InterfaceView { text, caret, at })
+        Ok(InterfaceView {
+            text,
+            morph,
+            caret,
+            at,
+        })
     }
 
     /// The default languages: the setting's name and description over the

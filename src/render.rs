@@ -194,6 +194,14 @@ pub struct Heading {
     pub height: f32,
 }
 
+/// What moves in a language's box as it opens or shuts, laid out apart
+/// from the rest of it: the language's name, which slides to make room for
+/// what's before it, and the chevron, which turns over.
+pub struct Moving {
+    pub name: Placed,
+    pub chevron: Placed,
+}
+
 /// A layout, and where it goes in another, in DIPs.
 pub struct Placed {
     pub layout: Layout,

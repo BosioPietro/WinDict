@@ -31,7 +31,7 @@ use crate::dicts;
 use crate::hotkey;
 use crate::i18n::{fill, tr, Language};
 use crate::lang::LangCode;
-use crate::render::{Face, Ink, Layout, Picker, Renderer, Tick, SELECT_H};
+use crate::render::{Face, Ink, Layout, Moving, Picker, Renderer, Tick, SELECT_H};
 use crate::selection;
 use crate::theme::Theme;
 use crate::ui::picture_card::{
@@ -40,7 +40,7 @@ use crate::ui::picture_card::{
 };
 use crate::ui::{
     self, button_width, container, outline, ring, rounded, scale, v2, v3, Animator, Button, Frame,
-    List, Rect, Text, BUTTON_H, FOCUS_OUTSET, MARGIN,
+    List, Morph, Rect, Text, BUTTON_H, FOCUS_OUTSET, MARGIN,
 };
 use crate::win::{self, Window};
 
@@ -308,6 +308,8 @@ struct StepView {
 /// rows are the intro's [`List`], shown over it.
 struct PickerView {
     text: Text,
+    /// What the box showed before it opened or shut.
+    morph: Morph,
     /// In the box, while what's typed narrows the list.
     caret: SpriteVisual,
     /// Where it is on the card, in pixels.
@@ -1282,9 +1284,9 @@ impl Intro {
         let Some(view) = self.view.as_ref().and_then(|v| v.step.picker.as_ref()) else {
             return self.list.hide(&self.anim, LEAVE_MS);
         };
-        let layout = self.layout_picker(step, view.rows)?;
+        let (layout, moving) = self.layout_picker(step, view.rows)?;
         let (anim, r, t, s) = (&self.anim, &self.renderer, &self.theme, self.scale);
-        view.text.show(r, &layout, s, t)?;
+        (view.morph).show(anim, r, &view.text, &layout, moving.as_ref(), s, t)?;
         match layout.caret {
             Some(m) => {
                 view.caret
@@ -1309,8 +1311,8 @@ impl Intro {
 
     /// The box of the language WinDict is shown in, with `rows` of the list
     /// under it while it's open, or the dictionaries, `rows` of them at
-    /// once.
-    fn layout_picker(&self, step: Step, rows: usize) -> Result<Layout> {
+    /// once; and what moves in the box as it opens or shuts.
+    fn layout_picker(&self, step: Step, rows: usize) -> Result<(Layout, Option<Moving>)> {
         let r = &self.renderer;
         if step == Step::Languages {
             let picker = self.picking.as_ref().map(|p| Picker {
@@ -1320,7 +1322,9 @@ impl Intro {
                 highlight: p.highlight,
                 rows,
             });
-            return r.layout_interface(self.options.interface.code(), picker.as_ref(), TEXT_W);
+            let language = self.options.interface.code();
+            let (layout, moving) = r.layout_interface(language, picker.as_ref(), TEXT_W)?;
+            return Ok((layout, Some(moving)));
         }
         // English, which comes with WinDict and can't be unticked here,
         // then those to download.
@@ -1337,7 +1341,10 @@ impl Intro {
                 aside,
             })
             .collect();
-        r.layout_ticks(&ticks, self.tick_highlight(), rows, TEXT_W)
+        Ok((
+            r.layout_ticks(&ticks, self.tick_highlight(), rows, TEXT_W)?,
+            None,
+        ))
     }
 
     /// What's said at the right of a dictionary's row: how big it is, or
@@ -1559,11 +1566,12 @@ impl Intro {
                 } else {
                     Tick::rows_in(CARD_H - PAD_BOTTOM - BUTTON_H - NOTE_ROOM - top)
                 };
-                let layout = self.layout_picker(step, rows)?;
+                let (layout, moving) = self.layout_picker(step, rows)?;
                 let picker = Text::new(c, &view.text)?;
-                picker.show(r, &layout, s, t)?;
                 let at = v3(x, y);
                 picker.visual.SetOffset(at)?;
+                let morph = Morph::new(c, &picker, layout.caret.is_some())?;
+                morph.show(&self.anim, r, &picker, &layout, moving.as_ref(), s, t)?;
                 let parent = picker.visual.cast::<ContainerVisual>()?;
                 let (caret, _) = rounded(c, r, &parent, Rect::default(), 0.0, t.accent)?;
                 caret.SetOpacity(0.0)?;
@@ -1589,6 +1597,7 @@ impl Intro {
                 }
                 view.picker = Some(PickerView {
                     text: picker,
+                    morph,
                     caret,
                     at,
                     rows,

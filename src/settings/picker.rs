@@ -59,8 +59,9 @@ impl Settings {
     }
 
     /// The box of the language WinDict is shown in, with the list that
-    /// covers the rows under it while it's open.
-    pub(super) fn layout_interface(&self) -> Result<Layout> {
+    /// covers the rows under it while it's open, and what moves in the box
+    /// as it opens or shuts.
+    pub(super) fn layout_interface(&self) -> Result<(Layout, Moving)> {
         let picker = self.picker();
         let open = picker
             .as_ref()
@@ -107,7 +108,7 @@ impl Settings {
                 x: view.interface.at.X,
                 y: view.interface.at.Y,
                 w: (INTERFACE_W * self.scale).round(),
-                h: (self.layout_interface()?.height * self.scale).ceil(),
+                h: (self.layout_interface()?.0.height * self.scale).ceil(),
             },
             Select::Translate(_) => view.translate_at,
         };

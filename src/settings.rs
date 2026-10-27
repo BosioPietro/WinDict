@@ -42,13 +42,13 @@ use crate::hotkey::{self, held_modifiers, is_modifier, Hotkey};
 use crate::i18n::{self, tr, Language, Strings};
 use crate::lang::LangCode;
 use crate::render::{
-    Align, Face, Ink, Layout, Picker, Renderer, Side, Target, PICKER_ROWS, SELECT_H,
+    Align, Face, Ink, Layout, Moving, Picker, Renderer, Side, Target, PICKER_ROWS, SELECT_H,
 };
 use crate::selection;
 use crate::theme::Theme;
 use crate::ui::{
-    self, scale, ts, v2, v3, Animator, Frame, List, Push, Rect, ScrollFade, Scrollbar, Scroller,
-    Text, Track, MARGIN,
+    self, scale, ts, v2, v3, Animator, Frame, List, Morph, Push, Rect, ScrollFade, Scrollbar,
+    Scroller, Text, Track, MARGIN,
 };
 use crate::win::{self, Window};
 
@@ -308,6 +308,8 @@ struct BoxesView {
 /// its group, so that its list covers the rows under it.
 struct InterfaceView {
     text: Text,
+    /// What it showed before it opened or shut.
+    morph: Morph,
     caret: SpriteVisual,
     /// In the scroller.
     at: Vector3,
