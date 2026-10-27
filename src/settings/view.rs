@@ -21,6 +21,7 @@ impl Settings {
     pub(super) fn replace_view(&mut self, crossfade: bool) -> Result<()> {
         let children = self.frame.card.Children()?;
         if let Some(old) = self.fading.take() {
+            self.release_list()?;
             children.Remove(&old)?;
         }
         let view = self.build()?;
@@ -30,6 +31,7 @@ impl Settings {
                 anim.scalar(&old.content, "Opacity", 0.0, THEME_MS, 0, &anim.fade)?;
                 self.fading = Some(old.content);
             } else {
+                self.release_list()?;
                 children.Remove(&old.content)?;
             }
         }
@@ -51,6 +53,7 @@ impl Settings {
     pub(super) fn slide_view(&mut self) -> Result<()> {
         let children = self.frame.card.Children()?;
         if let Some(old) = self.fading.take() {
+            self.release_list()?;
             children.Remove(&old)?;
         }
         let view = self.build()?;
@@ -132,6 +135,19 @@ impl Settings {
         caret.SetOffset(v3((m.x * s).round(), (m.y * s).round()))?;
         caret.SetSize(v2((m.width * s).round().max(1.0), (m.height * s).round()))?;
         ui::blink(&self.anim.compositor, caret)
+    }
+
+    /// Takes the list out of the views on their way out, before they're let
+    /// go of, keeping it only in the current view's boxes.
+    fn release_list(&self) -> Result<()> {
+        let keep = match &self.view {
+            Some(view) => vec![
+                view.interface.text.visual.cast()?,
+                view.boxes.text.visual.cast()?,
+            ],
+            None => Vec::new(),
+        };
+        self.list.detach_unless(&keep)
     }
 
     /// Shows the list of languages under the box being picked in, or takes

@@ -4,7 +4,7 @@
 //! them are past, with a scrollbar of its own and a fill behind the row
 //! Enter picks that fades from row to row.
 
-use windows::core::{Interface, Result};
+use windows::core::{IUnknown, Interface, Result};
 use windows::UI::Composition::*;
 
 use super::{
@@ -123,6 +123,24 @@ impl List {
             old.Children()?.Remove(&self.root)?;
         }
         parent.Children()?.InsertAtTop(&self.root)
+    }
+
+    /// Takes the list out of wherever it is, unless that's one of `keep`,
+    /// as it must be before a view it's in is let go of: a visual goes
+    /// closed with the tree it's in.
+    pub fn detach_unless(&self, keep: &[ContainerVisual]) -> Result<()> {
+        let Ok(parent) = self.root.Parent() else {
+            return Ok(());
+        };
+        // The same visual can come back through another pointer: only
+        // IUnknown tells them apart.
+        let at: IUnknown = parent.cast()?;
+        for v in keep {
+            if v.cast::<IUnknown>()? == at {
+                return Ok(());
+            }
+        }
+        parent.Children()?.Remove(&self.root)
     }
 
     pub fn apply_theme(&self, t: &Theme) -> Result<()> {
