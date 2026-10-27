@@ -2013,8 +2013,8 @@ mod tests {
                 Languages,
                 Lookup,
                 Translate,
-                AboveStart,
                 Dictionaries,
+                AboveStart,
                 Ready
             ]
         );
