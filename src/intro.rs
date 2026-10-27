@@ -350,6 +350,11 @@ pub struct Intro {
     view: Option<View>,
     /// What's on its way out, fading: steps, and views of an older theme.
     gone: Vec<Visual>,
+    /// The language the view says what it says in.
+    built_in: Language,
+    /// While the box picking the language moves over the view, shown in
+    /// another, to where it goes in it: what's in its place there.
+    landing: Option<Visual>,
     steps: Vec<Step>,
     /// Which of them shows.
     at: usize,
@@ -408,6 +413,8 @@ impl Intro {
             frame,
             view: None,
             gone: Vec::new(),
+            built_in: crate::i18n::current(),
+            landing: None,
             steps: Step::all(false),
             at: 0,
             shortcuts: Shortcuts::default(),
@@ -764,6 +771,7 @@ impl Intro {
             return self.show_note();
         }
         win::kill_timer(self.hwnd, TIMER_GONE);
+        self.land()?;
         self.release_list()?;
         for gone in self.gone.drain(..) {
             if let Ok(parent) = gone.Parent() {
@@ -1020,6 +1028,7 @@ impl Intro {
     /// the old text slides away and fades, and the new slides in after it
     /// from the side `to` is on.
     fn go(&mut self, to: usize) -> Result<()> {
+        self.land()?;
         let forward = to > self.at;
         self.at = to;
         (self.picking, self.tick_at) = (None, None);
@@ -1430,11 +1439,19 @@ impl Intro {
     // -----------------------------------------------------------------------
     // Building the visuals
 
-    /// Builds the view afresh for the current scale and theme. With
-    /// `crossfade`, the old view fades out as the new one fades in;
-    /// otherwise it goes at once.
+    /// Builds the view afresh for the current scale, theme and language.
+    /// With `crossfade`, or in another language, the old view fades out as
+    /// the new one fades in; otherwise it goes at once.
     fn replace_view(&mut self, crossfade: bool) -> Result<()> {
-        let view = self.build()?;
+        self.land()?;
+        let language = crate::i18n::current();
+        let relanguage = self.view.is_some() && language != self.built_in;
+        self.built_in = language;
+        let crossfade = crossfade || relanguage;
+        let mut view = self.build()?;
+        if relanguage {
+            self.keep_box(&mut view)?;
+        }
         let anim = &self.anim;
         if let Some(old) = self.view.replace(view) {
             if crossfade {
@@ -1459,6 +1476,57 @@ impl Intro {
         self.show_picker()?;
         self.show_hover(self.hovered)?;
         self.show_focus()
+    }
+
+    /// The language it's shown in was just picked in the box: rather than
+    /// fade with the rest, the box stays as it is, still turning shut, and
+    /// moves over `view` to where it goes there, as what's said around it
+    /// changes.
+    fn keep_box(&mut self, view: &mut View) -> Result<()> {
+        if self.steps[self.at] != Step::Languages {
+            return Ok(());
+        }
+        let Some(was) = self.view.as_mut().and_then(|v| v.step.picker.as_mut()) else {
+            return Ok(());
+        };
+        let Some(new) = view.step.picker.as_mut() else {
+            return Ok(());
+        };
+        let kept: Visual = was.text.visual.cast()?;
+        let landing: Visual = new.text.visual.cast()?;
+        landing.SetOpacity(0.0)?;
+        if let Ok(parent) = kept.Parent() {
+            parent.Children()?.Remove(&kept)?;
+        }
+        self.frame.card.Children()?.InsertAtTop(&kept)?;
+        std::mem::swap(&mut was.text, &mut new.text);
+        std::mem::swap(&mut was.morph, &mut new.morph);
+        std::mem::swap(&mut was.caret, &mut new.caret);
+        let anim = &self.anim;
+        anim.vector3(&kept, "Offset", new.at, THEME_MS, 0, &anim.fade)?;
+        self.landing = Some(landing);
+        Ok(())
+    }
+
+    /// The box [`Self::keep_box`] moved is where it goes: it goes into the
+    /// view, in what was in its place.
+    fn land(&mut self) -> Result<()> {
+        let Some(landing) = self.landing.take() else {
+            return Ok(());
+        };
+        let Ok(parent) = landing.Parent() else {
+            return Ok(());
+        };
+        if let Some(picker) = self.view.as_ref().and_then(|v| v.step.picker.as_ref()) {
+            let kept: Visual = picker.text.visual.cast()?;
+            Animator::stop(&kept, &["Offset"]);
+            if let Ok(card) = kept.Parent() {
+                card.Children()?.Remove(&kept)?;
+            }
+            kept.SetOffset(picker.at)?;
+            parent.Children()?.InsertAbove(&kept, &landing)?;
+        }
+        parent.Children()?.Remove(&landing)
     }
 
     fn build(&self) -> Result<View> {
