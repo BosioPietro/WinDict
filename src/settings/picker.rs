@@ -31,6 +31,7 @@ impl Settings {
                 caret: p.query.caret_utf16(),
                 matches: &p.matches,
                 highlight: p.highlight,
+                rows: PICKER_ROWS,
             };
             (p.on, picker)
         })

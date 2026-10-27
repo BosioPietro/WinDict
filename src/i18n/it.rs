@@ -104,6 +104,15 @@ pub const IT: Strings = Strings {
     intro_back: "Indietro",
     intro_next: "Avanti",
     intro_done: "Fine",
+    intro_languages: "Benvenuto in WinDict",
+    intro_languages_detail: "Cerca e traduci parole ovunque in Windows. Per iniziare, scegli \
+        la lingua di WinDict; potrai cambiarla quando vuoi nelle impostazioni.",
+    intro_dictionaries: "Aggiungi dizionari",
+    intro_dictionaries_detail: "L\u{2019}inglese è incluso in WinDict. Spunta le altre \
+        lingue in cui cercare le parole: si scaricano quando premi Scarica.",
+    intro_download: "Scarica",
+    intro_built_in: "Incluso",
+    intro_size: "{size} MB",
     intro_lookup: "Cerca qualsiasi parola",
     intro_lookup_detail: "Seleziona una parola in qualsiasi app e premi {hotkey}: la sua \
         definizione si apre in una scheda accanto. Senza nulla di selezionato, gli stessi \

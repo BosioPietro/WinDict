@@ -555,7 +555,7 @@ impl Renderer {
                 accents: Vec::new(),
             });
         }
-        let scrolls = picker.matches.len() > PICKER_ROWS;
+        let scrolls = picker.matches.len() > picker.shown();
         let right = width - SELECT_PAD - if scrolls { 6.0 } else { 0.0 };
         for (i, code) in picker.matches.iter().enumerate() {
             let y = i as f32 * ROW_H;
@@ -621,6 +621,152 @@ impl Renderer {
             items: out.items,
             width,
             height: picker.matches.len().max(1) as f32 * ROW_H,
+            links: out.links,
+            caret: None,
+            list: None,
+        })
+    }
+
+    /// A list of languages to tick, `width` wide, `shown` rows of it at
+    /// once and the rest scrolling, the fill behind `highlight`'s row.
+    /// Nothing's drawn here: the outline and the rows are its list's (see
+    /// [`ListLayout`]).
+    pub fn layout_ticks(
+        &self,
+        ticks: &[Tick],
+        highlight: Option<usize>,
+        shown: usize,
+        width: f32,
+    ) -> Result<Layout> {
+        let shown = shown.clamp(1, ticks.len().max(1));
+        let height = 2.0 * LIST_PAD + shown as f32 * TICK_ROW_H;
+        let row_w = width - 2.0 * LIST_PAD;
+        let list = ListLayout {
+            panel: list_panel(width, height),
+            rows: self.layout_tick_rows(ticks, ticks.len() > shown, row_w)?,
+            frame: Mark {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height,
+            },
+            viewport: Mark {
+                x: LIST_PAD,
+                y: LIST_PAD,
+                width: row_w,
+                height: height - 2.0 * LIST_PAD,
+            },
+            row_h: TICK_ROW_H,
+            radius: CONTROL_RADIUS,
+            highlight,
+        };
+        Ok(Layout {
+            items: Vec::new(),
+            width,
+            height,
+            links: Vec::new(),
+            caret: None,
+            list: Some(Box::new(list)),
+        })
+    }
+
+    /// Every language `ticks` lists, a row each, `width` wide: its box,
+    /// its flag, its name in itself and in English, and what's said at its
+    /// right, clear of the scrollbar when it `scrolls`.
+    fn layout_tick_rows(&self, ticks: &[Tick], scrolls: bool, width: f32) -> Result<Layout> {
+        let mut out = Stack::default();
+        let format = &self.formats.suggestion;
+        let line_h = metrics(&self.text("Ag", format, width)?).1;
+        let right = width - SELECT_PAD - if scrolls { 6.0 } else { 0.0 };
+        for (i, tick) in ticks.iter().enumerate() {
+            let y = i as f32 * TICK_ROW_H;
+            let line_y = y + ((TICK_ROW_H - line_h) / 2.0).round();
+            let box_y = y + ((TICK_ROW_H - TICK_BOX) / 2.0).round();
+            let mut x = SELECT_PAD;
+            // Ticked, it's filled with the accent, or dimmed when it has to be.
+            let fill = match (tick.on, tick.fixed) {
+                (true, true) => Paint::Disabled,
+                (true, false) => Paint::Accent,
+                (false, _) => Paint::Sunken,
+            };
+            out.items.push(Item::Shape {
+                x,
+                y: box_y,
+                width: TICK_BOX,
+                height: TICK_BOX,
+                radius: TICK_RADIUS,
+                fill: Some(fill),
+                stroke: (!tick.on).then_some(Paint::StrongStroke),
+            });
+            if tick.on {
+                let check = self.text(CHECK_ICON, &self.formats.icon, width)?;
+                let (check_w, check_h, _) = metrics(&check);
+                out.items.push(Item::Text {
+                    layout: check,
+                    x: x + ((TICK_BOX - check_w) / 2.0).round(),
+                    y: box_y + ((TICK_BOX - check_h) / 2.0).round(),
+                    ink: Ink::OnAccent,
+                    accents: Vec::new(),
+                });
+            }
+            x += TICK_BOX + 12.0;
+            x += self.badge(&mut out, tick.code, x, line_y, line_h)? + 10.0;
+
+            let mut end = right;
+            if !tick.aside.is_empty() {
+                let aside = self.text(tick.aside, &self.formats.footer, width)?;
+                let (aside_w, aside_h, _) = metrics(&aside);
+                end -= aside_w;
+                out.items.push(Item::Text {
+                    layout: aside,
+                    x: end,
+                    y: y + ((TICK_ROW_H - aside_h) / 2.0).round(),
+                    ink: Ink::Secondary,
+                    accents: Vec::new(),
+                });
+                end -= 8.0;
+            }
+            let ink = if tick.fixed {
+                Ink::Secondary
+            } else {
+                Ink::Primary
+            };
+            let name = translate::name(tick.code);
+            let line = self.text(&name, format, (end - x).max(1.0))?;
+            let (w, _, _) = metrics(&line);
+            out.items.push(Item::Text {
+                layout: line,
+                x,
+                y: line_y,
+                ink,
+                accents: Vec::new(),
+            });
+            x += w + 8.0;
+            // Its name in English too, where that's another.
+            if let Some(english) = translate::english_name(tick.code).filter(|e| *e != name) {
+                if end - x > 30.0 {
+                    let line = self.text(english, format, end - x)?;
+                    out.items.push(Item::Text {
+                        layout: line,
+                        x,
+                        y: line_y,
+                        ink: Ink::Tertiary,
+                        accents: Vec::new(),
+                    });
+                }
+            }
+            out.links.push(Link {
+                x: 0.0,
+                y,
+                width,
+                height: TICK_ROW_H,
+                target: Target::Pick(LangCode::new(tick.code)),
+            });
+        }
+        Ok(Layout {
+            items: out.items,
+            width,
+            height: ticks.len().max(1) as f32 * TICK_ROW_H,
             links: out.links,
             caret: None,
             list: None,

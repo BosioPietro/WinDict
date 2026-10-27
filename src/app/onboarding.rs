@@ -1,6 +1,7 @@
-//! The introduction shown the first time WinDict starts (see `intro`): a
-//! tour of the shortcuts, each with a card to show it, and, in the
-//! installed copy, the offer to show the card above Start and Search (see
+//! The introduction shown the first time WinDict starts (see `intro`): the
+//! language WinDict is shown in and the dictionaries to download, a tour of
+//! the shortcuts, each with a card to show it, and, in the installed copy,
+//! the offer to show the card above Start and Search (see
 //! `installed::set_ui_access`).
 
 use super::*;
@@ -16,7 +17,7 @@ const EXAMPLE_PASSAGE: &str = "I'll keep you in the loop";
 impl App {
     /// At start, when the introduction hasn't been shown yet.
     pub(super) fn start_onboarding(&mut self) {
-        self.open_intro(Step::Lookup);
+        self.open_intro(Step::Languages);
     }
 
     /// Opens the introduction on `start`. Should it fail, the notification
@@ -30,8 +31,10 @@ impl App {
                 .show(win::cursor_pos(), theme, steps, start, shortcuts, options)
                 .is_ok()
         });
-        match self.intro.as_ref().filter(|_| shown) {
+        let languages = self.settings_values().config.languages;
+        match self.intro.as_mut().filter(|_| shown) {
             Some(intro) => {
+                let _ = intro.show_languages(&languages);
                 selection::take_foreground(intro.hwnd);
                 true
             }
@@ -69,6 +72,7 @@ impl App {
             online: self.config.online_lookup,
             ui_access: installed::ui_access_on(),
             autostart: autostart::is_enabled(),
+            interface: self.config.ui_language,
         };
         (shortcuts, options)
     }
@@ -102,7 +106,26 @@ impl App {
                 autostart::set(on);
                 self.refresh_settings();
             }
+            Some(Action::Interface(language)) => {
+                self.on_setting(Change::Interface(language));
+                self.refresh_settings();
+            }
+            Some(Action::Dictionaries(chosen)) => self.choose_dictionaries(&chosen),
             None => {}
+        }
+    }
+
+    /// Looks words up in the dictionaries `chosen` on the introduction,
+    /// besides English, downloading those that aren't there, and no longer
+    /// in the others.
+    fn choose_dictionaries(&mut self, chosen: &[&str]) {
+        for download in dicts::DOWNLOADS {
+            let language = download.language;
+            let on = chosen.contains(&language);
+            let used = (self.settings_values().config.languages.iter()).any(|l| l == language);
+            if on != used {
+                self.tick_language(language.into(), on);
+            }
         }
     }
 

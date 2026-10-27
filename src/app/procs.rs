@@ -586,6 +586,18 @@ pub(super) unsafe extern "system" fn intro_proc(
             with_app(|app| app.in_intro(|i| i.release(x, y)));
             LRESULT(0)
         }
+        // A list of languages, or of dictionaries, scrolls.
+        WM_MOUSEWHEEL => {
+            let delta = (wparam.0 >> 16) as u16 as i16 as i32;
+            // The pointer's in screen coordinates here.
+            let mut pt = POINT { x, y };
+            unsafe {
+                let _ = ScreenToClient(hwnd, &mut pt);
+            }
+            let at = (pt.x, pt.y);
+            with_app(|app| app.in_intro(|i| i.wheel(delta, at).map(|_| None)));
+            LRESULT(0)
+        }
         // What slid or faded away is gone, or the dots take a step.
         WM_TIMER => {
             let id = wparam.0;
@@ -595,6 +607,12 @@ pub(super) unsafe extern "system" fn intro_proc(
         WM_KEYDOWN => {
             let key = VIRTUAL_KEY(wparam.0 as u16);
             with_app(|app| app.in_intro(|i| i.key(key)));
+            LRESULT(0)
+        }
+        // Typed in the box of languages, to narrow its list.
+        WM_CHAR => {
+            let unit = wparam.0 as u16;
+            with_app(|app| app.in_intro(|i| i.char(unit)));
             LRESULT(0)
         }
         WM_KEYUP if snip(wparam) => LRESULT(0),

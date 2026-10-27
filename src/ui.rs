@@ -30,7 +30,10 @@ mod shapes;
 
 pub mod picture_card;
 
-pub use button::{button, button_width, ring, Button, BUTTON_H, BUTTON_W, FOCUS_OUTSET};
+pub use button::{button, button_width, ring, Button, BUTTON_H, FOCUS_OUTSET};
+// The narrowest a button is: what the introduction's footer is tested with.
+#[cfg(test)]
+pub use button::BUTTON_W;
 pub use list::List;
 pub use shapes::{container, outline, rounded, Rect};
 

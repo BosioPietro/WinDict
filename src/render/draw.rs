@@ -21,6 +21,7 @@ impl Renderer {
             let tertiary = brush(theme.text_tertiary())?;
             let accent = brush(theme.accent_d2d())?;
             let critical = brush(theme.critical())?;
+            let on_accent = brush(to_d2d(theme.knob(true)))?;
             let divider = brush(theme.divider())?;
             let key = brush(theme.key())?;
             let flag_edge = brush(theme.flag_edge())?;
@@ -42,6 +43,7 @@ impl Renderer {
                             Ink::Tertiary => &tertiary,
                             Ink::Accent => &accent,
                             Ink::Critical => &critical,
+                            Ink::OnAccent => &on_accent,
                         };
                         dc.DrawTextLayout(
                             Vector2 { X: *x, Y: *y },
@@ -126,7 +128,10 @@ impl Renderer {
                                 Paint::Control => to_d2d(theme.control()),
                                 Paint::ControlStroke => to_d2d(theme.control_stroke()),
                                 Paint::Field => to_d2d(theme.field()),
-                                Paint::Focus => theme.accent_d2d(),
+                                Paint::Focus | Paint::Accent => theme.accent_d2d(),
+                                Paint::Sunken => to_d2d(theme.sunken()),
+                                Paint::StrongStroke => to_d2d(theme.strong_stroke()),
+                                Paint::Disabled => theme.text_tertiary(),
                             })
                         };
                         // Inset by half the stroke, so it lands on whole pixels.

@@ -367,18 +367,25 @@ impl App {
     }
 
     /// Ticks the languages used, and those being downloaded, in the
-    /// settings window.
+    /// settings window and on the introduction.
     pub(super) fn show_languages(&mut self) {
         let languages = self.settings_values().config.languages;
         if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
             let _ = settings.show_languages(&languages);
         }
+        if let Some(intro) = self.intro.as_mut().filter(|i| i.visible) {
+            let _ = intro.show_languages(&languages);
+        }
     }
 
-    /// Says how `language`'s download is going in the settings window.
+    /// Says how `language`'s download is going in the settings window and
+    /// on the introduction.
     pub(super) fn show_download(&mut self, language: &str, status: Option<(&str, bool)>) {
         if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
             let _ = settings.show_download(language, status);
+        }
+        if let Some(intro) = self.intro.as_mut().filter(|i| i.visible) {
+            let _ = intro.show_download(language, status);
         }
     }
 

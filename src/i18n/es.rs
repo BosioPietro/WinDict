@@ -102,10 +102,19 @@ pub const ES: Strings = Strings {
     menu_quit: "Salir",
 
     // The introduction, shown the first time WinDict starts.
-    intro_title: "Te damos la bienvenida a WinDict",
+    intro_title: "Bienvenido a WinDict",
     intro_back: "Atrás",
     intro_next: "Siguiente",
     intro_done: "Listo",
+    intro_languages: "Bienvenido a WinDict",
+    intro_languages_detail: "Busca y traduce palabras en cualquier lugar de Windows. Para empezar, \
+        elige el idioma de WinDict; podrás cambiarlo cuando quieras en la configuración.",
+    intro_dictionaries: "Añade diccionarios",
+    intro_dictionaries_detail: "El inglés viene con WinDict. Marca los demás idiomas en \
+        los que buscar palabras: se descargan al pulsar Descargar.",
+    intro_download: "Descargar",
+    intro_built_in: "Incluido",
+    intro_size: "{size} MB",
     intro_lookup: "Busca cualquier palabra",
     intro_lookup_detail: "Selecciona una palabra en cualquier aplicación y pulsa {hotkey}: \
         su definición se abre en una tarjeta junto a ella. Si no hay nada seleccionado, \

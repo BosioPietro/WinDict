@@ -7,8 +7,10 @@
 //! the new slides in after it, line after line, while the accent dot
 //! stretches over to the step it's on.
 //!
-//! Under what a step says is what can be done there: a card opened on an
-//! example, or a switch for UI access, or for starting with Windows.
+//! Under what a step says is what can be done there: a box to pick the
+//! language WinDict is shown in from, a list of dictionaries to tick, a
+//! card opened on an example, or a switch for UI access, or for starting
+//! with Windows.
 //!
 //! The pictures are close-ups of WinDict on the Windows desktop, in light
 //! and dark: the one for the system's theme shows.
@@ -23,9 +25,14 @@ use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
 use windows_numerics::Vector3;
 
+use crate::app::edit::{Input, Motion};
+use crate::app::picking::Picking;
+use crate::dicts;
 use crate::hotkey;
-use crate::i18n::tr;
-use crate::render::{Face, Ink, Renderer};
+use crate::i18n::{fill, tr, Language};
+use crate::lang::LangCode;
+use crate::render::{Face, Ink, Layout, Picker, Renderer, Tick, SELECT_H};
+use crate::selection;
 use crate::theme::Theme;
 use crate::ui::picture_card::{
     self, Close, BUTTON_GAP, ENTER_MS, FOCUS_MS, HOVER_MS, INSET, LEAVE_MS, PAD_BOTTOM, PAD_X,
@@ -33,7 +40,7 @@ use crate::ui::picture_card::{
 };
 use crate::ui::{
     self, button_width, container, outline, ring, rounded, scale, v2, v3, Animator, Button, Frame,
-    Rect, Text, BUTTON_H, BUTTON_W, FOCUS_OUTSET, MARGIN,
+    List, Rect, Text, BUTTON_H, FOCUS_OUTSET, MARGIN,
 };
 use crate::win::{self, Window};
 
@@ -61,6 +68,14 @@ const KNOB_HOVER: f32 = 14.0;
 const NOTE_GAP: f32 = 10.0;
 /// How dim the switch is while Windows asks.
 const WAITING_OPACITY: f32 = 0.5;
+/// Between what a step says and the box or list to choose from, and the
+/// corners of the box and of the list, as the renderer draws them.
+const PICKER_GAP: f32 = 12.0;
+const SELECT_RADIUS: f32 = 5.0;
+const LIST_RADIUS: f32 = 8.0;
+/// Under the dictionaries, room for why one didn't download, over the
+/// buttons.
+const NOTE_ROOM: f32 = 34.0;
 /// The dots for the steps: the one for the step showing is longer.
 const DOT: f32 = 6.0;
 const DOT_ON: f32 = 18.0;
@@ -84,6 +99,11 @@ const TIMER_DOTS: usize = 2;
 /// A step of the introduction.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Step {
+    /// The language WinDict is shown in, which it's shown in at once.
+    Languages,
+    /// The dictionaries to download, which are downloaded once Next says
+    /// so.
+    Dictionaries,
     /// The lookup shortcut, and the box it opens with nothing selected.
     Lookup,
     /// The translation shortcut, and Ctrl+T on a card.
@@ -95,17 +115,28 @@ pub enum Step {
 }
 
 impl Step {
-    /// The steps, in order: the one about UI access only when it can be
-    /// turned on.
+    /// The steps, in order: the language first, so the rest reads in the
+    /// one chosen, the dictionaries once it's clear what they're for, and
+    /// the one about UI access only when it can be turned on.
     pub fn all(ui_access: bool) -> Vec<Step> {
-        [Step::Lookup, Step::Translate, Step::AboveStart, Step::Ready]
-            .into_iter()
-            .filter(|&step| step != Step::AboveStart || ui_access)
-            .collect()
+        use Step::*;
+        [
+            Languages,
+            Lookup,
+            Translate,
+            AboveStart,
+            Dictionaries,
+            Ready,
+        ]
+        .into_iter()
+        .filter(|&step| step != Step::AboveStart || ui_access)
+        .collect()
     }
 
     fn title(self) -> &'static str {
         match self {
+            Step::Languages => tr().intro_languages,
+            Step::Dictionaries => tr().intro_dictionaries,
             Step::Lookup => tr().intro_lookup,
             Step::Translate => tr().intro_translate,
             Step::AboveStart => tr().intro_above_start,
@@ -117,6 +148,8 @@ impl Step {
     /// show as keys.
     fn detail(self, shortcuts: &Shortcuts) -> (&'static str, Vec<(&'static str, Vec<String>)>) {
         match self {
+            Step::Languages => (tr().intro_languages_detail, Vec::new()),
+            Step::Dictionaries => (tr().intro_dictionaries_detail, Vec::new()),
             Step::Lookup => (
                 tr().intro_lookup_detail,
                 vec![("hotkey", key_names(&shortcuts.lookup))],
@@ -134,10 +167,13 @@ impl Step {
     }
 
     /// The symbol before the title, in Segoe Fluent Icons and Segoe MDL2
-    /// Assets: as on the shortcuts' rows in the settings for those, layers
-    /// for the card above Start, and a tick to finish.
+    /// Assets: a globe for the languages, a book for the dictionaries, as
+    /// on the shortcuts' rows in the settings for those, layers for the
+    /// card above Start, and a tick to finish.
     fn glyph(self) -> &'static str {
         match self {
+            Step::Languages => "\u{E774}",
+            Step::Dictionaries => "\u{E82D}",
             Step::Lookup => "\u{E721}",
             Step::Translate => "\u{E8C1}",
             Step::AboveStart => "\u{E81E}",
@@ -145,13 +181,22 @@ impl Step {
         }
     }
 
-    /// The picture, in light or `dark`.
+    /// The picture, in light or `dark`: the languages have the
+    /// translation's, and the dictionaries the definition's.
     fn picture(self, dark: bool) -> &'static [u8] {
         match (self, dark) {
-            (Step::Lookup, false) => include_bytes!("../assets/intro/lookup-light.jpg"),
-            (Step::Lookup, true) => include_bytes!("../assets/intro/lookup-dark.jpg"),
-            (Step::Translate, false) => include_bytes!("../assets/intro/translate-light.jpg"),
-            (Step::Translate, true) => include_bytes!("../assets/intro/translate-dark.jpg"),
+            (Step::Lookup | Step::Dictionaries, false) => {
+                include_bytes!("../assets/intro/lookup-light.jpg")
+            }
+            (Step::Lookup | Step::Dictionaries, true) => {
+                include_bytes!("../assets/intro/lookup-dark.jpg")
+            }
+            (Step::Translate | Step::Languages, false) => {
+                include_bytes!("../assets/intro/translate-light.jpg")
+            }
+            (Step::Translate | Step::Languages, true) => {
+                include_bytes!("../assets/intro/translate-dark.jpg")
+            }
             (Step::AboveStart, false) => include_bytes!("../assets/intro/start-light.jpg"),
             (Step::AboveStart, true) => include_bytes!("../assets/intro/start-dark.jpg"),
             (Step::Ready, false) => include_bytes!("../assets/intro/tray-light.jpg"),
@@ -186,6 +231,8 @@ pub struct Options {
     /// The card shows above Start and Search.
     pub ui_access: bool,
     pub autostart: bool,
+    /// The language WinDict is shown in.
+    pub interface: Language,
 }
 
 /// Something done in the window, for the app to carry out.
@@ -201,6 +248,13 @@ pub enum Action {
     /// [`Intro::settle_ui_access`].
     UiAccess(bool),
     Autostart(bool),
+    /// Show WinDict in this language. The window follows, with
+    /// [`Intro::update`].
+    Interface(Language),
+    /// Look words up in these languages, besides English: Next was pressed
+    /// on the dictionaries' step, which downloads those that aren't there.
+    /// How that goes is told with [`Intro::show_download`].
+    Dictionaries(Vec<&'static str>),
 }
 
 /// What's under the pointer, or has the keyboard.
@@ -213,6 +267,13 @@ enum Hit {
     ChooseShortcut,
     /// The step's switch, and its row.
     Switch,
+    /// The box the language WinDict is shown in is picked from.
+    Select,
+    /// The list of dictionaries to tick, which has the keyboard as one.
+    List,
+    /// A row of the list showing: a language that matches what's typed
+    /// in the box, or a dictionary, English first.
+    Row(usize),
 }
 
 /// A step's switch.
@@ -236,8 +297,24 @@ struct StepView {
     /// What can be clicked in it: buttons, or the switch's row.
     controls: Vec<(Hit, Button)>,
     switch: Option<SwitchView>,
-    /// Under the switch for UI access: how turning it on is going.
+    /// Under the switch for UI access: how turning it on is going. Under
+    /// the dictionaries: why one didn't download.
     note: Option<Text>,
+    /// The box to pick a language in, or the list of dictionaries.
+    picker: Option<PickerView>,
+}
+
+/// The box to pick the language WinDict is shown in, with the list under
+/// it while it's open, or the list of dictionaries to tick: the list's
+/// rows are the intro's [`List`], shown over it.
+struct PickerView {
+    text: Text,
+    /// In the box, while what's typed narrows the list.
+    caret: SpriteVisual,
+    /// Where it is on the card, in pixels.
+    at: Vector3,
+    /// How many of the list's rows show at once.
+    rows: usize,
 }
 
 /// A dot for a step.
@@ -283,6 +360,18 @@ pub struct Intro {
     note: Option<(String, bool)>,
     /// How many steps the dots have taken while Windows asks.
     dots: usize,
+    /// The list of languages open under the box, and what's typed in it.
+    picking: Option<Picking<()>>,
+    /// The rows of the list open under the box, or of the dictionaries.
+    list: List,
+    /// The dictionary's row the keyboard is on, or the pointer was last.
+    tick_at: Option<usize>,
+    /// The dictionaries ticked, and those Next has already said to have:
+    /// when there are more of the first, Next says Download.
+    chosen: Vec<&'static str>,
+    wanted: Vec<&'static str>,
+    /// How the dictionaries' downloads are going, and whether they failed.
+    downloads: Vec<(&'static str, String, bool)>,
     theme: Theme,
     scale: f32,
     hovered: Option<Hit>,
@@ -307,6 +396,8 @@ impl Intro {
         let root = compositor.CreateContainerVisual()?;
         target.SetRoot(&root)?;
         let frame = Frame::new(&compositor, &root, &theme)?;
+        let list = List::new(&compositor)?;
+        list.apply_theme(&theme)?;
         Ok(Intro {
             hwnd,
             _target: target,
@@ -323,6 +414,12 @@ impl Intro {
             waiting: false,
             note: None,
             dots: 0,
+            picking: None,
+            list,
+            tick_at: None,
+            chosen: Vec::new(),
+            wanted: Vec::new(),
+            downloads: Vec::new(),
             theme,
             scale: 1.0,
             hovered: None,
@@ -353,6 +450,8 @@ impl Intro {
         self.at = steps.iter().position(|&step| step == start).unwrap_or(0);
         (self.theme, self.scale, self.steps, self.shortcuts) = (theme, s, steps, shortcuts);
         (self.options, self.waiting, self.note) = (options, false, None);
+        self.downloads.clear();
+        (self.picking, self.tick_at) = (None, None);
         (self.hovered, self.pressed, self.focus) = (None, None, None);
         self.ring = false;
         self.retitle();
@@ -413,6 +512,35 @@ impl Intro {
         self.show_note()
     }
 
+    /// Words are looked up in `languages`, or will be once they're
+    /// downloaded: their dictionaries are ticked, and only those.
+    pub fn show_languages(&mut self, languages: &[LangCode]) -> Result<()> {
+        let used = |code: &&str| languages.iter().any(|l| l.as_str() == *code);
+        self.wanted = dicts::DOWNLOADS
+            .iter()
+            .map(|d| d.language)
+            .filter(used)
+            .collect();
+        self.chosen = self.wanted.clone();
+        if self.steps.get(self.at) == Some(&Step::Dictionaries) {
+            self.show_footer()?;
+            self.show_picker()?;
+        }
+        Ok(())
+    }
+
+    /// Says how `language`'s download is going, beside it, or, when it
+    /// failed, why, under the dictionaries. `None` once it's over.
+    pub fn show_download(&mut self, language: &str, status: Option<(&str, bool)>) -> Result<()> {
+        self.downloads.retain(|(code, ..)| *code != language);
+        if let (Some(download), Some((note, failed))) = (dicts::find(language), status) {
+            self.downloads
+                .push((download.language, note.to_owned(), failed));
+        }
+        self.show_picker()?;
+        self.show_note()
+    }
+
     /// The card, in screen pixels.
     pub fn card_rect(&self) -> RECT {
         let mut rect = RECT::default();
@@ -459,30 +587,66 @@ impl Intro {
 
     /// The pointer moved to a point in window pixels, or left.
     pub fn hover(&mut self, point: Option<(i32, i32)>) -> Result<()> {
+        // On the list's scrollbar, or dragging its thumb, nothing else is
+        // hovered.
+        let in_list = point.and_then(|(x, y)| self.list_point(x, y));
+        let on_bar = self.list.hover_bar(&self.anim, in_list)?;
+        let point = if on_bar { None } else { point };
         let hit = point.and_then(|(x, y)| self.hit_at(x, y));
         if hit == self.hovered {
             return Ok(());
         }
         let old = std::mem::replace(&mut self.hovered, hit);
         self.show_hover(old)?;
-        self.show_hover(hit)
+        self.show_hover(hit)?;
+        // Over a list, the highlight follows the pointer.
+        if let Some(picking) = self.picking.as_mut() {
+            let code = match hit {
+                Some(Hit::Row(i)) => picking.matches.get(i).copied(),
+                _ => None,
+            };
+            if code.is_some_and(|code| picking.highlight(code)) {
+                let row = picking.highlight;
+                self.list.set_highlight(&self.anim, row)?;
+            }
+            return Ok(());
+        }
+        if let Some(Hit::Row(i)) = hit {
+            self.tick_at = Some(i);
+        }
+        self.show_tick_highlight()
     }
 
     /// The left button went down at a point in window pixels.
     pub fn press(&mut self, x: i32, y: i32) -> Result<()> {
+        if let Some((lx, ly)) = self.list_point(x, y) {
+            if self.list.press(&self.anim, lx, ly)? {
+                return Ok(());
+            }
+        }
         let hit = self.hit_at(x, y);
         // The pointer's in charge now: the ring goes until Tab brings it back.
         self.ring = false;
-        if let Some(hit) = hit.filter(|&hit| hit != Hit::Close) {
-            self.focus = Some(hit);
+        if let Some(stop) = hit.and_then(|hit| self.stop(hit)) {
+            self.focus = Some(stop);
+        }
+        // A click away from the open box shuts its list.
+        let away = !matches!(hit, Some(Hit::Select | Hit::List | Hit::Row(_)));
+        if away && self.picking.take().is_some() {
+            self.show_picker()?;
         }
         self.show_focus()?;
+        self.show_tick_highlight()?;
         self.set_pressed(hit)
     }
 
     /// The left button came up at a point in window pixels: a click, if it's
     /// on what it went down on.
     pub fn release(&mut self, x: i32, y: i32) -> Result<Option<Action>> {
+        if self.list.release(&self.anim)? {
+            self.hover(Some((x, y)))?;
+            return Ok(None);
+        }
         let pressed = self.pressed;
         self.set_pressed(None)?;
         match pressed {
@@ -493,13 +657,41 @@ impl Intro {
 
     /// A key went down.
     pub fn key(&mut self, key: VIRTUAL_KEY) -> Result<Option<Action>> {
+        if self.picking.is_some() {
+            return self.picker_key(key);
+        }
         let shift = hotkey::is_held(VK_SHIFT);
-        match key {
-            VK_ESCAPE => Ok(Some(Action::Close)),
-            VK_LEFT if self.at > 0 => self.activate(Hit::Back),
-            VK_RIGHT if self.at + 1 < self.steps.len() => self.activate(Hit::Next),
-            VK_RETURN | VK_SPACE => self.activate(self.focus.unwrap_or(Hit::Next)),
-            VK_TAB => {
+        match (key, self.focus) {
+            (VK_ESCAPE, _) => Ok(Some(Action::Close)),
+            // The box opens as a combo box does.
+            (VK_RETURN | VK_SPACE | VK_F4 | VK_DOWN | VK_UP, Some(Hit::Select)) => {
+                self.ring = true;
+                self.activate(Hit::Select)
+            }
+            // In the dictionaries, the arrows go from row to row, Space
+            // ticks the one they're on, and Enter goes on, as elsewhere.
+            (VK_DOWN | VK_UP, Some(Hit::List)) => {
+                let last = dicts::DOWNLOADS.len();
+                let at = self.tick_at.unwrap_or(0);
+                self.tick_at = Some(match key {
+                    VK_DOWN => (at + 1).min(last),
+                    _ => at.saturating_sub(1),
+                });
+                self.ring = true;
+                self.show_focus()?;
+                self.show_picker()?;
+                Ok(None)
+            }
+            (VK_SPACE, Some(Hit::List)) => {
+                let at = *self.tick_at.get_or_insert(0);
+                self.ring = true;
+                self.activate(Hit::Row(at))
+            }
+            (VK_RETURN, Some(Hit::List)) => self.activate(Hit::Next),
+            (VK_LEFT, _) if self.at > 0 => self.activate(Hit::Back),
+            (VK_RIGHT, _) if self.at + 1 < self.steps.len() => self.activate(Hit::Next),
+            (VK_RETURN | VK_SPACE, focus) => self.activate(focus.unwrap_or(Hit::Next)),
+            (VK_TAB, _) => {
                 self.step_focus(!shift)?;
                 Ok(None)
             }
@@ -507,8 +699,57 @@ impl Intro {
         }
     }
 
+    /// A character was typed: while the box has the keyboard, it narrows
+    /// the list of languages, opening it first.
+    pub fn char(&mut self, unit: u16) -> Result<Option<Action>> {
+        if self.steps[self.at] != Step::Languages {
+            return Ok(None);
+        }
+        if self.picking.is_none() {
+            // Space opened it already, and control characters don't type.
+            if self.focus != Some(Hit::Select) || unit <= 0x20 || unit == 0x7F {
+                return Ok(None);
+            }
+            self.open_picker();
+        }
+        let hwnd = self.hwnd;
+        let current = self.options.interface.code();
+        let Some(picking) = self.picking.as_mut() else {
+            return Ok(None);
+        };
+        // What Space opened the box with isn't looked for.
+        if unit == 0x20 && picking.query.text().is_empty() {
+            return Ok(None);
+        }
+        match picking.query.type_unit(unit) {
+            Input::Edited => {}
+            Input::Paste => {
+                let pasted = selection::clipboard_text(hwnd).unwrap_or_default();
+                picking.query.paste(&pasted);
+            }
+            // The key going down picked it already.
+            Input::Enter | Input::Nothing => return Ok(None),
+        }
+        picking.refilter(current);
+        self.show_picker()?;
+        Ok(None)
+    }
+
+    /// Scrolls the list the pointer's on, at a point in window pixels, by
+    /// a mouse wheel delta.
+    pub fn wheel(&mut self, delta: i32, (x, y): (i32, i32)) -> Result<()> {
+        let in_list = self.list_point(x, y);
+        if !in_list.is_some_and(|(x, y)| self.list.contains(x, y)) {
+            return Ok(());
+        }
+        self.list.wheel(&self.anim, delta)?;
+        // The highlight moves to the row the pointer's on now.
+        self.hover(Some((x, y)))
+    }
+
     /// The window stopped being the active one.
     pub fn deactivate(&mut self) -> Result<()> {
+        self.list.release(&self.anim)?;
         self.set_pressed(None)
     }
 
@@ -522,6 +763,7 @@ impl Intro {
             return self.show_note();
         }
         win::kill_timer(self.hwnd, TIMER_GONE);
+        self.release_list()?;
         for gone in self.gone.drain(..) {
             if let Ok(parent) = gone.Parent() {
                 parent.Children()?.Remove(&gone)?;
@@ -536,6 +778,7 @@ impl Intro {
             return Ok(());
         }
         self.theme = theme;
+        self.list.apply_theme(&theme)?;
         let (anim, renderer, s) = (&self.anim, &self.renderer, self.scale);
         self.frame.fade_theme(anim, renderer, &theme, s, THEME_MS)?;
         self.replace_view(true)
@@ -587,14 +830,158 @@ impl Intro {
         match hit {
             Hit::Close => return Ok(Some(Action::Close)),
             Hit::Back if self.at > 0 => self.go(self.at - 1)?,
-            Hit::Next if self.at + 1 < self.steps.len() => self.go(self.at + 1)?,
+            Hit::Next if self.at + 1 < self.steps.len() => {
+                let confirmed = self.confirm();
+                self.go(self.at + 1)?;
+                return Ok(confirmed);
+            }
             Hit::Next => return Ok(Some(Action::Close)),
             Hit::Back => {}
             Hit::ShowMe => return Ok(Some(Action::ShowMe(self.steps[self.at]))),
             Hit::ChooseShortcut => return Ok(Some(Action::ChooseShortcut)),
             Hit::Switch => return self.flip(),
+            Hit::Select => {
+                if self.picking.take().is_none() {
+                    self.open_picker();
+                }
+                self.focus = Some(Hit::Select);
+                self.show_picker()?;
+            }
+            Hit::List => {}
+            Hit::Row(i) => return self.choose(i),
         }
         Ok(None)
+    }
+
+    /// Opens the list of languages WinDict can be shown in under the box,
+    /// the current one highlighted.
+    fn open_picker(&mut self) {
+        let current = self.options.interface.code();
+        let shown = |code: &str| Language::from_code(code).is_some();
+        self.picking = Some(Picking::among((), current, shown));
+    }
+
+    /// Picks the language on row `i` of the list open under the box, or
+    /// ticks the dictionary on it, or unticks it: English, on the first,
+    /// comes with WinDict.
+    fn choose(&mut self, i: usize) -> Result<Option<Action>> {
+        if let Some(picking) = self.picking.take() {
+            let language = (picking.matches.get(i).copied())
+                .and_then(Language::from_code)
+                .filter(|&l| l != self.options.interface);
+            self.focus = Some(Hit::Select);
+            self.show_picker()?;
+            // The window follows, once the app's shown WinDict in it.
+            return Ok(language.map(|l| {
+                self.options.interface = l;
+                Action::Interface(l)
+            }));
+        }
+        let download = i.checked_sub(1).and_then(|i| dicts::DOWNLOADS.get(i));
+        if self.steps[self.at] != Step::Dictionaries {
+            return Ok(None);
+        }
+        let Some(language) = download.map(|d| d.language) else {
+            return Ok(None);
+        };
+        self.tick_at = Some(i);
+        if self.chosen.contains(&language) {
+            self.chosen.retain(|&l| l != language);
+        } else {
+            self.chosen.push(language);
+        }
+        // The tick, and Next turning to Download, or back.
+        self.show_picker()?;
+        self.show_footer()?;
+        Ok(None)
+    }
+
+    /// A key pressed while the list of languages is open under the box:
+    /// Up, Down, Page Up and Page Down move the highlight, Enter picks it,
+    /// Esc and Tab shut the list, and the others move the caret in the box.
+    fn picker_key(&mut self, key: VIRTUAL_KEY) -> Result<Option<Action>> {
+        let ctrl = hotkey::is_held(VK_CONTROL);
+        let current = self.options.interface.code();
+        let rows = self.picker_rows() as isize;
+        let Some(picking) = self.picking.as_mut() else {
+            return Ok(None);
+        };
+        match key {
+            VK_ESCAPE | VK_F4 => {
+                self.picking = None;
+                self.show_picker()?;
+                return Ok(None);
+            }
+            VK_TAB => {
+                self.picking = None;
+                self.show_picker()?;
+                self.step_focus(!hotkey::is_held(VK_SHIFT))?;
+                return Ok(None);
+            }
+            VK_RETURN => {
+                let row = picking.highlight;
+                return match row {
+                    Some(row) => self.choose(row),
+                    None => Ok(None),
+                };
+            }
+            _ => {}
+        }
+        let step = match key {
+            VK_DOWN => Some(1),
+            VK_UP => Some(-1),
+            VK_NEXT => Some(rows),
+            VK_PRIOR => Some(-rows),
+            _ => None,
+        };
+        if let Some(by) = step {
+            picking.step(by);
+            self.show_picker()?;
+            return Ok(None);
+        }
+        let edit = &mut picking.query;
+        let changed = match key {
+            VK_LEFT if ctrl => edit.move_caret(Motion::WordBack),
+            VK_LEFT => edit.move_caret(Motion::CharBack),
+            VK_RIGHT if ctrl => edit.move_caret(Motion::WordForward),
+            VK_RIGHT => edit.move_caret(Motion::CharForward),
+            VK_HOME => edit.move_caret(Motion::Start),
+            VK_END => edit.move_caret(Motion::End),
+            VK_DELETE => {
+                let to = if ctrl {
+                    Motion::WordForward
+                } else {
+                    Motion::CharForward
+                };
+                if edit.delete(to) {
+                    picking.refilter(current);
+                }
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.show_picker()?;
+        }
+        Ok(None)
+    }
+
+    /// Leaving the dictionaries' step with Next: the ones ticked are the
+    /// ones to have, if that's changed.
+    fn confirm(&mut self) -> Option<Action> {
+        let same = self.chosen.len() == self.wanted.len()
+            && self.chosen.iter().all(|l| self.wanted.contains(l));
+        if self.steps[self.at] != Step::Dictionaries || same {
+            return None;
+        }
+        self.wanted = self.chosen.clone();
+        Some(Action::Dictionaries(self.chosen.clone()))
+    }
+
+    /// Next would download a dictionary that's been ticked.
+    fn to_download(&self) -> bool {
+        self.steps[self.at] == Step::Dictionaries
+            && self.chosen.iter().any(|l| !self.wanted.contains(l))
     }
 
     /// Turns the step's switch over. The one for UI access waits for
@@ -624,7 +1011,7 @@ impl Intro {
         match self.steps[self.at] {
             Step::AboveStart => self.options.ui_access,
             Step::Ready => self.options.autostart,
-            Step::Lookup | Step::Translate => false,
+            Step::Languages | Step::Dictionaries | Step::Lookup | Step::Translate => false,
         }
     }
 
@@ -634,6 +1021,7 @@ impl Intro {
     fn go(&mut self, to: usize) -> Result<()> {
         let forward = to > self.at;
         self.at = to;
+        (self.picking, self.tick_at) = (None, None);
         let Some(view) = self.view.take() else {
             return Ok(());
         };
@@ -661,13 +1049,13 @@ impl Intro {
             0,
             &anim.decelerate,
         )?;
+        // Back comes and goes, and Next turns to Done. The step goes over
+        // the buttons, for a list open over them.
+        view.content.Children()?.Remove(&view.footer)?;
+        let (footer, buttons) = self.build_footer(&view.content)?;
         let step = self.build_step(&view.content)?;
         picture_card::bring_in(&self.anim, &step.text, v3(dx, 0.0), LEAVE_MS)?;
         self.show_dots(&view.dots, true)?;
-
-        // Back comes and goes, and Next turns to Done.
-        view.content.Children()?.Remove(&view.footer)?;
-        let (footer, buttons) = self.build_footer(&view.content)?;
         self.view = Some(View {
             picture,
             step,
@@ -678,8 +1066,41 @@ impl Intro {
         self.keep_focus();
         self.show_switch(false)?;
         self.show_note()?;
+        self.show_picker()?;
         self.show_hover(self.hovered)?;
         self.show_focus()
+    }
+
+    /// Builds the buttons that go through the steps again, for what Next
+    /// says, where they were.
+    fn show_footer(&mut self) -> Result<()> {
+        let Some(view) = self.view.take() else {
+            return Ok(());
+        };
+        let children = view.content.Children()?;
+        let (footer, buttons) = self.build_footer(&view.content)?;
+        children.Remove(&footer)?;
+        children.InsertAbove(&footer, &view.footer)?;
+        children.Remove(&view.footer)?;
+        self.view = Some(View {
+            footer,
+            buttons,
+            ..view
+        });
+        self.keep_focus();
+        self.show_hover(self.hovered)?;
+        self.show_focus()
+    }
+
+    /// What has the keyboard once `hit` is clicked: the box for its list,
+    /// and the dictionaries as one for a row of them.
+    fn stop(&self, hit: Hit) -> Option<Hit> {
+        match hit {
+            Hit::Close => None,
+            Hit::Row(_) | Hit::List if self.picking.is_some() => Some(Hit::Select),
+            Hit::Row(_) => Some(Hit::List),
+            hit => Some(hit),
+        }
     }
 
     /// What had the keyboard may be gone: Next has it then.
@@ -714,7 +1135,8 @@ impl Intro {
             (Some(i), false, true) => (i + n - 1) % n,
         };
         (self.focus, self.ring) = (Some(stops[next]), true);
-        self.show_focus()
+        self.show_focus()?;
+        self.show_tick_highlight()
     }
 
     fn set_pressed(&mut self, hit: Option<Hit>) -> Result<()> {
@@ -740,6 +1162,8 @@ impl Intro {
         };
         let hover = match hit {
             Hit::Close => &view.close.hover,
+            // The list lights its rows itself.
+            Hit::List | Hit::Row(_) => return Ok(()),
             _ => match self.button(hit) {
                 Some(button) => &button.hover,
                 None => return Ok(()),
@@ -815,12 +1239,19 @@ impl Intro {
         }
     }
 
-    /// Says under the switch for UI access how turning it on is going.
+    /// Says under the switch for UI access how turning it on is going, or
+    /// under the dictionaries why one didn't download.
     fn show_note(&self) -> Result<()> {
         let Some(text) = self.view.as_ref().and_then(|view| view.step.note.as_ref()) else {
             return Ok(());
         };
-        let Some((note, failed)) = &self.note else {
+        let note = match self.steps[self.at] {
+            Step::Dictionaries => (self.downloads.iter())
+                .find(|(.., failed)| *failed)
+                .map(|(_, note, failed)| (note, failed)),
+            _ => self.note.as_ref().map(|(note, failed)| (note, failed)),
+        };
+        let Some((note, failed)) = note else {
             text.clear();
             return Ok(());
         };
@@ -832,6 +1263,120 @@ impl Intro {
         let line = self.renderer.layout_line(note, Face::Small, ink, TEXT_W)?;
         text.show(&self.renderer, &line, self.scale, &self.theme)?;
         Ok(())
+    }
+
+    /// Takes the list out of what's on its way out, before that's let go
+    /// of, keeping it only in the box the current step shows.
+    fn release_list(&self) -> Result<()> {
+        let keep = match self.view.as_ref().and_then(|v| v.step.picker.as_ref()) {
+            Some(picker) => vec![picker.text.visual.cast()?],
+            None => Vec::new(),
+        };
+        self.list.detach_unless(&keep)
+    }
+
+    /// Shows the box as it is, with the list of languages under it while
+    /// it's open, or the dictionaries as they're ticked, or takes the list
+    /// away when the step has neither.
+    fn show_picker(&mut self) -> Result<()> {
+        let step = self.steps[self.at];
+        let Some(view) = self.view.as_ref().and_then(|v| v.step.picker.as_ref()) else {
+            return self.list.hide(&self.anim, LEAVE_MS);
+        };
+        let layout = self.layout_picker(step, view.rows)?;
+        let (anim, r, t, s) = (&self.anim, &self.renderer, &self.theme, self.scale);
+        view.text.show(r, &layout, s, t)?;
+        match layout.caret {
+            Some(m) => {
+                view.caret
+                    .SetOffset(v3((m.x * s).round(), (m.y * s).round()))?;
+                view.caret
+                    .SetSize(v2((m.width * s).round().max(1.0), (m.height * s).round()))?;
+                ui::blink(&anim.compositor, &view.caret)?;
+            }
+            None => {
+                Animator::stop(&view.caret, &["Opacity"]);
+                view.caret.SetOpacity(0.0)?;
+            }
+        }
+        match layout.list.as_deref() {
+            Some(list) => {
+                self.list.attach(&view.text.visual.cast()?)?;
+                self.list.show(anim, r, t, list, s)
+            }
+            None => self.list.hide(anim, LEAVE_MS),
+        }
+    }
+
+    /// The box of the language WinDict is shown in, with `rows` of the list
+    /// under it while it's open, or the dictionaries, `rows` of them at
+    /// once.
+    fn layout_picker(&self, step: Step, rows: usize) -> Result<Layout> {
+        let r = &self.renderer;
+        if step == Step::Languages {
+            let picker = self.picking.as_ref().map(|p| Picker {
+                query: p.query.text(),
+                caret: p.query.caret_utf16(),
+                matches: &p.matches,
+                highlight: p.highlight,
+                rows,
+            });
+            return r.layout_interface(self.options.interface.code(), picker.as_ref(), TEXT_W);
+        }
+        // English, which comes with WinDict and can't be unticked here,
+        // then those to download.
+        let asides: Vec<(&str, String)> = std::iter::once("en")
+            .chain(dicts::DOWNLOADS.iter().map(|d| d.language))
+            .map(|code| (code, self.aside(code)))
+            .collect();
+        let ticks: Vec<Tick> = asides
+            .iter()
+            .map(|(code, aside)| Tick {
+                code,
+                on: *code == "en" || self.chosen.contains(code),
+                fixed: *code == "en",
+                aside,
+            })
+            .collect();
+        r.layout_ticks(&ticks, self.tick_highlight(), rows, TEXT_W)
+    }
+
+    /// What's said at the right of a dictionary's row: how big it is, or
+    /// how far its download has got.
+    fn aside(&self, language: &str) -> String {
+        let downloading = (self.downloads.iter())
+            .find(|(code, _, failed)| *code == language && !failed)
+            .map(|(_, status, _)| status.clone());
+        match dicts::find(language) {
+            Some(download) => downloading
+                .unwrap_or_else(|| fill(tr().intro_size, &[("size", &download.megabytes())])),
+            None => tr().intro_built_in.to_owned(),
+        }
+    }
+
+    /// The dictionary's row lit: the one under the pointer, or else the
+    /// keyboard's, while it's on them.
+    fn tick_highlight(&self) -> Option<usize> {
+        match self.hovered {
+            Some(Hit::Row(i)) => Some(i),
+            _ if self.ring && self.focus == Some(Hit::List) => self.tick_at.or(Some(0)),
+            _ => None,
+        }
+    }
+
+    fn show_tick_highlight(&mut self) -> Result<()> {
+        if self.steps[self.at] != Step::Dictionaries || self.view.is_none() {
+            return Ok(());
+        }
+        let row = self.tick_highlight();
+        self.list.set_highlight(&self.anim, row)
+    }
+
+    /// How many rows of the list under the box show at once.
+    fn picker_rows(&self) -> usize {
+        (self.view.as_ref())
+            .and_then(|view| view.step.picker.as_ref())
+            .map_or(1, |picker| picker.rows)
     }
 
     /// Lengthens the dot of the step showing, in the accent, and shortens
@@ -891,6 +1436,7 @@ impl Intro {
                 self.gone.push(old.content.cast()?);
                 win::set_timer(self.hwnd, TIMER_GONE, GONE_MS);
             } else {
+                self.release_list()?;
                 self.frame.card.Children()?.Remove(&old.content)?;
             }
         }
@@ -904,6 +1450,7 @@ impl Intro {
         self.keep_focus();
         self.show_switch(false)?;
         self.show_note()?;
+        self.show_picker()?;
         self.show_hover(self.hovered)?;
         self.show_focus()
     }
@@ -930,9 +1477,11 @@ impl Intro {
         let picture = self.build_picture(&pane)?;
         let close = picture_card::close_button(c, r, t, s, &content, CARD_W)?;
 
-        let step = self.build_step(&content)?;
+        // The step goes over the dots and the buttons, for a list open over
+        // them.
         let dots = self.build_dots(&content)?;
         let (footer, buttons) = self.build_footer(&content)?;
+        let step = self.build_step(&content)?;
         Ok(View {
             content,
             pane,
@@ -985,15 +1534,62 @@ impl Intro {
         let paragraph = r.layout_paragraph(said, &keys, Ink::Secondary, TEXT_W)?;
         let size = detail.show(r, &paragraph, s, t)?;
         detail.visual.SetOffset(v3(x, y))?;
-        y += size.Y + px(ACTIONS_GAP);
+        let picks = matches!(step, Step::Languages | Step::Dictionaries);
+        y += size.Y + px(if picks { PICKER_GAP } else { ACTIONS_GAP });
 
         let mut view = StepView {
             text,
             controls: Vec::new(),
             switch: None,
             note: None,
+            picker: None,
         };
         match step {
+            // A combo box, its list as long as fits down to the buttons, as
+            // there'll be more languages; and the dictionaries, a list as
+            // long as leaves room for a note, the rest of it scrolling.
+            Step::Languages | Step::Dictionaries => {
+                let top = y / s;
+                let rows = if step == Step::Languages {
+                    Picker::rows_in(CARD_H - PAD_BOTTOM - top - SELECT_H)
+                } else {
+                    Tick::rows_in(CARD_H - PAD_BOTTOM - BUTTON_H - NOTE_ROOM - top)
+                };
+                let layout = self.layout_picker(step, rows)?;
+                let picker = Text::new(c, &view.text)?;
+                picker.show(r, &layout, s, t)?;
+                let at = v3(x, y);
+                picker.visual.SetOffset(at)?;
+                let parent = picker.visual.cast::<ContainerVisual>()?;
+                let (caret, _) = rounded(c, r, &parent, Rect::default(), 0.0, t.accent)?;
+                caret.SetOpacity(0.0)?;
+                let face = Rect {
+                    x,
+                    y,
+                    w: px(TEXT_W),
+                    h: px(SELECT_H),
+                };
+                let (hit, face, radius) = match step {
+                    Step::Languages => (Hit::Select, face, SELECT_RADIUS),
+                    _ => {
+                        let h = (layout.height * s).round();
+                        (Hit::List, Rect { h, ..face }, LIST_RADIUS)
+                    }
+                };
+                let button = self.build_stop(&view.text, face, radius)?;
+                view.controls.push((hit, button));
+                if step == Step::Dictionaries {
+                    let note = Text::new(c, &view.text)?;
+                    note.visual.SetOffset(v3(x, y + face.h + px(NOTE_GAP)))?;
+                    view.note = Some(note);
+                }
+                view.picker = Some(PickerView {
+                    text: picker,
+                    caret,
+                    at,
+                    rows,
+                });
+            }
             Step::Lookup | Step::Translate => {
                 let taken = step == Step::Lookup && self.options.shortcut_taken;
                 if taken {
@@ -1144,6 +1740,45 @@ impl Intro {
         Ok((row, switch))
     }
 
+    /// What has the keyboard at `at` in `parent`, drawn by the renderer
+    /// with corners of `radius` DIPs: the ring round it then, and the fill
+    /// that lights it under the pointer.
+    fn build_stop(&self, parent: &ContainerVisual, at: Rect, radius: f32) -> Result<Button> {
+        let (c, r, t, s) = (
+            &self.anim.compositor,
+            &self.renderer,
+            &self.theme,
+            self.scale,
+        );
+        let px = |dip: f32| (dip * s).round();
+        let root = container(c, parent, at.at())?;
+        let face = Rect {
+            w: at.w,
+            h: at.h,
+            ..Rect::default()
+        };
+        let radius = px(radius);
+        let (hover, _) = rounded(c, r, &root, face, radius, t.highlight())?;
+        hover.SetOpacity(0.0)?;
+        let outset = px(FOCUS_OUTSET);
+        let ring = ring(
+            c,
+            r,
+            &root,
+            face.outset(outset),
+            radius + outset,
+            ui::FOCUS_STROKE * s,
+            t.focus(),
+        )?;
+        ring.SetOpacity(0.0)?;
+        Ok(Button {
+            root,
+            hover,
+            ring,
+            at,
+        })
+    }
+
     /// A dot for each step, along the bottom of `content`, level with the
     /// buttons.
     fn build_dots(&self, content: &ContainerVisual) -> Result<Vec<DotView>> {
@@ -1179,11 +1814,13 @@ impl Intro {
         let px = |dip: f32| (dip * s).round();
         let footer = container(&self.anim.compositor, content, v3(0.0, 0.0))?;
         let last = self.at + 1 == self.steps.len();
-        let (w, h) = (px(BUTTON_W), px(BUTTON_H));
+        let h = px(BUTTON_H);
         let y = px(CARD_H - PAD_BOTTOM) - h;
         let mut right = px(CARD_W - PAD_X);
         let next = if last {
             tr().intro_done
+        } else if self.to_download() {
+            tr().intro_download
         } else {
             tr().intro_next
         };
@@ -1193,6 +1830,8 @@ impl Intro {
             if hit == Hit::Back && self.at == 0 {
                 continue;
             }
+            // Download may say more than fits the others' width.
+            let w = px(button_width(&self.renderer, label)?);
             let at = Rect {
                 x: right - w,
                 y,
@@ -1242,15 +1881,27 @@ impl Intro {
         picture_card::card_point(self.scale, x, y)
     }
 
-    fn hit_at(&self, x: i32, y: i32) -> Option<Hit> {
+    fn hit_at(&self, wx: i32, wy: i32) -> Option<Hit> {
         let view = self.view.as_ref()?;
-        let (x, y) = self.card_point(x, y);
+        let (x, y) = self.card_point(wx, wy);
         if view.close.at.contains(x, y) {
             return Some(Hit::Close);
+        }
+        let in_list = self.list_point(wx, wy);
+        if let Some((lx, ly)) = in_list.filter(|&(lx, ly)| self.list.contains(lx, ly)) {
+            return Some(self.list.row_at(lx, ly).map_or(Hit::List, Hit::Row));
         }
         self.targets()
             .find(|(_, b)| b.at.contains(x, y))
             .map(|(hit, _)| *hit)
+    }
+
+    /// A point in window pixels, from the top left of what the list is
+    /// shown in: the box, or the dictionaries.
+    fn list_point(&self, x: i32, y: i32) -> Option<(f32, f32)> {
+        let at = self.view.as_ref()?.step.picker.as_ref()?.at;
+        let (x, y) = self.card_point(x, y);
+        Some((x - at.X, y - at.Y))
     }
 
     /// Names the window in the language now current, as the taskbar shows it.
@@ -1270,12 +1921,26 @@ fn fitted(work: RECT, scale: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::BUTTON_W;
 
     #[test]
     fn shows_ui_access_only_where_it_can_be_had() {
         use Step::*;
-        assert_eq!(Step::all(true), [Lookup, Translate, AboveStart, Ready]);
-        assert_eq!(Step::all(false), [Lookup, Translate, Ready]);
+        assert_eq!(
+            Step::all(true),
+            [
+                Languages,
+                Lookup,
+                Translate,
+                AboveStart,
+                Dictionaries,
+                Ready
+            ]
+        );
+        assert_eq!(
+            Step::all(false),
+            [Languages, Lookup, Translate, Dictionaries, Ready]
+        );
     }
 
     #[test]
@@ -1308,7 +1973,7 @@ mod tests {
             right: w,
             bottom: h,
         };
-        assert_eq!(fitted(work(1920, 1040), 1.0), 1.33);
+        assert_eq!(fitted(work(1920, 1040), 1.0), 1.25);
         // As high as 440 DIPs and 16 either side fit, 600 pixels.
         assert_eq!(fitted(work(1024, 600), 1.5), 600.0 / 472.0);
         // As wide as 720 DIPs and 16 either side fit, 700 pixels.

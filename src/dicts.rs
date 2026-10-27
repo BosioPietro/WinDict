@@ -170,6 +170,11 @@ fn unsaved(e: std::io::Error) -> String {
 }
 
 impl Download {
+    /// How big it is to download, in whole megabytes.
+    pub fn megabytes(&self) -> u64 {
+        (self.size + 500_000) / 1_000_000
+    }
+
     fn matches(&self, bytes: &[u8]) -> bool {
         matches(bytes, self.size, self.sha256)
     }

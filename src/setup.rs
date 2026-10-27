@@ -1096,7 +1096,7 @@ mod tests {
             right: w,
             bottom: h,
         };
-        assert_eq!(fitted(work(1920, 1040), 1.0), 1.33);
+        assert_eq!(fitted(work(1920, 1040), 1.0), 1.25);
         // As high as 380 DIPs and 16 either side fit, 600 pixels.
         assert_eq!(fitted(work(1024, 600), 1.5), 600.0 / 412.0);
         // As wide as 640 DIPs and 16 either side fit, 600 pixels.

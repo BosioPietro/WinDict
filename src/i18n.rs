@@ -169,6 +169,19 @@ strings! {
     intro_back: "Back",
     intro_next: "Next",
     intro_done: "Done",
+    intro_languages: "Welcome to WinDict",
+    intro_languages_detail: "Look up and translate words anywhere in Windows. To start, pick \
+        the language WinDict speaks; you can change it any time in the settings.",
+    intro_dictionaries: "Add dictionaries",
+    /// Names the button that downloads them, `intro_download`.
+    intro_dictionaries_detail: "English comes with WinDict. Tick the other languages \
+        to look words up in: they download when you press Download.",
+    /// Next, on the dictionaries' step, when there are some to download.
+    intro_download: "Download",
+    /// Beside English, among the dictionaries.
+    intro_built_in: "Built in",
+    /// `{size}`: how big a dictionary is to download, in megabytes.
+    intro_size: "{size} MB",
     intro_lookup: "Look up any word",
     /// `{hotkey}`, which shows as keys.
     intro_lookup_detail: "Select a word in any app and press {hotkey}: its definition \
@@ -391,9 +404,10 @@ strings! {
 }
 
 /// The languages WinDict can be shown in.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
+    #[default]
     English,
     Italian,
     Spanish,
@@ -463,7 +477,8 @@ pub fn set(language: Language) {
     CURRENT.store(index.unwrap_or(0), Ordering::Relaxed);
 }
 
-fn current() -> Language {
+/// The language WinDict's shown in.
+pub fn current() -> Language {
     Language::ALL[CURRENT.load(Ordering::Relaxed).min(Language::ALL.len() - 1)]
 }
 

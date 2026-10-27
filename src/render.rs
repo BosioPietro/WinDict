@@ -44,6 +44,8 @@ pub enum Ink {
     Accent,
     /// Says something went wrong.
     Critical,
+    /// On the accent, as a ticked box's tick is.
+    OnAccent,
 }
 
 /// Where a line of text sits in the width it's given.
@@ -110,6 +112,12 @@ enum Paint {
     Field,
     /// The accent, as thick as the rings round focused controls.
     Focus,
+    /// A box to tick: the accent once it's ticked, the groove and outline
+    /// of a switch that's off before, and dimmed when it can't be unticked.
+    Accent,
+    Sunken,
+    StrongStroke,
+    Disabled,
 }
 
 /// Laid-out content, in DIPs.
@@ -250,7 +258,8 @@ pub enum Target {
     Interface,
     /// Translates the other way.
     Swap,
-    /// Translates from, or into, the language with this code.
+    /// Translates from, or into, the language with this code; or, in a
+    /// list of them to tick, ticks it, or unticks it.
     Pick(LangCode),
     /// Translates the way the card offers.
     Confirm,
@@ -285,23 +294,56 @@ pub struct Picker<'a> {
     pub matches: &'a [&'static str],
     /// Which of `matches` Enter picks.
     pub highlight: Option<usize>,
+    /// How many rows show at once, at most; the rest scroll. Mostly
+    /// [`PICKER_ROWS`].
+    pub rows: usize,
 }
 
 impl Picker<'_> {
     /// How many rows the list shows at once: one, saying none match, if
     /// none do.
     fn shown(&self) -> usize {
-        self.matches.len().clamp(1, PICKER_ROWS)
+        self.matches.len().clamp(1, self.rows.max(1))
     }
 
     /// How much shorter the list is than with all its rows shown, in DIPs.
     pub fn spare(&self) -> f32 {
-        (PICKER_ROWS - self.shown()) as f32 * ROW_H
+        (self.rows.max(1) - self.shown()) as f32 * ROW_H
+    }
+
+    /// How many rows fit in `height` DIPs under a box, its list's outline
+    /// and all.
+    pub fn rows_in(height: f32) -> usize {
+        ((height - LIST_GAP - 2.0 * LIST_PAD) / ROW_H)
+            .floor()
+            .max(1.0) as usize
     }
 }
 
 /// How many languages the list shows at once; the rest scroll.
 pub const PICKER_ROWS: usize = 7;
+
+/// A language in a list of them to tick, as [`Renderer::layout_ticks`]
+/// lays it out.
+pub struct Tick<'a> {
+    pub code: &'a str,
+    pub on: bool,
+    /// It can't be unticked: it comes with WinDict.
+    pub fixed: bool,
+    /// At the right of its row: how big it is, or how its download's going.
+    pub aside: &'a str,
+}
+
+impl Tick<'_> {
+    /// How many rows of a list of them fit in `height` DIPs, its outline
+    /// and all.
+    pub fn rows_in(height: f32) -> usize {
+        ((height - 2.0 * LIST_PAD) / TICK_ROW_H).floor().max(1.0) as usize
+    }
+}
+
+/// A row in a list of languages to tick, in DIPs.
+const TICK_ROW_H: f32 = 32.0;
 
 /// How far a translation has got.
 pub enum Translated<'a> {
@@ -348,6 +390,9 @@ const SWAP_GAP: f32 = 6.0;
 const LIST_GAP: f32 = 6.0;
 const LIST_PAD: f32 = 4.0;
 const LIST_RADIUS: f32 = 8.0;
+/// A box to tick, and its corners.
+const TICK_BOX: f32 = 18.0;
+const TICK_RADIUS: f32 = 4.0;
 const ROW_H: f32 = 32.0;
 /// Room for a flag or a code's cap, so the names line up.
 const BADGE_W: f32 = 24.0;

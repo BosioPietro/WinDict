@@ -43,7 +43,7 @@ pub const SLIDE: f32 = 24.0;
 /// The least room kept between the window and the screen's edges.
 const SCREEN_GAP: f32 = 16.0;
 /// How much larger than its size in DIPs the window opens, all of it alike.
-const ENLARGE: f32 = 1.33;
+const ENLARGE: f32 = 1.25;
 
 // Durations, in ms.
 pub const SHOW_MS: u64 = 360;
