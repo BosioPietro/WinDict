@@ -32,6 +32,7 @@ use crate::config::ThemeMode;
 use crate::hotkey;
 use crate::i18n::{self, fill, tr, Language};
 use crate::installed;
+use crate::intro::scene::{self, Shot};
 use crate::render::{Face, Ink, Renderer};
 use crate::theme::Theme;
 use crate::ui::picture_card::{
@@ -687,7 +688,8 @@ impl Setup {
         self.frame.card.Children()?.InsertAtTop(&content)?;
 
         // The picture, its corners rounded, with a hairline round it: the
-        // card on a word, as the introduction opens on.
+        // card on a word, as the introduction opens on, in the language
+        // the setup's in.
         let at = Rect {
             x: px(INSET),
             y: px(INSET),
@@ -695,12 +697,7 @@ impl Setup {
             h: px(PANE_H),
         };
         let pane = picture_card::picture_pane(c, r, t, s, &content, at)?;
-        let picture = if t.dark {
-            include_bytes!("../assets/intro/lookup-dark.jpg").as_slice()
-        } else {
-            include_bytes!("../assets/intro/lookup-light.jpg").as_slice()
-        };
-        let surface = r.draw_picture(picture, at.w, at.h)?;
+        let surface = scene::draw(r, Shot::Lookup, self.language, t, at.w, at.h)?;
         let sprite = c.CreateSpriteVisual()?;
         sprite.SetBrush(&c.CreateSurfaceBrushWithSurface(&surface)?)?;
         sprite.SetSize(at.size())?;

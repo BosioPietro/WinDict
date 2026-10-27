@@ -44,7 +44,7 @@ use crate::ui::{
 };
 use crate::win::{self, Window};
 
-mod scene;
+pub(crate) mod scene;
 
 // Geometry, in DIPs.
 const CARD_W: f32 = 720.0;
