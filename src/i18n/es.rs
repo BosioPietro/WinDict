@@ -123,7 +123,7 @@ pub const ES: Strings = Strings {
     intro_translate_detail: "Selecciona una palabra, una frase o un fragmento entero y \
         pulsa {hotkey}: la tarjeta se abre con su traducción. En una definición, \
         {card_hotkey} traduce la palabra.",
-    intro_above_start: "Mostrar la tarjeta sobre Inicio",
+    intro_above_start: "Mostrar sobre Inicio",
     intro_above_start_detail: "Windows mantiene Inicio y Búsqueda por encima de todas \
         las demás ventanas, así que WinDict los cierra antes de mostrar una definición. \
         Con el acceso a la interfaz, la tarjeta aparece encima de ellos. Windows te pedirá \

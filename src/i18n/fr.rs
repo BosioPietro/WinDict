@@ -126,7 +126,7 @@ pub const FR: Strings = Strings {
     intro_translate_detail: "Sélectionnez un mot, une phrase ou un passage et appuyez \
         sur {hotkey}\u{A0}: la fiche s\u{2019}ouvre sur sa traduction. Sur une \
         définition, {card_hotkey} traduit le mot.",
-    intro_above_start: "La fiche au-dessus de Démarrer",
+    intro_above_start: "Au-dessus de Démarrer",
     intro_above_start_detail: "Windows garde Démarrer et Rechercher au-dessus de tout, \
         WinDict les ferme donc avant d\u{2019}afficher une définition. Avec l\u{2019}accès \
         à l\u{2019}interface, la fiche s\u{2019}affiche par-dessus. Windows demande \

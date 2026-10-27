@@ -193,7 +193,7 @@ strings! {
     intro_translate_detail: "Select a word, a phrase or a whole passage and press \
         {hotkey}: the card opens on its translation. On a definition, {card_hotkey} \
         translates the word.",
-    intro_above_start: "Show the card above Start",
+    intro_above_start: "Show above Start",
     intro_above_start_detail: "Windows keeps Start and Search above every other window, \
         so WinDict closes them before showing a definition. With UI access, the card \
         shows on top of them instead. Windows asks for permission to turn it on.",

@@ -126,8 +126,8 @@ impl Step {
             Languages,
             Lookup,
             Translate,
-            AboveStart,
             Dictionaries,
+            AboveStart,
             Ready,
         ]
         .into_iter()

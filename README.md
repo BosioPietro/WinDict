@@ -152,7 +152,7 @@ top of them instead, WinDict needs "UI access", which Windows only grants to
 signed apps installed in a protected folder.
 
 To turn it on, use the **Show above Start** switch: on the introduction's
-**Show the card above Start** step, or in the settings under **General**.
+**Show above Start** step, or in the settings under **General**.
 Windows asks for permission, then WinDict restarts with UI access. Turn the
 switch off to go back. Only the copy the setup installs can have UI access,
 so a downloaded `windict.exe` doesn't show the switch.
