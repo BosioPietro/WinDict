@@ -22,6 +22,8 @@
 //! - `update`: looking for a new version, and installing it.
 //! - `installed`: the copy the installer put in Program Files, and handing
 //!   over to its UI access build.
+//! - `jumplist`: the tasks under WinDict in Start, which open the box to
+//!   type a word in.
 //! - `cli`: `wd`, which looks words up and translates them from the
 //!   command line, as the card would.
 //! - `setup`: the window of the setup downloaded from the releases page,
@@ -41,6 +43,7 @@ mod http;
 mod i18n;
 mod installed;
 mod intro;
+mod jumplist;
 mod kaikki;
 mod lang;
 mod menu;
@@ -69,12 +72,16 @@ use windows::Win32::System::WinRT::*;
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
+use windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
 use windows::UI::Composition::Compositor;
 
 /// Runs WinDict until it's quit from the tray, unless it's running already.
 pub fn run() -> windows::core::Result<()> {
-    // With UI access on, the installed WinDict.exe runs the build that has it.
-    if installed::hand_over() {
+    // Started from the Jump List.
+    let task = jumplist::from_args();
+    // With UI access on, the installed WinDict.exe runs the build that has
+    // it, which is given the task.
+    if installed::hand_over(task.map(jumplist::switch)) {
         return Ok(());
     }
     // Started by the version this one replaces: it has to be gone first.
@@ -83,13 +90,17 @@ pub fn run() -> windows::core::Result<()> {
         replacing.wait();
     }
     unsafe {
-        // One instance per user session.
+        // One instance per user session: a task is the running one's to do.
         let _instance = CreateMutexW(None, true, w!("Local\\WinDict.Instance"))?;
         if GetLastError() == ERROR_ALREADY_EXISTS {
+            if let Some(task) = task {
+                app::forward(task);
+            }
             return Ok(());
         }
+        let _ = SetCurrentProcessExplicitAppUserModelID(jumplist::APP_ID);
         let (_queue, compositor) = start_ui()?;
-        app::run(compositor, replacing)
+        app::run(compositor, replacing, task)
     }
 }
 

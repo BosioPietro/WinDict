@@ -180,6 +180,7 @@ impl App {
             Change::Interface(language) => {
                 self.config.ui_language = language;
                 i18n::set(language);
+                let _ = jumplist::set();
                 if let Some(settings) = self.settings.as_mut() {
                     let _ = settings.relanguage();
                 }

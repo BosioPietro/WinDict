@@ -4,6 +4,15 @@
 use super::*;
 
 impl App {
+    /// A task in the Jump List: the box to type in, for what `task` does,
+    /// in the middle of the screen.
+    pub(super) fn open_task(&mut self, task: Shortcut) {
+        self.new_request();
+        self.card.copying = false;
+        self.card.to_translate = false;
+        self.open_search(task, None);
+    }
+
     /// Nothing was selected: opens the card as a box to type in, for text
     /// that can't be selected (in an image, a protected PDF, a game), to
     /// do with it what the `purpose` shortcut does. It opens at `anchor`,

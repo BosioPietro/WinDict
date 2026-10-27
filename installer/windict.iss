@@ -81,7 +81,9 @@ Root: HKLM; Subkey: "Software\WinDict"; ValueType: string; ValueName: "InstallDi
 Root: HKLM; Subkey: "{#EnvironmentKey}"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: NeedsAddPath
 
 [Icons]
-Name: "{autoprograms}\WinDict"; Filename: "{app}\WinDict.exe"
+; The ID WinDict gives itself (src/jumplist.rs), so its Jump List's tasks
+; show under this shortcut in Start.
+Name: "{autoprograms}\WinDict"; Filename: "{app}\WinDict.exe"; AppUserModelID: "BosioPietro.WinDict"
 
 [Run]
 ; In order, before WinDict starts again: the new WinDict-uiaccess.exe isn't

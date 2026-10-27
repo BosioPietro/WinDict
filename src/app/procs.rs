@@ -164,6 +164,15 @@ pub(super) unsafe extern "system" fn main_proc(
             with_app(|app| app.close_settings());
             LRESULT(0)
         }
+        WM_APP_TASK => {
+            let task = if wparam.0 == 1 {
+                Shortcut::Translate
+            } else {
+                Shortcut::Lookup
+            };
+            with_app(|app| app.open_task(task));
+            LRESULT(0)
+        }
         WM_APP_CLOSE_INTRO => {
             with_app(|app| app.finish_onboarding());
             LRESULT(0)

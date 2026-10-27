@@ -111,8 +111,8 @@ pub fn set_ui_access(on: bool) -> Result<(), UiAccessError> {
 /// Starts WinDict-uiaccess.exe in this one's place, if this is the
 /// installed WinDict.exe and UI access is on. Returns whether it started:
 /// if it can't, because its signature is missing or no longer trusted, this
-/// one runs instead.
-pub fn hand_over() -> bool {
+/// one runs instead. It's started with `switch`, if there's one.
+pub fn hand_over(switch: Option<&str>) -> bool {
     if cfg!(feature = "uiaccess") || read_dword(w!("UIAccess")) != Some(1) {
         return false;
     }
@@ -120,12 +120,14 @@ pub fn hand_over() -> bool {
         return false;
     };
     let exe = HSTRING::from(dir.join(UIACCESS).as_os_str());
+    let parameters = HSTRING::from(switch.unwrap_or_default());
     // Only the shell can start an executable that asks for UI access:
     // CreateProcess refuses it.
     let mut info = SHELLEXECUTEINFOW {
         cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
         fMask: SEE_MASK_FLAG_NO_UI,
         lpFile: PCWSTR(exe.as_ptr()),
+        lpParameters: PCWSTR(parameters.as_ptr()),
         nShow: SW_SHOWNORMAL.0,
         ..Default::default()
     };

@@ -44,6 +44,7 @@ use crate::dicts;
 use crate::hotkey;
 use crate::i18n::{self, fill, tr};
 use crate::installed;
+use crate::jumplist;
 use crate::lang::LangCode;
 use crate::menu::{Command, Menu};
 use crate::offline;
@@ -109,6 +110,9 @@ const WM_APP_PIN: u32 = WM_APP + 12;
 const WM_APP_ZOOM: u32 = WM_APP + 13;
 /// The introduction was asked to close.
 const WM_APP_CLOSE_INTRO: u32 = WM_APP + 14;
+/// A task in the Jump List: the shortcut whose box to open in `wparam`, as
+/// [`task_param`] makes it. Posted by the WinDict started for it.
+const WM_APP_TASK: u32 = WM_APP + 15;
 
 const HOTKEY_LOOKUP: i32 = 1;
 const HOTKEY_ESCAPE: i32 = 2;
@@ -364,7 +368,34 @@ pub struct App {
     keyboard_hook: Option<win::Hook>,
 }
 
-pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::core::Result<()> {
+/// Hands `task`, from the Jump List, to the WinDict running already.
+pub fn forward(task: Shortcut) {
+    unsafe {
+        let Ok(hwnd) = FindWindowW(MAIN_CLASS, None) else {
+            return;
+        };
+        // Started from Start, this process may bring a window to the front:
+        // the box it opens is the running one's.
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        let _ = AllowSetForegroundWindow(pid);
+        let _ = PostMessageW(Some(hwnd), WM_APP_TASK, task_param(task), LPARAM(0));
+    }
+}
+
+fn task_param(task: Shortcut) -> WPARAM {
+    WPARAM(match task {
+        Shortcut::Lookup => 0,
+        Shortcut::Translate => 1,
+    })
+}
+
+/// `task` is what the Jump List started this process for, if it did.
+pub fn run(
+    compositor: Compositor,
+    replacing: Option<Replacing>,
+    task: Option<Shortcut>,
+) -> windows::core::Result<()> {
     // A first run is told by `onboarded` instead.
     let (config, config_error) = match config::load() {
         Ok((config, _first_run)) => (config, None),
@@ -403,6 +434,9 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
         if taskbar_created != 0 {
             let _ = ChangeWindowMessageFilterEx(hwnd, taskbar_created, MSGFLT_ALLOW, None);
         }
+        // Nor the Jump List's tasks from a WinDict without UI access.
+        let _ = ChangeWindowMessageFilterEx(hwnd, WM_APP_TASK, MSGFLT_ALLOW, None);
+        let _ = jumplist::set();
 
         let (tx, inbox) = channel();
         let events = Events {
@@ -480,6 +514,9 @@ pub fn run(compositor: Compositor, replacing: Option<Replacing>) -> windows::cor
             app.start_onboarding();
         }
         APP.with(|a| *a.borrow_mut() = Some(app));
+        if let Some(task) = task {
+            let _ = PostMessageW(Some(hwnd), WM_APP_TASK, task_param(task), LPARAM(0));
+        }
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -1110,6 +1147,7 @@ impl App {
                 self.cache.clear();
                 self.apply_zoom();
                 i18n::set(self.config.ui_language);
+                let _ = jumplist::set();
                 ui::set_motion(self.config.animated());
                 self.register_hotkeys();
                 self.schedule_update_check(updating::FIRST_CHECK_MS);
