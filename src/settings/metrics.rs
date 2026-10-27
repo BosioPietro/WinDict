@@ -47,6 +47,8 @@ pub(super) const PILL_RADIUS: f32 = 4.0;
 pub(super) const STEP_SIZE: f32 = 30.0;
 pub(super) const STEP_RADIUS: f32 = 6.0;
 pub(super) const VALUE_W: f32 = 40.0;
+/// The box of the language WinDict is shown in.
+pub(super) const INTERFACE_W: f32 = 150.0;
 /// The text field.
 pub(super) const FIELD_W: f32 = 190.0;
 pub(super) const FIELD_H: f32 = 32.0;

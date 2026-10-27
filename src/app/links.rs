@@ -118,6 +118,8 @@ impl App {
             Target::Language(_) | Target::Swap | Target::Pick(_) | Target::Confirm => {
                 self.steer_translation(target)
             }
+            // Only the settings have it.
+            Target::Interface => {}
         }
     }
 }

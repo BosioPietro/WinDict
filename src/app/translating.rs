@@ -260,7 +260,7 @@ impl App {
     pub(super) fn picking(&mut self) -> Option<(&mut Picking, &str)> {
         let pair = self.language_pair()?;
         let picking = pair.picking.as_mut()?;
-        let current = match picking.side {
+        let current = match picking.on {
             Side::From => &pair.from,
             Side::To => &pair.to,
         };
@@ -289,7 +289,7 @@ impl App {
     /// Shuts the list of languages, if one's open. Returns the side it was
     /// open on.
     pub(super) fn shut_picker(&mut self) -> Option<Side> {
-        let side = self.language_pair()?.picking.take()?.side;
+        let side = self.language_pair()?.picking.take()?.on;
         self.show_picking(Some(Target::Language(side)));
         Some(side)
     }
@@ -306,7 +306,8 @@ impl App {
         };
         let picker = l.pair.picker();
         popup.hold_region(picker.is_some());
-        let _ = popup.set_search_languages(&l.pair.from, &l.pair.to, picker.as_ref());
+        let open = picker.as_ref().map(|(side, p)| (*side, p));
+        let _ = popup.set_search_languages(&l.pair.from, &l.pair.to, open);
         self.on_resized();
     }
 

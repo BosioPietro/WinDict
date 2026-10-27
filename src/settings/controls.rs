@@ -71,7 +71,6 @@ impl Settings {
         let config = &self.values.config;
         match choice {
             Choice::Theme => THEMES.iter().position(|(mode, _)| *mode == config.theme),
-            Choice::Language => Language::ALL.iter().position(|&l| l == config.ui_language),
             Choice::Selection => SELECTIONS
                 .iter()
                 .position(|(mode, _, _)| *mode == config.selection),
@@ -89,11 +88,6 @@ impl Settings {
                 let mode = THEMES[i].0;
                 self.values.config.theme = mode;
                 Change::Theme(mode)
-            }
-            Choice::Language => {
-                let language = Language::ALL[i];
-                self.values.config.ui_language = language;
-                Change::Interface(language)
             }
             Choice::Selection => {
                 let mode = SELECTIONS[i].0;

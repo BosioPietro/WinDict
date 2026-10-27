@@ -14,6 +14,7 @@
 //! found whichever language WinDict is in), key names, and "WinDict".
 
 mod es;
+mod fr;
 mod it;
 
 use std::fmt::Display;
@@ -396,26 +397,39 @@ pub enum Language {
     English,
     Italian,
     Spanish,
+    French,
 }
 
 impl Language {
-    pub const ALL: &'static [Language] = &[Language::English, Language::Italian, Language::Spanish];
+    pub const ALL: &'static [Language] = &[
+        Language::English,
+        Language::Italian,
+        Language::Spanish,
+        Language::French,
+    ];
 
     fn strings(self) -> &'static Strings {
         match self {
             Language::English => &EN,
             Language::Italian => &it::IT,
             Language::Spanish => &es::ES,
+            Language::French => &fr::FR,
         }
     }
 
-    /// The language's name, in itself.
-    pub fn name(self) -> &'static str {
+    /// The language's ISO 639-1 code: "en".
+    pub fn code(self) -> &'static str {
         match self {
-            Language::English => "English",
-            Language::Italian => "Italiano",
-            Language::Spanish => "Espa\u{F1}ol",
+            Language::English => "en",
+            Language::Italian => "it",
+            Language::Spanish => "es",
+            Language::French => "fr",
         }
+    }
+
+    /// The language with the code `code`, if WinDict can be shown in it.
+    pub fn from_code(code: &str) -> Option<Language> {
+        Language::ALL.iter().copied().find(|l| l.code() == code)
     }
 
     /// The language Windows is shown in, or English if WinDict has no
@@ -429,9 +443,11 @@ impl Language {
     fn from_lang_id(id: u16) -> Language {
         const LANG_ITALIAN: u16 = 0x10;
         const LANG_SPANISH: u16 = 0x0A;
+        const LANG_FRENCH: u16 = 0x0C;
         match id & 0x3FF {
             LANG_ITALIAN => Language::Italian,
             LANG_SPANISH => Language::Spanish,
+            LANG_FRENCH => Language::French,
             _ => Language::English,
         }
     }
@@ -543,8 +559,12 @@ mod tests {
         for id in [0x0C0A, 0x080A, 0x000A] {
             assert_eq!(Language::from_lang_id(id), Language::Spanish);
         }
+        // France's, Canada's, Switzerland's, and the neutral French.
+        for id in [0x040C, 0x0C0C, 0x100C, 0x000C] {
+            assert_eq!(Language::from_lang_id(id), Language::French);
+        }
         // English, and what WinDict has no translation for.
-        for id in [0x0409, 0x0809, 0x040C, 0x0000] {
+        for id in [0x0409, 0x0809, 0x0407, 0x0000] {
             assert_eq!(Language::from_lang_id(id), Language::English);
         }
     }

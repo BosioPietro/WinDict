@@ -1,17 +1,19 @@
-//! The translation's language picker: choosing the two languages and typing to narrow the list.
+//! The language pickers, WinDict's own and the translation's two: choosing
+//! a language and typing to narrow the list.
 
 use super::*;
 
 impl Settings {
     // -----------------------------------------------------------------------
-    // The default languages
+    // The languages picked from a list
 
-    /// The language on `side`, as a code.
-    pub(super) fn language(&self, side: Side) -> &str {
+    /// The language `select`'s box shows, as a code.
+    pub(super) fn language(&self, select: Select) -> &str {
         let config = &self.values.config;
-        match side {
-            Side::From => &config.translate_from,
-            Side::To => &config.translate_to,
+        match select {
+            Select::Interface => config.ui_language.code(),
+            Select::Translate(Side::From) => &config.translate_from,
+            Select::Translate(Side::To) => &config.translate_to,
         }
     }
 
@@ -21,54 +23,93 @@ impl Settings {
         Change::TranslateLanguages(config.translate_from.clone(), config.translate_to.clone())
     }
 
+    /// The list, as it's drawn, while it's open, and the box it's under.
+    fn picker(&self) -> Option<(Select, Picker<'_>)> {
+        self.picking.as_ref().map(|p| {
+            let picker = Picker {
+                query: p.query.text(),
+                caret: p.query.caret_utf16(),
+                matches: &p.matches,
+                highlight: p.highlight,
+            };
+            (p.on, picker)
+        })
+    }
+
     /// The boxes of the default languages, with the list under the one
     /// being picked.
     /// Returns them with how much shorter they are than with the list
     /// full, in pixels: the view is built for the full list, and what comes
     /// after slides up by that much.
     pub(super) fn layout_languages(&self) -> Result<(Layout, f32)> {
-        let picker = self.picking.as_ref().map(|p| Picker {
-            side: p.side,
-            query: p.query.text(),
-            caret: p.query.caret_utf16(),
-            matches: &p.matches,
-            highlight: p.highlight,
+        let picker = self.picker();
+        let open = picker.as_ref().and_then(|(select, p)| match select {
+            Select::Translate(side) => Some((*side, p)),
+            Select::Interface => None,
         });
         let width = GROUP_W - 2.0 * ROW_PAD;
         let config = &self.values.config;
         let (from, to) = (&config.translate_from, &config.translate_to);
-        let layout = self
-            .renderer
-            .layout_languages(from, to, picker.as_ref(), width)?;
-        let spare = picker.as_ref().map_or(0.0, Picker::spare);
+        let layout = self.renderer.layout_languages(from, to, open, width)?;
+        let spare = open.map_or(0.0, |(_, p)| p.spare());
         let s = self.scale;
         let slack = ((layout.height + spare) * s).ceil() - (layout.height * s).ceil();
         Ok((layout, slack))
     }
 
-    /// Builds the window's view again, for what the default languages show
-    /// to have changed, which can change the height of the row too.
+    /// The box of the language WinDict is shown in, with the list that
+    /// covers the rows under it while it's open.
+    pub(super) fn layout_interface(&self) -> Result<Layout> {
+        let picker = self.picker();
+        let open = picker
+            .as_ref()
+            .filter(|(select, _)| *select == Select::Interface)
+            .map(|(_, p)| p);
+        let language = self.language(Select::Interface);
+        self.renderer.layout_interface(language, open, INTERFACE_W)
+    }
+
+    /// Builds the window's view again, for what the languages' boxes show
+    /// to have changed, which can change the height of the default
+    /// languages' row too.
     pub(super) fn relayout(&mut self) -> Result<()> {
+        self.refresh_interface()?;
         if self.refresh_boxes()? {
+            self.show_list()?;
             return self.refit();
         }
         self.slide_view()?;
         self.refit()
     }
 
-    /// Lists the languages `side`'s can be picked from, or shuts the list
-    /// again if it's open on that side.
-    pub(super) fn open_picker(&mut self, side: Side) -> Result<()> {
-        let open = self.picking.take().map(|p| p.side);
-        if open != Some(side) {
-            self.picking = Some(Picking::new(side, self.language(side)));
+    /// Lists the languages `select`'s can be picked from, or shuts the
+    /// list again if it's open under it.
+    pub(super) fn open_picker(&mut self, select: Select) -> Result<()> {
+        let open = self.picking.take().map(|p| p.on);
+        if open != Some(select) {
+            let current = self.language(select);
+            self.picking = Some(match select {
+                Select::Interface => {
+                    Picking::among(select, current, |code| Language::from_code(code).is_some())
+                }
+                Select::Translate(_) => Picking::new(select, current),
+            });
         }
-        self.focus = Some(Stop::Select(side));
+        self.focus = Some(Stop::Select(select));
         self.relayout()?;
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let rect = view.translate_at;
+        let rect = match select {
+            // The box, and the list under it.
+            Select::Interface => Rect {
+                x: view.interface.at.X,
+                y: view.interface.at.Y,
+                w: (INTERFACE_W * self.scale).round(),
+                h: (self.layout_interface()?.height * self.scale).ceil(),
+            },
+            Select::Translate(_) => view.translate_at,
+        };
         if self.picking.is_some() {
             self.scroll_into_view(rect)?;
         }
@@ -84,14 +125,25 @@ impl Settings {
         Ok(Some(self.languages_changed()))
     }
 
-    /// Makes `code` the language of the side being picked, closing the list.
-    /// The other side's language swaps them round.
+    /// Makes `code` the language of the box being picked in, closing the
+    /// list. For a translation, the other side's language swaps them round.
     pub(super) fn pick(&mut self, code: &str) -> Result<Option<Change>> {
-        let Some(side) = self.picking.take().map(|p| p.side) else {
+        let Some(select) = self.picking.take().map(|p| p.on) else {
             return Ok(None);
         };
-        self.focus = Some(Stop::Select(side));
+        self.focus = Some(Stop::Select(select));
         let config = &mut self.values.config;
+        let side = match select {
+            Select::Translate(side) => side,
+            Select::Interface => {
+                let language = Language::from_code(code).filter(|&l| l != config.ui_language);
+                if let Some(language) = language {
+                    config.ui_language = language;
+                }
+                self.relayout()?;
+                return Ok(language.map(Change::Interface));
+            }
+        };
         let (picked, other) = match side {
             Side::From => (&mut config.translate_from, &mut config.translate_to),
             Side::To => (&mut config.translate_to, &mut config.translate_from),
@@ -109,10 +161,10 @@ impl Settings {
     /// Narrows the list of languages down with a character typed.
     pub(super) fn type_language(&mut self, unit: u16) -> Result<Option<Change>> {
         let hwnd = self.hwnd;
-        let Some(side) = self.picking.as_ref().map(|p| p.side) else {
+        let Some(select) = self.picking.as_ref().map(|p| p.on) else {
             return Ok(None);
         };
-        let current = self.language(side).to_owned();
+        let current = self.language(select).to_owned();
         let Some(picking) = self.picking.as_mut() else {
             return Ok(None);
         };
@@ -135,17 +187,17 @@ impl Settings {
     /// Esc shuts the list, and the others move the caret in the box.
     pub(super) fn picker_key(&mut self, key: VIRTUAL_KEY) -> Result<Option<Change>> {
         let ctrl = hotkey::is_held(VK_CONTROL);
-        let Some(side) = self.picking.as_ref().map(|p| p.side) else {
+        let Some(select) = self.picking.as_ref().map(|p| p.on) else {
             return Ok(None);
         };
-        let current = self.language(side).to_owned();
+        let current = self.language(select).to_owned();
         let Some(picking) = self.picking.as_mut() else {
             return Ok(None);
         };
         match key {
             VK_ESCAPE => {
                 self.picking = None;
-                self.focus = Some(Stop::Select(side));
+                self.focus = Some(Stop::Select(select));
                 self.relayout()?;
                 return Ok(None);
             }

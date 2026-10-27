@@ -108,6 +108,8 @@ pub const WIKTIONARY: &str = "Wiktionary";
 pub const WIKIZIONARIO: &str = "Wikizionario";
 /// The Spanish one, likewise.
 pub const WIKCIONARIO: &str = "Wikcionario";
+/// The French one.
+pub const WIKTIONNAIRE: &str = "Wiktionnaire";
 
 #[derive(Clone, Debug)]
 pub struct Meaning {
@@ -408,6 +410,10 @@ mod tests {
         assert_eq!(
             source_url(WIKCIONARIO, "casa").as_deref(),
             Some("https://es.wiktionary.org/wiki/casa")
+        );
+        assert_eq!(
+            source_url(WIKTIONNAIRE, "pomme de terre").as_deref(),
+            Some("https://fr.wiktionary.org/wiki/pomme_de_terre")
         );
         assert_eq!(source_url("Elsewhere", "x"), None);
     }

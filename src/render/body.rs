@@ -241,9 +241,10 @@ impl Renderer {
         width: f32,
     ) -> Result<()> {
         out.y += LANGUAGES_TOP;
-        self.layout_direction(out, (card.from, card.to), card.picker.as_ref(), width)?;
-        if let Some(picker) = &card.picker {
-            let current = match picker.side {
+        let open = card.picker.as_ref().map(|(side, p)| (*side, p));
+        self.layout_direction(out, (card.from, card.to), open, width)?;
+        if let Some((side, picker)) = open {
+            let current = match side {
                 Side::From => card.from,
                 Side::To => card.to,
             };
@@ -304,19 +305,19 @@ impl Renderer {
         Ok(())
     }
 
-    /// The boxes of a translation's languages, with the list under the one
-    /// being picked, as the settings show them.
+    /// The boxes of a translation's languages, with `open`'s list under the
+    /// one of its side, as the settings show them.
     pub fn layout_languages(
         &self,
         from: &str,
         to: &str,
-        picker: Option<&Picker>,
+        open: Option<(Side, &Picker)>,
         width: f32,
     ) -> Result<Layout> {
         let mut out = Stack::default();
-        self.layout_direction(&mut out, (from, to), picker, width)?;
-        if let Some(picker) = picker {
-            let current = match picker.side {
+        self.layout_direction(&mut out, (from, to), open, width)?;
+        if let Some((side, picker)) = open {
+            let current = match side {
                 Side::From => from,
                 Side::To => to,
             };
@@ -332,18 +333,44 @@ impl Renderer {
         })
     }
 
+    /// The box of the language WinDict is shown in, `language`'s code,
+    /// `width` wide, with `picker`'s list under it while it's open.
+    pub fn layout_interface(
+        &self,
+        language: &str,
+        picker: Option<&Picker>,
+        width: f32,
+    ) -> Result<Layout> {
+        let mut out = Stack::default();
+        self.layout_select(&mut out, 0.0, width, Target::Interface, language, picker)?;
+        out.y += SELECT_H;
+        if let Some(picker) = picker {
+            self.layout_picker(&mut out, picker, language, width)?;
+        }
+        Ok(Layout {
+            items: out.items,
+            width,
+            height: out.y,
+            links: out.links,
+            caret: out.caret,
+            list: out.list,
+        })
+    }
+
     /// A box for each language, which lists the others to pick from, and
-    /// the arrows between them, which swap them.
+    /// the arrows between them, which swap them. `open`'s side shows what's
+    /// typed in its picker.
     pub(super) fn layout_direction(
         &self,
         out: &mut Stack,
         (from, to): (&str, &str),
-        picker: Option<&Picker>,
+        open: Option<(Side, &Picker)>,
         width: f32,
     ) -> Result<()> {
         let box_w = ((width - SWAP_W - 2.0 * SWAP_GAP) / 2.0).floor();
-        let open = |side| picker.filter(|p| p.side == side);
-        self.layout_select(out, 0.0, box_w, Side::From, from, open(Side::From))?;
+        let open = |side| open.filter(|(s, _)| *s == side).map(|(_, p)| p);
+        let target = Target::Language;
+        self.layout_select(out, 0.0, box_w, target(Side::From), from, open(Side::From))?;
         let x = box_w + SWAP_GAP;
         let icon = self.text(SWAP_ICON, &self.formats.button, SWAP_W)?;
         let (_, icon_h, _) = metrics(&icon);
@@ -361,19 +388,21 @@ impl Renderer {
             height: SELECT_H,
             target: Target::Swap,
         });
-        self.layout_select(out, width - box_w, box_w, Side::To, to, open(Side::To))?;
+        let x = width - box_w;
+        self.layout_select(out, x, box_w, target(Side::To), to, open(Side::To))?;
         out.y += SELECT_H;
         Ok(())
     }
 
-    /// The box showing `side`'s `language`, `x` from the left and `width`
-    /// wide. While `picker` is open on it, it shows what's typed instead.
+    /// The box showing `language`, `x` from the left and `width` wide,
+    /// which a click on opens to `target`. While `picker` is open on it, it
+    /// shows what's typed instead.
     pub(super) fn layout_select(
         &self,
         out: &mut Stack,
         x: f32,
         width: f32,
-        side: Side,
+        target: Target,
         language: &str,
         picker: Option<&Picker>,
     ) -> Result<()> {
@@ -397,7 +426,7 @@ impl Renderer {
             y: y - 3.0,
             width: width + 6.0,
             height: SELECT_H + 6.0,
-            target: Target::Language(side),
+            target,
         });
         let format = &self.formats.suggestion;
         let line_h = metrics(&self.text("Ag", format, width)?).1;

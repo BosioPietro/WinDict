@@ -39,6 +39,13 @@ pub const DOWNLOADS: &[Download] = &[
         size: 16_947_418,
         sha256: "b6f25a06f010fb5e55eaac4fe4a2d6cf7d74f8c162ead82eea298a49c8bb4663",
     },
+    Download {
+        language: "fr",
+        name: "Fran\u{E7}ais",
+        file: "fr-ec77c51e8b50.wdict",
+        size: 89_322_553,
+        sha256: "ec77c51e8b5082c51583a66449d5d589d360ccacf078d275c28f262e02fa0f3f",
+    },
 ];
 
 const HOST: &str = "github.com";
@@ -216,6 +223,7 @@ mod tests {
         }
         assert!(find("it").is_some());
         assert!(find("es").is_some());
+        assert!(find("fr").is_some());
         assert!(find("en").is_none());
     }
 

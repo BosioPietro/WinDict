@@ -42,7 +42,7 @@ use crate::hotkey::{self, held_modifiers, is_modifier, Hotkey};
 use crate::i18n::{self, tr, Language, Strings};
 use crate::lang::LangCode;
 use crate::render::{
-    Align, Face, Ink, Layout, ListLayout, Picker, Renderer, Side, Target, PICKER_ROWS,
+    Align, Face, Ink, Layout, Picker, Renderer, Side, Target, PICKER_ROWS, SELECT_H,
 };
 use crate::selection;
 use crate::theme::Theme;
@@ -225,6 +225,7 @@ struct View {
     spare: SpareView,
     /// The boxes of the default languages, to draw again in place.
     boxes: BoxesView,
+    interface: InterfaceView,
     /// Where things can be clicked, in the scroller.
     hits: Vec<(Hit, Rect)>,
     /// Where Tab stops, and the corner radius of the ring there, in the scroller.
@@ -303,6 +304,15 @@ struct BoxesView {
     group_at: Vector3,
 }
 
+/// The box of the language WinDict is shown in. It's over the rows, not in
+/// its group, so that its list covers the rows under it.
+struct InterfaceView {
+    text: Text,
+    caret: SpriteVisual,
+    /// In the scroller.
+    at: Vector3,
+}
+
 /// What slides up as the list of matches gets shorter: the rows after the
 /// languages in their group, the groups after it, and the group's own
 /// background and outline.
@@ -352,9 +362,9 @@ pub struct Settings {
     downloads: Vec<Option<(String, bool)>>,
     /// The choice whose pill is gliding over, and the option it's leaving.
     pill_from: Option<(Choice, usize)>,
-    /// The list a default language is being picked from, while it's open,
-    /// and what shows it, in the boxes.
-    picking: Option<Picking>,
+    /// The list a language is being picked from, while it's open, and what
+    /// shows it, under the box it's picked in.
+    picking: Option<Picking<Select>>,
     list: List,
     /// What's typed in the email field.
     email: LineEdit,
@@ -534,8 +544,8 @@ impl Settings {
     /// The pointer moved to a point in window pixels, or left.
     pub fn hover(&mut self, point: Option<(i32, i32)>) -> Result<()> {
         // On a scrollbar, or dragging its thumb, nothing else is hovered.
-        let in_boxes = point.and_then(|(x, y)| self.boxes_point(x, y));
-        let on_list = self.list.hover_bar(&self.anim, in_boxes)?;
+        let in_list = point.and_then(|(x, y)| self.list_point(x, y));
+        let on_list = self.list.hover_bar(&self.anim, in_list)?;
         let point = if on_list { None } else { point };
         let point = if self.hover_bar(point)? { None } else { point };
         let hit = point.and_then(|(x, y)| self.hit_at(x, y));
@@ -547,8 +557,8 @@ impl Settings {
         let hit = self.hit_at(x, y);
         // A click sends a tooltip away, as the system's do.
         self.show_tip(None)?;
-        if let Some((bx, by)) = self.boxes_point(x, y) {
-            if self.list.press(&self.anim, bx, by)? {
+        if let Some((lx, ly)) = self.list_point(x, y) {
+            if self.list.press(&self.anim, lx, ly)? {
                 return Ok(None);
             }
         }
@@ -570,8 +580,8 @@ impl Settings {
         // A click away from the open box shuts its list.
         let away = !matches!(hit, Some(Hit::Select(_) | Hit::Pick(_) | Hit::Swap));
         if away {
-            if let Some(side) = self.picking.take().map(|p| p.side) {
-                self.focus = hit.and_then(Hit::stop).or(Some(Stop::Select(side)));
+            if let Some(select) = self.picking.take().map(|p| p.on) {
+                self.focus = hit.and_then(Hit::stop).or(Some(Stop::Select(select)));
                 self.relayout()?;
             }
         }
@@ -657,7 +667,9 @@ impl Settings {
             }
             (VK_SPACE | VK_RETURN, Some(Stop::Switch(sw))) => self.activate(Hit::Switch(sw))?,
             (VK_SPACE | VK_RETURN, Some(Stop::Config)) => self.activate(Hit::Config)?,
-            (VK_SPACE | VK_RETURN, Some(Stop::Select(side))) => self.activate(Hit::Select(side))?,
+            (VK_SPACE | VK_RETURN, Some(Stop::Select(select))) => {
+                self.activate(Hit::Select(select))?
+            }
             (VK_SPACE | VK_RETURN, Some(Stop::Swap)) => self.activate(Hit::Swap)?,
             (VK_SPACE | VK_RETURN, Some(Stop::Fold(fold))) => self.activate(Hit::Fold(fold))?,
             (VK_RIGHT, Some(Stop::Fold(fold))) => {
@@ -774,8 +786,8 @@ impl Settings {
     /// pixels: the list of languages, however far it can go, when it's on
     /// it, or else the window.
     pub fn wheel(&mut self, delta: i32, (x, y): (i32, i32)) -> Result<()> {
-        let in_boxes = self.boxes_point(x, y);
-        if in_boxes.is_some_and(|(x, y)| self.list.contains(x, y)) {
+        let in_list = self.list_point(x, y);
+        if in_list.is_some_and(|(x, y)| self.list.contains(x, y)) {
             self.list.wheel(&self.anim, delta)?;
             // The highlight moves to the row the pointer's on now.
             return self.hover(Some((x, y)));
@@ -1068,8 +1080,8 @@ impl Settings {
                 None
             }
             Hit::Language(i) => self.tick(i)?,
-            Hit::Select(side) => {
-                self.open_picker(side)?;
+            Hit::Select(select) => {
+                self.open_picker(select)?;
                 None
             }
             Hit::Swap => self.swap_languages()?,
@@ -1180,7 +1192,7 @@ impl Settings {
 
     fn hit_at(&self, x: i32, y: i32) -> Option<Hit> {
         let view = self.view.as_ref()?;
-        let in_boxes = self.boxes_point(x, y);
+        let in_list = self.list_point(x, y);
         let (x, y) = self.card_point(x, y);
         if x < 0.0 || x >= self.card.0 || y < 0.0 || y >= self.card.1 {
             return None;
@@ -1191,8 +1203,8 @@ impl Settings {
         if y < view.header_h {
             return None;
         }
-        if let Some((bx, by)) = in_boxes.filter(|&(bx, by)| self.list.contains(bx, by)) {
-            return self.list.row_at(bx, by).map(Hit::Pick);
+        if let Some((lx, ly)) = in_list.filter(|&(lx, ly)| self.list.contains(lx, ly)) {
+            return self.list.row_at(lx, ly).map(Hit::Pick);
         }
         let y = y - view.header_h + self.scroller.at;
         view.hits(&self.open)
@@ -1200,15 +1212,20 @@ impl Settings {
             .map(|(hit, _)| hit)
     }
 
-    /// A point in window pixels in the default languages' boxes, in pixels
-    /// from their top left, if it's on the part of the window that scrolls.
-    fn boxes_point(&self, x: i32, y: i32) -> Option<(f32, f32)> {
+    /// A point in window pixels in what the list of languages is in: the
+    /// box of WinDict's language while it's open under that, or else the
+    /// default languages' boxes. In pixels from its top left, if it's on
+    /// the part of the window that scrolls.
+    fn list_point(&self, x: i32, y: i32) -> Option<(f32, f32)> {
         let view = self.view.as_ref()?;
         let (x, y) = self.card_point(x, y);
         if x < 0.0 || x >= self.card.0 || y < view.header_h || y >= self.card.1 {
             return None;
         }
-        let at = view.boxes.at + view.boxes.group_at;
+        let at = match self.picking.as_ref().map(|p| p.on) {
+            Some(Select::Interface) => view.interface.at,
+            _ => view.boxes.at + view.boxes.group_at,
+        };
         Some((x - at.X, y - view.header_h + self.scroller.at - at.Y))
     }
 

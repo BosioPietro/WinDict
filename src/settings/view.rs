@@ -105,16 +105,54 @@ impl Settings {
         if moved {
             self.show_slack(true)?;
         }
-        self.show_list(layout.list.as_deref())?;
         Ok(true)
     }
 
-    /// Shows the list of languages `list` lays out in the boxes, or takes
+    /// Shows the box of the language WinDict is shown in afresh, in the
+    /// view as it is: it keeps its height, its list covering the rows
+    /// under it.
+    pub(super) fn refresh_interface(&self) -> Result<()> {
+        let layout = self.layout_interface()?;
+        let Some(view) = &self.view else {
+            return Ok(());
+        };
+        let v = &view.interface;
+        v.text
+            .show(&self.renderer, &layout, self.scale, &self.theme)?;
+        self.show_caret(&v.caret, &layout)
+    }
+
+    /// Puts `caret` where `layout` has it, blinking, or hides it.
+    fn show_caret(&self, caret: &SpriteVisual, layout: &Layout) -> Result<()> {
+        let s = self.scale;
+        let Some(m) = layout.caret else {
+            Animator::stop(caret, &["Opacity"]);
+            return caret.SetOpacity(0.0);
+        };
+        caret.SetOffset(v3((m.x * s).round(), (m.y * s).round()))?;
+        caret.SetSize(v2((m.width * s).round().max(1.0), (m.height * s).round()))?;
+        ui::blink(&self.anim.compositor, caret)
+    }
+
+    /// Shows the list of languages under the box being picked in, or takes
     /// it away, fading as the view it was in does.
-    pub(super) fn show_list(&mut self, list: Option<&ListLayout>) -> Result<()> {
+    pub(super) fn show_list(&mut self) -> Result<()> {
+        let open = self.picking.as_ref().map(|p| p.on);
+        let (layout, parent) = match (open, &self.view) {
+            (Some(Select::Interface), Some(view)) => {
+                (self.layout_interface()?, view.interface.text.visual.cast()?)
+            }
+            (Some(Select::Translate(_)), Some(view)) => {
+                (self.layout_languages()?.0, view.boxes.text.visual.cast()?)
+            }
+            _ => return self.list.hide(&self.anim, SLIDE_FADE_MS),
+        };
         let (anim, r, t, s) = (&self.anim, &self.renderer, &self.theme, self.scale);
-        match list {
-            Some(list) => self.list.show(anim, r, t, list, s),
+        match layout.list.as_deref() {
+            Some(list) => {
+                self.list.attach(&parent)?;
+                self.list.show(anim, r, t, list, s)
+            }
             None => self.list.hide(anim, SLIDE_FADE_MS),
         }
     }
@@ -212,8 +250,7 @@ impl Settings {
         self.show_open(false)?;
         self.show_recording()?;
         self.show_slack(false)?;
-        let (languages, _) = self.layout_languages()?;
-        self.show_list(languages.list.as_deref())?;
+        self.show_list()?;
         self.show_hover(self.hovered)?;
         self.ring_shown = false;
         self.show_focus(false)?;
@@ -270,7 +307,11 @@ impl Settings {
         let translate_h =
             px(TRANSLATE_HEAD) + (languages_layout.height * s).ceil() + slack + px(TRANSLATE_FOOT);
         let missing = || windows::core::Error::from(E_UNEXPECTED);
-        let mut parts = Parts::default();
+        let mut parts = Parts {
+            // Over the groups, where the box of WinDict's language goes.
+            overlay: Some(container(c, &scroller, v3(0.0, 0.0))?),
+            ..Parts::default()
+        };
         let mut folds: [Option<FoldView>; FOLDS.len()] = Default::default();
         let mut languages = None;
         let mut y = 0.0;
@@ -394,6 +435,13 @@ impl Settings {
                 });
             }
             reveal.push((group.cast()?, group_at));
+            if rows
+                .iter()
+                .any(|row| matches!(row.control, Control::Interface))
+            {
+                let v = parts.interface.as_ref().ok_or_else(missing)?;
+                reveal.push((v.text.visual.cast()?, v.at));
+            }
             y += group_h;
         }
 
@@ -419,6 +467,12 @@ impl Settings {
         y += link_size.Y + px(PAD_BOTTOM);
         let content_h = y;
 
+        // Over everything else that scrolls, but the ring.
+        if let Some(overlay) = &parts.overlay {
+            let children = scroller.Children()?;
+            children.Remove(overlay)?;
+            children.InsertAtTop(overlay)?;
+        }
         let (ring, ring_source, ring_grid) = self.build_ring(&scroller)?;
 
         let (c, t) = (&self.anim.compositor, &self.theme);
@@ -466,6 +520,7 @@ impl Settings {
             translate_at: parts.translate.ok_or_else(missing)?,
             spare: spare.ok_or_else(missing)?,
             boxes: parts.boxes.ok_or_else(missing)?,
+            interface: parts.interface.ok_or_else(missing)?,
             hits: parts.hits,
             stops: parts.stops,
             ring,
@@ -830,6 +885,7 @@ impl Settings {
             }
             Control::Choice(_)
             | Control::Counter(_)
+            | Control::Interface
             | Control::Email
             | Control::Translate
             | Control::Selection => None,
@@ -923,6 +979,13 @@ impl Settings {
                     .stops
                     .push((Stop::Choice(choice), place(at).outset(outset), radius));
                 parts.choices[choice as usize] = Some(view);
+            }
+            Control::Interface => {
+                let at = v3(
+                    group_at.X + right - px(INTERFACE_W),
+                    group_at.Y + (middle - px(SELECT_H) / 2.0).round(),
+                );
+                parts.interface = Some(self.build_interface(parts, at)?);
             }
             Control::Email => {
                 let (view, at) = self.build_field(group, right, middle)?;
@@ -1020,6 +1083,46 @@ impl Settings {
         Ok(())
     }
 
+    /// The box of the language WinDict is shown in, at `at` in the
+    /// scroller, over the groups, and where it can be clicked and focused.
+    fn build_interface(&self, parts: &mut Parts, at: Vector3) -> Result<InterfaceView> {
+        let (c, r, t, s) = (
+            &self.anim.compositor,
+            &self.renderer,
+            &self.theme,
+            self.scale,
+        );
+        let overlay = parts
+            .overlay
+            .as_ref()
+            .ok_or_else(|| windows::core::Error::from(E_UNEXPECTED))?;
+        let layout = self.layout_interface()?;
+        let text = Text::new(c, overlay)?;
+        text.show(r, &layout, s, t)?;
+        text.visual.SetOffset(at)?;
+        let parent = text.visual.cast::<ContainerVisual>()?;
+        let (caret, _) = rounded(c, r, &parent, Rect::default(), 0.0, t.accent)?;
+        self.show_caret(&caret, &layout)?;
+        let radius = (SELECT_RING_RADIUS * s).round();
+        for link in layout
+            .links
+            .iter()
+            .filter(|l| l.target == Target::Interface)
+        {
+            let rect = Rect {
+                x: at.X + link.x * s,
+                y: at.Y + link.y * s,
+                w: link.width * s,
+                h: link.height * s,
+            };
+            parts.hits.push((Hit::Select(Select::Interface), rect));
+            parts
+                .stops
+                .push((Stop::Select(Select::Interface), rect, radius));
+        }
+        Ok(InterfaceView { text, caret, at })
+    }
+
     /// The default languages: the setting's name and description over the
     /// translate card's boxes (the `languages` layout), the swap button
     /// between them and, when one is open, the list to pick from.
@@ -1071,8 +1174,8 @@ impl Settings {
         let boxes = Text::new(c, group)?;
         boxes.show(r, languages, s, t)?;
         boxes.visual.SetOffset(at)?;
-        // The list of languages scrolls in the boxes, over its outline.
-        self.list.attach(&boxes.visual.cast()?)?;
+        // The list of languages scrolls in the box it's open under, over
+        // its outline.
         self.list.apply_theme(t)?;
         let mut blinker = None;
         if let Some(m) = languages.caret {
@@ -1109,8 +1212,9 @@ impl Settings {
             });
             match &link.target {
                 Target::Language(side) => {
-                    parts.hits.push((Hit::Select(*side), rect));
-                    let stop = (Stop::Select(*side), rect, px(SELECT_RING_RADIUS));
+                    let select = Select::Translate(*side);
+                    parts.hits.push((Hit::Select(select), rect));
+                    let stop = (Stop::Select(select), rect, px(SELECT_RING_RADIUS));
                     parts.stops.push(stop);
                 }
                 Target::Swap => {
@@ -1139,6 +1243,9 @@ struct Parts {
     /// The hover and chevron of each row that folds, in the order of [`FOLDS`].
     folds: [Option<(SpriteVisual, SpriteVisual)>; FOLDS.len()],
     boxes: Option<BoxesView>,
+    interface: Option<InterfaceView>,
+    /// What the box of WinDict's language goes in.
+    overlay: Option<ContainerVisual>,
     hits: Vec<(Hit, Rect)>,
     stops: Vec<(Stop, Rect, f32)>,
 }

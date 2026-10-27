@@ -228,14 +228,16 @@ impl LanguagePair {
         }
     }
 
-    /// The list, as it's drawn, while it's open.
-    pub(super) fn picker(&self) -> Option<render::Picker<'_>> {
-        self.picking.as_ref().map(|p| render::Picker {
-            side: p.side,
-            query: p.query.text(),
-            caret: p.query.caret_utf16(),
-            matches: &p.matches,
-            highlight: p.highlight,
+    /// The list, as it's drawn, while it's open, and the side it's open on.
+    pub(super) fn picker(&self) -> Option<(Side, render::Picker<'_>)> {
+        self.picking.as_ref().map(|p| {
+            let picker = render::Picker {
+                query: p.query.text(),
+                caret: p.query.caret_utf16(),
+                matches: &p.matches,
+                highlight: p.highlight,
+            };
+            (p.on, picker)
         })
     }
 
@@ -250,7 +252,7 @@ impl LanguagePair {
     /// Opens the list under `side`, or shuts it if it's open there. Returns
     /// whether it opened.
     pub(super) fn toggle(&mut self, side: Side) -> bool {
-        let open = self.picking.take().map(|p| p.side);
+        let open = self.picking.take().map(|p| p.on);
         if open == Some(side) {
             return false;
         }
@@ -268,7 +270,7 @@ impl LanguagePair {
     /// the other side's language swaps them round. Returns the side, and
     /// whether the languages changed, or nothing when no list was open.
     pub(super) fn pick(&mut self, language: LangCode) -> Option<(Side, bool)> {
-        let side = self.picking.take()?.side;
+        let side = self.picking.take()?.on;
         let (picked, other) = match side {
             Side::From => (&mut self.from, &mut self.to),
             Side::To => (&mut self.to, &mut self.from),

@@ -242,6 +242,8 @@ pub enum Target {
     Pin,
     /// Lists the languages to translate from, or into.
     Language(Side),
+    /// Lists the languages WinDict can be shown in.
+    Interface,
     /// Translates the other way.
     Swap,
     /// Translates from, or into, the language with this code.
@@ -264,14 +266,14 @@ pub struct TranslationCard<'a> {
     pub from: &'a str,
     pub to: &'a str,
     pub state: Translated<'a>,
-    /// The list a language is being picked from, in place of the translation.
-    pub picker: Option<Picker<'a>>,
+    /// The list a language is being picked from, in place of the
+    /// translation, and the side it's picked for.
+    pub picker: Option<(Side, Picker<'a>)>,
 }
 
-/// The languages to pick one side's from, listed under its box, which takes
-/// what's typed to narrow them down.
+/// The languages to pick one from, listed under a box, which takes what's
+/// typed to narrow them down.
 pub struct Picker<'a> {
-    pub side: Side,
     pub query: &'a str,
     /// Where the caret is in `query`, in UTF-16 units.
     pub caret: u32,
@@ -334,7 +336,7 @@ const SEARCH_ICON: &str = "\u{E721}";
 const CHECK_ICON: &str = "\u{E73E}";
 // A translation's languages, in DIPs: a box for each, the swap button
 // between them, and the list under the one being picked.
-const SELECT_H: f32 = 36.0;
+pub const SELECT_H: f32 = 36.0;
 const SELECT_PAD: f32 = 10.0;
 const CONTROL_RADIUS: f32 = 5.0;
 const SWAP_W: f32 = 32.0;

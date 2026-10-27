@@ -1,5 +1,5 @@
-//! The list a translation's language is picked from: the languages what's
-//! typed in its box matches, and the one Enter picks.
+//! The list a language is picked from, a translation's or WinDict's own:
+//! the languages what's typed in its box matches, and the one Enter picks.
 
 use crate::render::Side;
 use crate::translate;
@@ -9,24 +9,33 @@ use super::edit::LineEdit;
 /// No language's name is longer, in any of the ways it can be searched.
 const MAX_QUERY_CHARS: usize = 12;
 
-pub(crate) struct Picking {
-    pub side: Side,
+/// `T` says which box the list is open under: for a translation, the side.
+pub(crate) struct Picking<T = Side> {
+    pub on: T,
     /// What's typed to narrow the list down.
     pub query: LineEdit,
     /// The codes of the languages that match it.
     pub matches: Vec<&'static str>,
     /// Which of them Enter picks.
     pub highlight: Option<usize>,
+    /// Which languages it lists at all.
+    listed: fn(&str) -> bool,
 }
 
-impl Picking {
+impl<T> Picking<T> {
     /// Every language, `current` highlighted.
-    pub fn new(side: Side, current: &str) -> Picking {
+    pub fn new(on: T, current: &str) -> Picking<T> {
+        Picking::among(on, current, |_| true)
+    }
+
+    /// The languages `listed` takes, `current` highlighted.
+    pub fn among(on: T, current: &str, listed: fn(&str) -> bool) -> Picking<T> {
         let mut picking = Picking {
-            side,
+            on,
             query: LineEdit::new("", MAX_QUERY_CHARS),
             matches: Vec::new(),
             highlight: None,
+            listed,
         };
         picking.refilter(current);
         picking
@@ -36,6 +45,7 @@ impl Picking {
     /// with nothing typed, `current`.
     pub fn refilter(&mut self, current: &str) {
         self.matches = translate::search(self.query.text());
+        self.matches.retain(|code| (self.listed)(code));
         self.highlight = if self.query.text().trim().is_empty() {
             self.matches.iter().position(|code| *code == current)
         } else {
@@ -116,5 +126,17 @@ mod tests {
         assert!(picking.highlight("fr"));
         assert!(!picking.highlight("fr"));
         assert!(!picking.highlight("xx"));
+    }
+
+    #[test]
+    fn lists_only_the_languages_asked_for() {
+        let mut picking = Picking::among(Side::To, "it", |code| matches!(code, "en" | "it"));
+        assert_eq!(picking.matches, ["en", "it"]);
+        assert_eq!(picking.highlighted(), Some("it"));
+        for unit in "ger".encode_utf16() {
+            picking.query.type_unit(unit);
+        }
+        picking.refilter("it");
+        assert!(picking.matches.is_empty());
     }
 }

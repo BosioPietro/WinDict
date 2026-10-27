@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::config::Shortcut;
-use crate::render::{Picker, LANGUAGES_TOP, QUERY_SIZE};
+use crate::render::{Picker, Side, LANGUAGES_TOP, QUERY_SIZE};
 
 impl Popup {
     /// Shows the search box under `title`, for what the `purpose` shortcut
@@ -76,12 +76,13 @@ impl Popup {
 
     /// Shows the languages what's typed is to be translated between, in
     /// boxes under the field like the translation card's, with `picker`
-    /// open under one of them. The card grows or shrinks to fit them.
+    /// open under the box of the side it's paired with. The card grows or
+    /// shrinks to fit them.
     pub fn set_search_languages(
         &mut self,
         from: &str,
         to: &str,
-        picker: Option<&Picker>,
+        picker: Option<(Side, &Picker)>,
     ) -> Result<()> {
         let s = self.scale;
         let content_w = CARD_W - 2.0 * PAD_X;

@@ -59,7 +59,7 @@ theme and accent color.
 - Pronunciation in the word's own language, with Windows' own voices
 - A box to type into, for text that can't be selected
 - `wd`, to look up and translate from the command line
-- English, Italian and Spanish dictionaries
+- English, Italian, Spanish and French dictionaries
 - Follows the system's light or dark theme and accent color
 - Adjustable text size and shortcuts
 - Updates itself from the tray
@@ -230,9 +230,9 @@ by hand, use **Open config.json** at the bottom of the settings window, then
 - English comes from Open English WordNet (about 150,000 words and phrases),
   which is built into the executable. Lookups in it don't use the network and
   take under a millisecond.
-- Italian comes from Wikizionario (about 75,000 words), and Spanish from
-  Wikcionario (about 135,000). Each is downloaded once, when it's chosen in
-  the settings.
+- Italian comes from Wikizionario (about 75,000 words), Spanish from
+  Wikcionario (about 135,000) and French from Wiktionnaire (about 490,000).
+  Each is downloaded once, when it's chosen in the settings.
 - The online dictionary is used for pronunciations and for words the built-in
   one doesn't have. Translations are fetched only when asked for. Both can be
   turned off in the settings.
@@ -291,6 +291,9 @@ cargo build --release --features setup --bin windict-setup   # target\release\wi
 - Spanish dictionary and online lookups:
   [Wikcionario](https://es.wiktionary.org/), through
   [wiktextract](https://kaikki.org/eswiktionary/) (CC BY-SA 4.0).
+- French dictionary and online lookups:
+  [Wiktionnaire](https://fr.wiktionary.org/), through
+  [wiktextract](https://kaikki.org/frwiktionary/) (CC BY-SA 4.0).
 - Translations: Google Translate's public web endpoint, which is unofficial
   and may change, falling back to [MyMemory](https://mymemory.translated.net/).
 

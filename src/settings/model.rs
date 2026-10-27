@@ -142,18 +142,15 @@ pub(super) fn selection_detail(mode: SelectionMode) -> &'static str {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Choice {
     Theme,
-    Language,
     Selection,
 }
 
-pub(super) const CHOICES: [Choice; 3] = [Choice::Theme, Choice::Language, Choice::Selection];
+pub(super) const CHOICES: [Choice; 2] = [Choice::Theme, Choice::Selection];
 
 impl Choice {
     pub(super) fn names(self) -> Vec<&'static str> {
         match self {
             Choice::Theme => THEMES.iter().map(|(_, name)| name(tr())).collect(),
-            // Each in itself, so that it's found whichever language this is.
-            Choice::Language => Language::ALL.iter().map(|l| l.name()).collect(),
             Choice::Selection => SELECTIONS.iter().map(|(_, name, _)| name(tr())).collect(),
         }
     }
@@ -163,7 +160,7 @@ impl Choice {
     pub(super) fn segment_w(self) -> f32 {
         match self {
             Choice::Selection => (GROUP_W - TEXT_X - ROW_PAD) / SELECTIONS.len() as f32,
-            Choice::Theme | Choice::Language => SEGMENT_W,
+            Choice::Theme => SEGMENT_W,
         }
     }
 }
@@ -260,6 +257,15 @@ impl Note {
     }
 }
 
+/// A box a language is picked in, from the list that opens under it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Select {
+    /// The language WinDict is shown in.
+    Interface,
+    /// A default language of translations.
+    Translate(Side),
+}
+
 /// What's under the pointer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Hit {
@@ -278,8 +284,8 @@ pub(super) enum Hit {
     Email,
     /// The info symbol beside it, with its tooltip.
     Info,
-    /// A default language's box, which lists the others to pick from.
-    Select(Side),
+    /// A language's box, which lists the others to pick from.
+    Select(Select),
     /// The button between them, which swaps them.
     Swap,
     /// A language in that list, by its place among the matches.
@@ -295,7 +301,7 @@ pub(super) enum Stop {
     Choice(Choice),
     Counter(Counter),
     Email,
-    Select(Side),
+    Select(Select),
     Swap,
     Fold(Fold),
     Language(usize),
@@ -314,7 +320,7 @@ impl Hit {
             Hit::Language(i) => Some(Stop::Language(i)),
             Hit::Email => Some(Stop::Email),
             Hit::Info | Hit::Pick(_) => None,
-            Hit::Select(side) => Some(Stop::Select(side)),
+            Hit::Select(select) => Some(Stop::Select(select)),
             Hit::Swap => Some(Stop::Swap),
             Hit::Config => Some(Stop::Config),
         }
@@ -346,6 +352,9 @@ pub(super) enum Control {
     /// Opens the list under it. It's the last row of its group, so that
     /// only what's below the group moves as the list opens.
     Fold(Fold),
+    /// The box of the language WinDict is shown in, with the list over
+    /// the rows under it while it's open.
+    Interface,
     /// The field for the MyMemory email, with an info symbol after the
     /// setting's name.
     Email,
@@ -366,6 +375,7 @@ impl Control {
             Control::Choice(choice) => choice.names().len() as f32 * choice.segment_w(),
             Control::Counter(counter) => counter.width(),
             Control::Fold(_) => CHEVRON_W,
+            Control::Interface => INTERFACE_W,
             Control::Email => FIELD_W,
             Control::Translate | Control::Selection => 0.0,
         }
@@ -435,7 +445,7 @@ pub(super) const SECTIONS: &[(Label, &[Row])] = &[
                 "\u{F2B7}",
                 |s| s.language,
                 |s| s.language_detail,
-                Control::Choice(Choice::Language),
+                Control::Interface,
             ),
             // Its description sums up the shortcuts' keys.
             row(

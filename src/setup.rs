@@ -328,11 +328,7 @@ impl Setup {
                 return self.go(Stage::Failed(error));
             }
         };
-        let language = match self.language {
-            Language::Italian => "it",
-            Language::Spanish => "es",
-            Language::English => "en",
-        };
+        let language = self.language.code();
         let switches: Vec<OsString> = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"]
             .into_iter()
             .map(OsString::from)
