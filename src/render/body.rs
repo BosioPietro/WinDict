@@ -513,17 +513,9 @@ impl Renderer {
         out.y += LIST_GAP;
         let top = out.y;
         let height = 2.0 * LIST_PAD + picker.shown() as f32 * ROW_H;
-        out.items.push(Item::Shape {
-            x: 0.0,
-            y: top,
-            width,
-            height,
-            radius: LIST_RADIUS,
-            fill: Some(Paint::Field),
-            stroke: Some(Paint::ControlStroke),
-        });
         let row_w = width - 2.0 * LIST_PAD;
         out.list = Some(Box::new(ListLayout {
+            panel: list_panel(width, height),
             rows: self.layout_rows(picker, current, row_w)?,
             frame: Mark {
                 x: 0.0,
@@ -780,5 +772,25 @@ impl Renderer {
         }
         out.y += line_h;
         Ok(())
+    }
+}
+
+/// A list's outline, `width` by `height`, from its top left.
+fn list_panel(width: f32, height: f32) -> Layout {
+    Layout {
+        items: vec![Item::Shape {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+            radius: LIST_RADIUS,
+            fill: Some(Paint::Field),
+            stroke: Some(Paint::ControlStroke),
+        }],
+        width,
+        height,
+        links: Vec::new(),
+        caret: None,
+        list: None,
     }
 }

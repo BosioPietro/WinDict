@@ -123,13 +123,17 @@ pub struct Layout {
     /// draws itself so that it can blink.
     pub caret: Option<Mark>,
     /// The list a language is being picked from, which the consumer shows
-    /// itself so that it can scroll: only its outline is drawn.
+    /// itself so that it can scroll and move: none of it is drawn, though
+    /// there's room left for it.
     pub list: Option<Box<ListLayout>>,
 }
 
 /// A list that scrolls in a layout: all its rows, laid out apart, and the
 /// band of the layout they show through.
 pub struct ListLayout {
+    /// The outline, from its top left: the list draws it, to move and fade
+    /// with the rows.
+    pub panel: Layout,
     /// From the top left of the first row.
     pub rows: Layout,
     /// The list's outline, and the band in it the rows show through, in

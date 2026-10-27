@@ -20,11 +20,20 @@ const THUMB_ENDS: (f32, f32) = (4.0, 4.0);
 /// how long the fill takes to fade from one row to the next, in ms.
 const SCROLL_MS: u64 = 140;
 const FILL_MS: u64 = 100;
+/// How long the list takes to come down from the box as it opens, and to
+/// fade in doing so, and how far above it starts, in DIPs; going, it rises
+/// back by `LIFT` as it fades.
+const OPEN_MS: u64 = 250;
+const OPEN_FADE_MS: u64 = 120;
+const DROP: f32 = 12.0;
+const LIFT: f32 = 6.0;
 
 pub struct List {
     /// At the left of the list's outline, level with the top of the band
     /// its rows show through; everything else is in here.
     root: ContainerVisual,
+    /// The outline, under everything else.
+    panel: Text,
     /// The clipped band the rows show through.
     host: ContainerVisual,
     fade: ScrollFade,
@@ -86,11 +95,13 @@ impl List {
         let fills = [fill()?, fill()?];
         let rows = Text::new(c, &content)?;
 
+        let panel = Text::new(c, &root)?;
         let fade = ScrollFade::new(c, &root, &host)?;
         let thumb_brush = c.CreateColorBrush()?;
         let bar = Scrollbar::new(c, &root, &thumb_brush.cast()?)?;
         Ok(List {
             root,
+            panel,
             host,
             fade,
             content,
@@ -150,7 +161,8 @@ impl List {
 
     /// Shows `list` at `s` pixels per DIP. The same rows as before keep
     /// their place, gliding to show the row Enter picks, and the fill fades
-    /// over to it; others start from the top, showing it at once.
+    /// over to it; others start from the top, showing it at once. A list
+    /// that wasn't showing comes down from the box it's under as it fades in.
     pub fn show(
         &mut self,
         anim: &Animator,
@@ -159,7 +171,8 @@ impl List {
         list: &ListLayout,
         s: f32,
     ) -> Result<()> {
-        let same = self.frame.is_some()
+        let opening = self.frame.is_none();
+        let same = !opening
             && self.s == s
             && self.links.len() == list.rows.links.len()
             && self
@@ -173,7 +186,9 @@ impl List {
         let px = |dip: f32| (dip * s).round();
         self.content_h = self.rows.show(renderer, &list.rows, s, theme)?.Y;
         self.viewport_h = px(viewport.height);
-        self.root.SetOffset(v3(px(frame.x), px(viewport.y)))?;
+        let at = v3(px(frame.x), px(viewport.y));
+        self.panel.show(renderer, &list.panel, s, theme)?;
+        self.panel.visual.SetOffset(v3(0.0, px(frame.y) - at.Y))?;
         self.root.SetSize(v2(px(frame.width), self.viewport_h))?;
         self.host.SetOffset(v3(px(viewport.x - frame.x), 0.0))?;
         self.host.SetSize(v2(px(viewport.width), self.viewport_h))?;
@@ -187,9 +202,25 @@ impl List {
         for fill in &self.fills {
             fill.SetSize(v2(px(viewport.width), px(list.row_h)))?;
         }
-        Animator::stop(&self.root, &["Opacity"]);
-        self.root.SetOpacity(1.0)?;
-        self.root.SetIsVisible(true)?;
+        if opening {
+            Animator::stop(&self.root, &["Opacity", "Offset"]);
+            self.root.SetOpacity(0.0)?;
+            self.root.SetOffset(v3(at.X, at.Y - px(DROP)))?;
+            self.root.SetIsVisible(true)?;
+            anim.scalar(
+                &self.root,
+                "Opacity",
+                1.0,
+                OPEN_FADE_MS,
+                0,
+                &anim.decelerate,
+            )?;
+            anim.vector3(&self.root, "Offset", at, OPEN_MS, 0, &anim.decelerate)?;
+        } else {
+            Animator::stop(&self.root, &["Opacity", "Offset"]);
+            self.root.SetOpacity(1.0)?;
+            self.root.SetOffset(at)?;
+        }
 
         if !same {
             self.scroller.stop_at(0.0);
@@ -210,17 +241,26 @@ impl List {
         Ok(())
     }
 
-    /// Takes the list away, fading out over `ms`, or at once, letting go of
-    /// its rows' surface, to start afresh when it next shows.
+    /// Takes the list away, rising back to the box as it fades out over
+    /// `ms`, or at once, letting go of its surfaces, to start afresh when it
+    /// next shows.
     pub fn hide(&mut self, anim: &Animator, ms: u64) -> Result<()> {
-        if self.frame.take().is_none() {
+        let Some((_, viewport)) = self.frame.take() else {
             return Ok(());
-        }
+        };
         if ms > 0 {
-            anim.scalar(&self.root, "Opacity", 0.0, ms, 0, &anim.decelerate)?;
+            let at = self.root.Offset()?;
+            let to = v3(
+                at.X,
+                (viewport.y * self.s).round() - (LIFT * self.s).round(),
+            );
+            anim.scalar(&self.root, "Opacity", 0.0, ms, 0, &anim.accelerate)?;
+            anim.vector3(&self.root, "Offset", to, ms, 0, &anim.accelerate)?;
         } else {
+            Animator::stop(&self.root, &["Opacity", "Offset"]);
             self.root.SetIsVisible(false)?;
             self.rows.clear();
+            self.panel.clear();
         }
         self.bar.release();
         self.links.clear();
