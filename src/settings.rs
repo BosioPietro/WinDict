@@ -1150,18 +1150,30 @@ impl Settings {
     /// Sizes the card to what's in it now, gliding there. A window that
     /// grows does at once, moving up if it has to to stay on the screen;
     /// one that shrinks waits for the card to ([`Settings::settle`]).
+    /// What scrolls glides back within its end, even when the card, as tall
+    /// as the screen lets it be, keeps its height.
     fn refit(&mut self) -> Result<()> {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let s = self.scale;
         let h = (view.header_h + view.height(&self.open))
             .min(self.room)
             .ceil();
         let old = self.card.1;
-        if h == old {
-            return Ok(());
+        if h != old {
+            self.resize_card(old, h)?;
         }
+        let scroll = self.scroller.at.min(self.max_scroll());
+        self.scroll_to(scroll)?;
+        self.show_scroll(true)
+    }
+
+    /// Glides the card from `old` pixels tall to `h`.
+    fn resize_card(&mut self, old: f32, h: f32) -> Result<()> {
+        let Some(view) = &self.view else {
+            return Ok(());
+        };
+        let s = self.scale;
         self.card.1 = h;
         let m = (MARGIN * s).round();
         self.frame
@@ -1178,9 +1190,7 @@ impl Settings {
         // clickable follows, once a smaller card has finished shrinking.
         self.set_region(old.max(h));
         win::set_timer(self.hwnd, TIMER_SETTLE, SETTLE_MS);
-        let scroll = self.scroller.at.min(self.max_scroll());
-        self.scroll_to(scroll)?;
-        self.show_scroll(true)
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
