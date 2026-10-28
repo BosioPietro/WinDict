@@ -155,7 +155,7 @@ To turn it on, use the **Show above Start** switch: on the introduction's
 **Show above Start** step, or in the settings under **General**.
 Windows asks for permission, then WinDict restarts with UI access. Turn the
 switch off to go back. Only the copy the setup installs can have UI access,
-so a downloaded `windict.exe` doesn't show the switch.
+so a downloaded `WinDict-<version>.exe` doesn't show the switch.
 
 <details>
 <summary>How it works</summary>
@@ -245,9 +245,12 @@ open.
 WinDict needs Windows and a Rust toolchain (1.88 or newer).
 
 ```powershell
-cargo build --release        # target\release\windict.exe
+cargo build --release        # target\release\windict.exe and wd.exe
 cargo test                   # unit tests, including the bundled dictionary
+cargo fmt --check
 cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --features uiaccess -- -D warnings
+cargo test --features uiaccess
 ```
 
 <details>
@@ -260,6 +263,7 @@ both builds, put in `dist`:
 mkdir dist
 cargo build --release
 copy target\release\windict.exe dist\WinDict.exe
+copy target\release\wd.exe dist\wd.exe
 cargo build --release --features uiaccess
 copy target\release\windict.exe dist\WinDict-uiaccess.exe
 iscc /DVersion=0.26.0 installer\windict.iss   # dist\WinDict-v0.26.0-inno.exe
