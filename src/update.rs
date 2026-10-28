@@ -12,10 +12,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::Deserialize;
-use windows::core::Owned;
-use windows::Win32::System::Threading::{
-    OpenProcess, WaitForSingleObject, CREATE_NO_WINDOW, PROCESS_SYNCHRONIZE,
-};
+use windows::Win32::Foundation::{HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0};
+use windows::Win32::System::Threading::{WaitForSingleObject, CREATE_NO_WINDOW};
 
 use crate::dicts;
 use crate::http;
@@ -33,7 +31,7 @@ const REPLACE: &str = "--replace";
 /// Anything bigger isn't a WinDict executable.
 const MAX_SIZE: u64 = 64 * 1024 * 1024;
 /// How long the new executable waits for the old one to exit.
-const EXIT_WAIT_MS: u32 = 10_000;
+const EXIT_WAIT_MS: u32 = 30_000;
 
 /// A newer version than this one, and its executable.
 #[derive(Clone, Debug, PartialEq)]
@@ -189,7 +187,6 @@ fn run_task() -> Result<(), String> {
 
 /// This executable was started by the version it replaces, to take its place.
 pub struct Replacing {
-    pid: u32,
     old: PathBuf,
 }
 
@@ -200,19 +197,19 @@ impl Replacing {
         if args.next()? != REPLACE {
             return None;
         }
-        let pid = args.next()?.to_str()?.parse().ok()?;
+        // Its process id, which can be another's by the time it's read:
+        // the instance mutex is waited on instead.
+        let _pid: u32 = args.next()?.to_str()?.parse().ok()?;
         let old = PathBuf::from(args.next()?);
-        Some(Replacing { pid, old })
+        Some(Replacing { old })
     }
 
-    /// Waits for the old version to exit, for a while.
-    pub fn wait(&self) {
-        unsafe {
-            if let Ok(process) = OpenProcess(PROCESS_SYNCHRONIZE, false, self.pid) {
-                let process = Owned::new(process);
-                WaitForSingleObject(*process, EXIT_WAIT_MS);
-            }
-        }
+    /// Waits, for a while, for the old version to exit and let go of
+    /// `instance`, the mutex the running WinDict holds. Returns whether it
+    /// did, which makes this one the running WinDict.
+    pub fn wait(&self, instance: HANDLE) -> bool {
+        let waited = unsafe { WaitForSingleObject(instance, EXIT_WAIT_MS) };
+        waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED
     }
 
     /// Deletes the old executable, if it's one beside this one. Windows may

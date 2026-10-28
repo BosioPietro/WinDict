@@ -86,13 +86,12 @@ pub fn run() -> windows::core::Result<()> {
     }
     // Started by the version this one replaces: it has to be gone first.
     let replacing = update::Replacing::from_args();
-    if let Some(replacing) = &replacing {
-        replacing.wait();
-    }
     unsafe {
         // One instance per user session: a task is the running one's to do.
-        let _instance = CreateMutexW(None, true, w!("Local\\WinDict.Instance"))?;
-        if GetLastError() == ERROR_ALREADY_EXISTS {
+        let instance = CreateMutexW(None, true, w!("Local\\WinDict.Instance"))?;
+        if GetLastError() == ERROR_ALREADY_EXISTS
+            && !replacing.as_ref().is_some_and(|r| r.wait(instance))
+        {
             if let Some(task) = task {
                 app::forward(task);
             }
