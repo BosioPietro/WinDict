@@ -147,7 +147,9 @@ impl Renderer {
                             Paint::Control => to_d2d(theme.control()),
                             Paint::ControlStroke => to_d2d(theme.control_stroke()),
                             Paint::Field => to_d2d(theme.field()),
-                            Paint::Focus | Paint::Accent => theme.accent_d2d(),
+                            Paint::Focus => theme.accent_d2d(),
+                            // A fill, under the text that goes on the accent.
+                            Paint::Accent => to_d2d(theme.accent),
                             Paint::Sunken => to_d2d(theme.sunken()),
                             Paint::StrongStroke => to_d2d(theme.strong_stroke()),
                             Paint::Disabled => theme.text_tertiary(),
