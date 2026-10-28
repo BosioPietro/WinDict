@@ -28,12 +28,19 @@ pub struct Tray {
     tip: String,
 }
 
+/// Copies as much of `text` as fits in `dst` with its ending nul, cut
+/// between characters, not within one.
 fn copy_into(dst: &mut [u16], text: &str) {
     let max = dst.len() - 1;
     let mut n = 0;
-    for (d, s) in dst.iter_mut().zip(text.encode_utf16()).take(max) {
-        *d = s;
-        n += 1;
+    for c in text.chars() {
+        let mut units = [0; 2];
+        let units = c.encode_utf16(&mut units);
+        if n + units.len() > max {
+            break;
+        }
+        dst[n..n + units.len()].copy_from_slice(units);
+        n += units.len();
     }
     dst[n] = 0;
 }
@@ -244,6 +251,15 @@ fn paint_dot(pixels: &mut [u32], width: usize, (r, g, b): (u8, u8, u8)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copies_whole_characters() {
+        let mut dst = [1u16; 4];
+        copy_into(&mut dst, "ab\u{1F600}");
+        assert_eq!(dst, [b'a' as u16, b'b' as u16, 0, 1]);
+        copy_into(&mut dst, "abc");
+        assert_eq!(dst, [b'a' as u16, b'b' as u16, b'c' as u16, 0]);
+    }
 
     #[test]
     fn paints_a_dot_in_the_corner() {
