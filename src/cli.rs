@@ -11,9 +11,11 @@
 use std::io::{self, IsTerminal, Read, StdoutLock, Write};
 use std::process::ExitCode;
 
+use windows::Win32::Globalization::{MultiByteToWideChar, MULTI_BYTE_TO_WIDE_CHAR_FLAGS};
 use windows::Win32::System::Console::{
-    GetConsoleMode, GetConsoleScreenBufferInfo, GetStdHandle, SetConsoleMode, CONSOLE_MODE,
-    CONSOLE_SCREEN_BUFFER_INFO, ENABLE_VIRTUAL_TERMINAL_PROCESSING, STD_OUTPUT_HANDLE,
+    GetConsoleCP, GetConsoleMode, GetConsoleScreenBufferInfo, GetStdHandle, SetConsoleMode,
+    CONSOLE_MODE, CONSOLE_SCREEN_BUFFER_INFO, ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+    STD_OUTPUT_HANDLE,
 };
 
 use crate::config::{self, Config};
@@ -399,7 +401,34 @@ fn text(given: &[String]) -> String {
     }
     let mut bytes = Vec::new();
     let _ = stdin.read_to_end(&mut bytes);
-    String::from_utf8_lossy(&bytes).into_owned()
+    decode(&bytes, unsafe { GetConsoleCP() })
+}
+
+/// Text piped in: UTF-8, with or without its mark, UTF-16 with its mark
+/// (a "Unicode" file), or else in the console's `code_page`, as cmd.exe
+/// pipes it (`echo città | wd`).
+fn decode(bytes: &[u8], code_page: u32) -> String {
+    if let Some(utf16) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        let units: Vec<u16> = utf16
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&pair| u16::from_le_bytes(pair))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_owned();
+    }
+    let flags = MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0);
+    let len = unsafe { MultiByteToWideChar(code_page, flags, bytes, None) };
+    let mut units = vec![0; len.max(0) as usize];
+    let len = unsafe { MultiByteToWideChar(code_page, flags, bytes, Some(&mut units)) };
+    match len {
+        0 => String::from_utf8_lossy(bytes).into_owned(),
+        len => String::from_utf16_lossy(&units[..len as usize]),
+    }
 }
 
 /// A language to translate from or into, given as its code ("de") or its
@@ -781,6 +810,15 @@ mod tests {
     fn help_and_version_go_before_the_rest() {
         assert_eq!(args("help --lang it").unwrap().command, Command::Help);
         assert_eq!(args("t -V --lang it").unwrap().command, Command::Version);
+    }
+
+    #[test]
+    fn decodes_what_is_piped_in() {
+        assert_eq!(decode("città".as_bytes(), 850), "città");
+        assert_eq!(decode(b"\xEF\xBB\xBFcat", 850), "cat");
+        assert_eq!(decode(b"\xFF\xFEc\0a\0t\0", 850), "cat");
+        // cmd.exe's OEM code page, where à is 0x85.
+        assert_eq!(decode(b"citt\x85", 850), "città");
     }
 
     #[test]
