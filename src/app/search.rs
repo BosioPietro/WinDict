@@ -8,8 +8,6 @@ impl App {
     /// in the middle of the screen.
     pub(super) fn open_task(&mut self, task: Shortcut) {
         self.new_request();
-        self.card.copying = false;
-        self.card.to_translate = false;
         self.open_search(task, None);
     }
 

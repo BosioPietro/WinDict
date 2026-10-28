@@ -8,10 +8,14 @@ use super::*;
 
 impl App {
     /// Gives the card a new request to wait on, with an id unique among
-    /// every card's.
+    /// every card's. A selection still being read was for the old one: its
+    /// answer is dropped, so nothing waits on it any more.
     pub(super) fn new_request(&mut self) {
         self.requests += 1;
         self.card.request = self.requests;
+        self.card.capturing = false;
+        self.card.copying = false;
+        self.card.to_translate = false;
     }
 
     /// The card shown in `hwnd`, if it's one of ours.

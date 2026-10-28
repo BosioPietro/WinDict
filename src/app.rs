@@ -771,8 +771,6 @@ impl App {
     /// with the translation shortcut, to translate it.
     fn on_hotkey(&mut self, shortcut: Shortcut) {
         self.new_request();
-        self.card.copying = false;
-        self.card.to_translate = false;
         // The card has the keyboard (a search): there's no selection to
         // read, so open a fresh search box, or close the one that's open
         // for the same shortcut.
