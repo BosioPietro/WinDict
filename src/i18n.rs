@@ -1,7 +1,7 @@
 //! The words WinDict shows, kept apart from the code that shows them.
 //!
-//! Every user-facing string is a field of [`Strings`], read with [`t`]:
-//! `tr().quit`. [`EN`] is the table the others are made from. A new language
+//! Every user-facing string is a field of [`Strings`], read with [`tr`]:
+//! `tr().menu_quit`. [`EN`] is the table the others are made from. A new language
 //! is a `Strings` of its own that lists what it translates and takes the
 //! rest from English with `..EN`, so a missing string reads in English
 //! instead of not at all; then it's added to [`Language`]. Nothing outside

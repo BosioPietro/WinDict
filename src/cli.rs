@@ -271,8 +271,9 @@ fn define(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
     ExitCode::from(NO_ANSWER)
 }
 
-/// Translates the text the way the translation shortcut does, and prints
-/// the translation.
+/// Translates the text and prints the translation. A dictionary word goes
+/// the way the translation shortcut sends it; a passage, the way the
+/// "Translate sentences" box does, by the language it seems to be in.
 fn translate_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
     let text = match translate::passage(&text(&args.text)) {
         Ok(text) => text,
