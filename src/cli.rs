@@ -482,8 +482,10 @@ fn dictionary_language(given: &str) -> Result<LangCode, String> {
     }
 }
 
+/// How to use `wd`. A pipe closed early isn't anything to tell anyone
+/// about, as for the answers.
 fn help() -> ExitCode {
-    println!("{}", tr().cli_help);
+    let _ = writeln!(io::stdout(), "{}", tr().cli_help);
     ExitCode::SUCCESS
 }
 
