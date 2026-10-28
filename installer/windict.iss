@@ -116,20 +116,22 @@ begin
     Log(Script + ' ' + Params + ' failed');
 end;
 
-function Stop(const Image: String): Boolean;
+{ Stops the WinDict installed here, so its files can be replaced, but not
+  a copy run from elsewhere; returns whether it ran. }
+function StopWinDict: Boolean;
 var
   Code: Integer;
+  Dir: String;
 begin
-  { taskkill exits with 0 when it stopped something, 128 when nothing ran. }
-  Result := Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM ' + Image,
+  Dir := ExpandConstant('{app}\');
+  StringChangeEx(Dir, '''', '''''', True);
+  { The command exits with 0 when it stopped something, 1 when nothing ran. }
+  Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    '-NoProfile -NonInteractive -Command "$p = Get-Process -Name WinDict, ' +
+      'WinDict-uiaccess -ErrorAction SilentlyContinue | Where-Object { $_.Path ' +
+      '-and $_.Path.StartsWith(''' + Dir + ''', ''OrdinalIgnoreCase'') }; ' +
+      '$p | Stop-Process -Force; if ($p) { exit 0 } else { exit 1 }"',
     '', SW_HIDE, ewWaitUntilTerminated, Code) and (Code = 0);
-end;
-
-{ Stops WinDict, so its files can be replaced; returns whether it ran. }
-function StopWinDict: Boolean;
-begin
-  Result := Stop('WinDict.exe');
-  Result := Stop('WinDict-uiaccess.exe') or Result;
   if Result then
     Sleep(300);
 end;

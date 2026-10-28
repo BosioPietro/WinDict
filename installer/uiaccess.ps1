@@ -59,7 +59,10 @@ function Remove-WinDictCertificates {
 
 function Restart-WinDict {
     if (-not $Restart) { return }
-    Get-Process -Name WinDict, WinDict-uiaccess -ErrorAction SilentlyContinue | Stop-Process -Force
+    # Only the copy installed here: one run from elsewhere is left alone.
+    Get-Process -Name WinDict, WinDict-uiaccess -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and $_.Path.StartsWith("$PSScriptRoot\", 'OrdinalIgnoreCase') } |
+        Stop-Process -Force
     Start-Sleep -Milliseconds 300
     # Through Explorer, so WinDict runs as the user, not elevated.
     Start-Process $Explorer -ArgumentList "`"$(Join-Path $PSScriptRoot 'WinDict.exe')`""
