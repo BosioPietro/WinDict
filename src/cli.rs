@@ -273,13 +273,17 @@ fn translate_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
         let word = translate::heading(&text);
         let from = translate::name(&direction.from);
         let to = translate::name(&direction.to);
-        let names: [(&str, &dyn std::fmt::Display); 3] =
-            [("word", &word), ("from", &from), ("to", &to)];
-        eprintln!(
-            "{} {}",
-            fill(tr().translate_ambiguous, &names),
-            fill(tr().cli_guessed_direction, &names[1..]),
-        );
+        let guessed = fill(tr().cli_guessed_direction, &[("from", &from), ("to", &to)]);
+        // A word in the dictionary is in both languages; anything else, in
+        // one that couldn't be told.
+        match def {
+            Some(_) => {
+                let names: [(&str, &dyn std::fmt::Display); 3] =
+                    [("word", &word), ("from", &from), ("to", &to)];
+                eprintln!("{} {guessed}", fill(tr().translate_ambiguous, &names));
+            }
+            None => eprintln!("{guessed}"),
+        }
     }
     let context = def.as_ref().and_then(|def| {
         let section = def.sections().find(|s| s.language == direction.from)?;
