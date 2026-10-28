@@ -175,7 +175,12 @@ thread_local! {
 fn with_setup<R>(f: impl FnOnce(&mut Setup) -> R) -> Option<R> {
     SETUP.with(|setup| {
         let mut setup = setup.try_borrow_mut().ok()?;
-        setup.as_mut().map(f)
+        let setup = setup.as_mut()?;
+        let r = f(setup);
+        if crate::render::take_device_lost() {
+            let _ = setup.recover();
+        }
+        Some(r)
     })
 }
 
@@ -502,6 +507,17 @@ impl Setup {
                 Ok(())
             }
         }
+    }
+
+    /// Draws everything again with another GPU, if the one drawn with
+    /// went away.
+    fn recover(&mut self) -> Result<()> {
+        if !self.renderer.recover()? {
+            return Ok(());
+        }
+        self.frame
+            .apply_theme(&self.renderer, &self.theme, self.scale)?;
+        self.replace_view()
     }
 
     fn retheme(&mut self) -> Result<()> {
@@ -1059,6 +1075,12 @@ unsafe extern "system" fn setup_proc(
         // Light or dark mode, the accent color or a contrast theme changed.
         _ if win::colors_changed(msg, wparam, lparam) => {
             with_setup(|s| s.retheme());
+            default()
+        }
+        // A display was added, removed or changed, which can take the GPU
+        // drawn with along.
+        WM_DISPLAYCHANGE => {
+            with_setup(|s| s.recover());
             default()
         }
         _ => default(),
