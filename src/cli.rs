@@ -206,7 +206,15 @@ fn define(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
     };
     // In one language, its dictionary is used, if it's been downloaded,
     // whether it's in the settings or not.
-    let language = args.language.as_deref().map(dictionary_language);
+    let language = match args
+        .language
+        .as_deref()
+        .map(dictionary_language)
+        .transpose()
+    {
+        Ok(language) => language,
+        Err(e) => return usage_error(&e),
+    };
     match &language {
         Some(language) => {
             let _ = offline::set_languages(std::slice::from_ref(language));
@@ -450,14 +458,25 @@ fn translation_language(given: &str) -> Result<LangCode, String> {
 
 /// A language to look words up in, given as its code or its name, like a
 /// language to translate into; a code WinDict doesn't know is taken as it
-/// is, for Wiktionary.
-fn dictionary_language(given: &str) -> LangCode {
+/// is, for Wiktionary, if it looks like one ("grc", "zh-min-nan").
+fn dictionary_language(given: &str) -> Result<LangCode, String> {
     let given = given.trim();
-    dicts::languages()
+    let known = dicts::languages()
         .find(|(code, name)| code.eq_ignore_ascii_case(given) || name.eq_ignore_ascii_case(given))
         .map(|(code, _)| LangCode::new(code))
-        .or_else(|| translation_language(given).ok())
-        .unwrap_or_else(|| LangCode::new(given.to_ascii_lowercase()))
+        .or_else(|| translation_language(given).ok());
+    if let Some(code) = known {
+        return Ok(code);
+    }
+    let mut parts = given.split('-');
+    let first = parts.next().unwrap_or_default();
+    let code_like = (2..=3).contains(&first.len())
+        && first.chars().all(|c| c.is_ascii_alphabetic())
+        && parts.all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric()));
+    match code_like {
+        true => Ok(LangCode::new(given.to_ascii_lowercase())),
+        false => Err(fill(tr().cli_unknown_language, &[("language", &given)])),
+    }
 }
 
 fn help() -> ExitCode {
@@ -830,8 +849,13 @@ mod tests {
         assert_eq!(found("deutsch").unwrap(), "de");
         assert!(found("klingon").is_err());
         assert!(found("").is_err());
-        assert_eq!(dictionary_language("Italiano").as_str(), "it");
-        assert_eq!(dictionary_language("EN").as_str(), "en");
+        let dictionary = |given| dictionary_language(given).map(|l| l.as_str().to_string());
+        assert_eq!(dictionary("Italiano").unwrap(), "it");
+        assert_eq!(dictionary("EN").unwrap(), "en");
+        assert_eq!(dictionary("grc").unwrap(), "grc");
+        assert_eq!(dictionary("zh-min-nan").unwrap(), "zh-min-nan");
+        assert!(dictionary("klingon").is_err());
+        assert!(dictionary("").is_err());
     }
 
     #[test]
