@@ -32,9 +32,11 @@ impl Settings {
             }
             return Ok(None);
         }
-        self.show_checks(true)?;
         let text = summary(&self.values.config.languages);
-        self.set_note(Note::Language, &text, false)?;
+        self.show_change(|s| {
+            s.show_checks(true)?;
+            s.set_note(Note::Language, &text, false)
+        });
         Ok(Some(Change::Language(code.into(), on)))
     }
 
@@ -92,11 +94,15 @@ impl Settings {
             Choice::Selection => {
                 let mode = SELECTIONS[i].0;
                 self.values.config.selection = mode;
-                self.set_note(Note::Selection, selection_detail(mode), false)?;
                 Change::Selection(mode)
             }
         };
-        self.show_choice(choice, true)?;
+        self.show_change(|s| {
+            if let Change::Selection(mode) = change {
+                s.set_note(Note::Selection, selection_detail(mode), false)?;
+            }
+            s.show_choice(choice, true)
+        });
         Ok(Some(change))
     }
 
@@ -123,29 +129,35 @@ impl Settings {
                 Change::Zoom(ZOOMS[next])
             }
         };
-        self.show_count(counter, Some(up))?;
+        self.show_change(|s| s.show_count(counter, Some(up)));
         Ok(Some(change))
     }
 
-    pub(super) fn start_recording(&mut self, shortcut: Shortcut) -> Result<()> {
+    pub(super) fn start_recording(&mut self, shortcut: Shortcut) {
         self.recording = Some(shortcut);
         self.preview = held_modifiers();
-        self.show_caps(shortcut, false)?;
-        self.set_note(Note::of(shortcut), tr().recording_detail, false)?;
-        self.show_recording()
+        self.show_change(|s| {
+            s.show_caps(shortcut, false)?;
+            s.set_note(Note::of(shortcut), tr().recording_detail, false)?;
+            s.show_recording()
+        });
     }
 
     /// Stops recording, if it's going on, showing the shortcut there is.
-    pub(super) fn stop_recording(&mut self) -> Result<()> {
+    /// Returns whether it was going on.
+    pub(super) fn stop_recording(&mut self) -> bool {
         let Some(shortcut) = self.recording.take() else {
-            return Ok(());
+            return false;
         };
-        self.show_caps(shortcut, true)?;
-        // The shortcuts row sums up the one just recorded, if one was.
-        for note in [Note::of(shortcut), Note::Shortcuts] {
-            self.set_note(note, &note.usual(&self.values), false)?;
-        }
-        self.show_recording()
+        self.show_change(|s| {
+            s.show_caps(shortcut, true)?;
+            // The shortcuts row sums up the one just recorded, if one was.
+            for note in [Note::of(shortcut), Note::Shortcuts] {
+                s.set_note(note, &note.usual(&s.values), false)?;
+            }
+            s.show_recording()
+        });
+        true
     }
 
     /// A key went down while recording, leaving `modifiers` held.
@@ -162,7 +174,7 @@ impl Settings {
             return Ok(None);
         }
         if key == VK_ESCAPE && modifiers.0 == 0 {
-            self.stop_recording()?;
+            self.stop_recording();
             return Ok(Some(Change::RecordingStopped));
         }
         let vk = key.0 as u32;
@@ -180,7 +192,7 @@ impl Settings {
         }
         let text = Hotkey { modifiers, vk }.to_string();
         *self.values.config.hotkey_mut(shortcut) = text.clone();
-        self.stop_recording()?;
+        self.stop_recording();
         Ok(Some(Change::Hotkey(shortcut, text)))
     }
 

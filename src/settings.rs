@@ -591,7 +591,7 @@ impl Settings {
         self.set_pressed(hit)?;
         let on_it = |shortcut| hit == Some(Hit::Shortcut(shortcut));
         if self.recording.is_some_and(|shortcut| !on_it(shortcut)) {
-            self.stop_recording()?;
+            self.stop_recording();
             return Ok(Some(Change::RecordingStopped));
         }
         Ok(None)
@@ -774,14 +774,13 @@ impl Settings {
     /// The window stopped being the active one: recording stops.
     pub fn deactivate(&mut self) -> Result<Option<Change>> {
         self.active = false;
-        self.show_editing()?;
-        self.set_pressed(None)?;
-        self.lose_capture()?;
-        if !self.recording() {
-            return Ok(None);
-        }
-        self.stop_recording()?;
-        Ok(Some(Change::RecordingStopped))
+        let stopped = self.stop_recording();
+        self.show_change(|s| {
+            s.show_editing()?;
+            s.set_pressed(None)?;
+            s.lose_capture()
+        });
+        Ok(stopped.then_some(Change::RecordingStopped))
     }
 
     /// Scrolls by a mouse wheel delta, the pointer at a point in window
@@ -1019,18 +1018,25 @@ impl Settings {
     // -----------------------------------------------------------------------
     // What clicks and keys do
 
+    /// Draws a change already made, with `draw`. It may fail, the GPU gone,
+    /// but the change mustn't go with it: the app still applies and saves
+    /// it, and the window's drawn again, as it now is, once the GPU's back.
+    fn show_change(&mut self, draw: impl FnOnce(&mut Self) -> Result<()>) {
+        let _ = draw(self);
+    }
+
     fn activate(&mut self, hit: Hit) -> Result<Option<Change>> {
         Ok(match hit {
             Hit::Close => Some(Change::Close),
             Hit::Config => Some(Change::OpenConfig),
             Hit::Shortcut(shortcut) if self.recording == Some(shortcut) => {
-                self.stop_recording()?;
+                self.stop_recording();
                 Some(Change::RecordingStopped)
             }
             Hit::Shortcut(shortcut) => {
                 // Recording the other shortcut stops, and this one starts.
-                self.stop_recording()?;
-                self.start_recording(shortcut)?;
+                self.stop_recording();
+                self.start_recording(shortcut);
                 Some(Change::RecordingStarted)
             }
             // It waits for Windows to ask, and can't be turned again until
@@ -1039,10 +1045,12 @@ impl Settings {
             Hit::Switch(Switch::UiAccess) => {
                 let on = !self.switch(Switch::UiAccess);
                 (self.values.ui_access, self.waiting, self.dots) = (Some(on), true, 0);
-                self.show_switch(Switch::UiAccess, true)?;
-                let text = ui::waiting(tr().intro_ui_access_waiting, 0);
-                self.set_note(Note::UiAccess, &text, false)?;
                 win::set_timer(self.hwnd, TIMER_DOTS, ui::DOTS_MS);
+                self.show_change(|s| {
+                    s.show_switch(Switch::UiAccess, true)?;
+                    let text = ui::waiting(tr().intro_ui_access_waiting, 0);
+                    s.set_note(Note::UiAccess, &text, false)
+                });
                 Some(Change::UiAccess(on))
             }
             Hit::Switch(sw) => {
@@ -1072,7 +1080,7 @@ impl Settings {
                     // Turned above.
                     Switch::UiAccess => return Ok(None),
                 };
-                self.show_switch(sw, true)?;
+                self.show_change(|s| s.show_switch(sw, true));
                 Some(change)
             }
             Hit::Choice(choice, i) => self.choose(choice, i)?,

@@ -123,7 +123,7 @@ impl Settings {
         self.picking = None;
         let config = &mut self.values.config;
         std::mem::swap(&mut config.translate_from, &mut config.translate_to);
-        self.relayout()?;
+        self.show_change(Self::relayout);
         Ok(Some(self.languages_changed()))
     }
 
@@ -142,7 +142,7 @@ impl Settings {
                 if let Some(language) = language {
                     config.ui_language = language;
                 }
-                self.relayout()?;
+                self.show_change(Self::relayout);
                 return Ok(language.map(Change::Interface));
             }
         };
@@ -156,7 +156,7 @@ impl Settings {
         } else {
             *picked = code.into();
         }
-        self.relayout()?;
+        self.show_change(Self::relayout);
         Ok(changed.then(|| self.languages_changed()))
     }
 
@@ -256,12 +256,13 @@ impl Settings {
     /// The email field's text changed from `before`, or may have: shows
     /// it, and saves it if it did.
     pub(super) fn typed(&mut self, before: &str) -> Result<Option<Change>> {
-        self.show_field()?;
         if self.email.text() == before {
+            self.show_field()?;
             return Ok(None);
         }
         let email = self.email.text().trim().to_owned();
         self.values.config.mymemory_email = email.clone();
+        self.show_change(Self::show_field);
         Ok(Some(Change::MyMemoryEmail(email)))
     }
 
