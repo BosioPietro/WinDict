@@ -59,17 +59,26 @@ pub fn set() -> Result<()> {
         list.SetAppID(APP_ID)?;
         let mut slots = 0;
         let _removed: IObjectArray = list.BeginList(&mut slots)?;
-        let tasks: IObjectCollection =
-            CoCreateInstance(&EnumerableObjectCollection, None, CLSCTX_INPROC_SERVER)?;
-        for task in SHORTCUTS {
-            let title = match task {
-                Shortcut::Lookup => tr().search_title,
-                Shortcut::Translate => tr().translate_title,
-            };
-            tasks.AddObject(&link(&exe, switch(task), title)?)?;
+        let fill = || -> Result<()> {
+            let tasks: IObjectCollection =
+                CoCreateInstance(&EnumerableObjectCollection, None, CLSCTX_INPROC_SERVER)?;
+            for task in SHORTCUTS {
+                let title = match task {
+                    Shortcut::Lookup => tr().search_title,
+                    Shortcut::Translate => tr().translate_title,
+                };
+                tasks.AddObject(&link(&exe, switch(task), title)?)?;
+            }
+            list.AddUserTasks(&tasks.cast::<IObjectArray>()?)
+        };
+        // A list half made is given up, the old one kept.
+        match fill() {
+            Ok(()) => list.CommitList(),
+            Err(e) => {
+                let _ = list.AbortList();
+                Err(e)
+            }
         }
-        list.AddUserTasks(&tasks.cast::<IObjectArray>()?)?;
-        list.CommitList()
     }
 }
 
