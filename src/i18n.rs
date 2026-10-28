@@ -509,6 +509,15 @@ pub fn fill(template: &str, args: &[(&str, &dyn Display)]) -> String {
                 rest = &rest[name.len() + 2..];
             }
             None => {
+                // A name the caller didn't give shows its braces to the user.
+                debug_assert!(
+                    !rest[1..].find('}').is_some_and(|close| {
+                        let name = &rest[1..=close];
+                        !name.is_empty()
+                            && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+                    }),
+                    "{template:?} needs a value given for {rest:?}"
+                );
                 out.push('{');
                 rest = &rest[1..];
             }
@@ -552,10 +561,17 @@ mod tests {
         );
         // Where a translation puts them is up to it.
         assert_eq!(fill("{b}{a}", &[("a", &1), ("b", &"two")]), "two1");
-        // Unknown names, stray braces and values holding braces are kept.
-        assert_eq!(fill("{x} { {a}", &[("a", &"{b}"), ("b", &0)]), "{x} { {b}");
+        // Stray braces and values holding braces are kept.
+        assert_eq!(fill("{ {a}", &[("a", &"{b}"), ("b", &0)]), "{ {b}");
         assert_eq!(fill("no values", &[]), "no values");
         assert_eq!(fill("open {", &[]), "open {");
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "needs a value")]
+    fn refuses_a_name_not_given() {
+        fill("{option} is unknown", &[("opt", &"-x")]);
     }
 
     #[test]
