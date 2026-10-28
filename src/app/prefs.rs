@@ -329,13 +329,10 @@ impl App {
         match result {
             Ok(()) => {
                 self.show_download(language, None);
-                let used = offline::languages().iter().any(|l| l == language);
                 if !self.config.languages.iter().any(|l| l == language) {
                     self.config.languages.push(language.into());
-                } else if used {
-                    // Already in use, as it was at start.
-                    return;
                 }
+                // One already in use is read again: the file's a new one.
                 self.use_languages();
             }
             // At start, the one there is (if any) is used as it is.
