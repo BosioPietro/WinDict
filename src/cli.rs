@@ -149,9 +149,31 @@ fn parse(given: Vec<String>) -> Result<Args, String> {
                 )
             })
         };
+        let flag = matches!(
+            name,
+            "-h" | "--help"
+                | "-V"
+                | "--version"
+                | "--online"
+                | "--offline"
+                | "--examples"
+                | "--no-examples"
+        );
+        // "--offline=false" mustn't be taken for "--offline".
+        if flag && inline.is_some() {
+            return Err(fill(tr().cli_takes_no_value, &[("option", &name)]));
+        }
         match (command, name) {
-            (_, "-h" | "--help") => args.command = Command::Help,
-            (_, "-V" | "--version") => args.command = Command::Version,
+            // What else is given doesn't matter then.
+            (_, "-h" | "--help") => {
+                args.command = Command::Help;
+                return Ok(args);
+            }
+            (_, "-V" | "--version") => {
+                args.command = Command::Version;
+                return Ok(args);
+            }
+            (Command::Help, _) => {}
             (_, "--online") => args.online = Some(true),
             (_, "--offline") => args.online = Some(false),
             (Command::Define, "-l" | "--lang") => args.language = Some(value()?),
@@ -751,6 +773,14 @@ mod tests {
         assert!(args("cat --frobnicate").is_err());
         assert!(args("cat -n").is_err());
         assert!(args("cat -n many").is_err());
+        assert!(args("cat --offline=false").is_err());
+        assert!(args("cat --examples=no").is_err());
+    }
+
+    #[test]
+    fn help_and_version_go_before_the_rest() {
+        assert_eq!(args("help --lang it").unwrap().command, Command::Help);
+        assert_eq!(args("t -V --lang it").unwrap().command, Command::Version);
     }
 
     #[test]

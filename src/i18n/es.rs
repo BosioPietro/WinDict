@@ -267,6 +267,7 @@ pub const ES: Strings = Strings {
     ),
     cli_unknown_option: "Opción desconocida {option}",
     cli_missing_value: "{option} necesita un valor",
+    cli_takes_no_value: "{option} no lleva valor",
     cli_not_a_number: "{option} necesita un número, no \u{201C}{value}\u{201D}",
     cli_see_help: "Ejecuta \u{201C}wd help\u{201D} para ver cómo se usa.",
     cli_no_word: "Indica una palabra para buscar.",

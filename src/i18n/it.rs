@@ -264,6 +264,7 @@ pub const IT: Strings = Strings {
     ),
     cli_unknown_option: "Opzione sconosciuta {option}",
     cli_missing_value: "{option} richiede un valore",
+    cli_takes_no_value: "{option} non richiede un valore",
     cli_not_a_number: "{option} richiede un numero, non \u{201C}{value}\u{201D}",
     cli_see_help: "Esegui \u{201C}wd help\u{201D} per vedere come si usa.",
     cli_no_word: "Indica una parola da cercare.",
