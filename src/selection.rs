@@ -46,6 +46,8 @@ struct LateCopy {
     before: u32,
     until: Instant,
     owner: HWND,
+    /// The process asked to copy: a copy from another is the user's own.
+    app: u32,
 }
 
 thread_local! {
@@ -266,6 +268,7 @@ impl Capturer {
         // What can't be saved can't be put back: the clipboard is left alone.
         let saved = SavedClipboard::take(owner)?;
         let before = unsafe { GetClipboardSequenceNumber() };
+        let app = process_of(unsafe { GetForegroundWindow() });
         send_copy();
 
         let deadline = Instant::now() + Duration::from_millis(400);
@@ -295,6 +298,7 @@ impl Capturer {
                     before,
                     until: Instant::now() + LATE_COPY,
                     owner,
+                    app,
                 })
             });
             unsafe {
@@ -318,10 +322,19 @@ fn settle_late_copy(done: bool) {
         unsafe {
             let _ = KillTimer(Some(copy.owner), LATE_COPY_TIMER);
         }
-        if came {
+        // An owner that can't be told is taken to be the app asked to copy.
+        let owner = unsafe { GetClipboardOwner() }.map_or(0, process_of);
+        if came && (owner == 0 || owner == copy.app) {
             copy.saved.restore(copy.owner);
         }
     }
+}
+
+/// The id of the process `hwnd` belongs to, 0 if there isn't one.
+fn process_of(hwnd: HWND) -> u32 {
+    let mut pid = 0;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    pid
 }
 
 unsafe extern "system" fn late_copy_timer(_: HWND, _: u32, _: usize, _: u32) {
