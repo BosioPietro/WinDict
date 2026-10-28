@@ -142,6 +142,10 @@ pub fn kill_timer(hwnd: HWND, id: usize) {
 pub fn set_region(hwnd: HWND, rect: RECT, redraw: bool) {
     unsafe {
         let region = CreateRectRgn(rect.left, rect.top, rect.right, rect.bottom);
+        // No region would make the whole window clickable instead.
+        if region.is_invalid() {
+            return;
+        }
         // The window owns the region once it's set; until then, we do.
         if SetWindowRgn(hwnd, Some(region), redraw) == 0 {
             let _ = DeleteObject(region.into());
