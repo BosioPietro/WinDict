@@ -189,8 +189,10 @@ unsafe fn badged(icon: HICON, color: (u8, u8, u8)) -> Option<HICON> {
     let _ = DeleteObject(info.hbmMask.into());
     let dib = dib.filter(|_| !bits.is_null())?;
     std::ptr::copy_nonoverlapping(pixels.as_ptr(), bits.cast(), pixels.len());
-    // All clear: the alpha channel says what's drawn.
-    let mask = CreateBitmap(w, h, 1, 1, None);
+    // All clear: the alpha channel says what's drawn. Its rows are whole
+    // words; without bits to start from, it would hold whatever was there.
+    let clear = vec![0u8; ((w + 15) / 16 * 2 * h) as usize];
+    let mask = CreateBitmap(w, h, 1, 1, Some(clear.as_ptr().cast()));
     let badged = CreateIconIndirect(&ICONINFO {
         fIcon: TRUE,
         hbmMask: mask,
