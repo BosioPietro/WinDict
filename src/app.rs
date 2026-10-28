@@ -371,8 +371,15 @@ pub struct App {
 /// Hands `task`, from the Jump List, to the WinDict running already.
 pub fn forward(task: Shortcut) {
     unsafe {
-        let Ok(hwnd) = FindWindowW(MAIN_CLASS, None) else {
-            return;
+        // The running copy may be starting still, its window not made yet.
+        let mut tries = 0;
+        let hwnd = loop {
+            match FindWindowW(MAIN_CLASS, None) {
+                Ok(hwnd) => break hwnd,
+                Err(_) if tries < 20 => tries += 1,
+                Err(_) => return,
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
         };
         // Started from Start, this process may bring a window to the front:
         // the box it opens is the running one's.
