@@ -513,14 +513,16 @@ impl Renderer {
     /// what's drawn past that is cut off.
     pub(super) fn surface(&self, w: f32, h: f32) -> Result<CompositionDrawingSurface> {
         let most = self.max_px();
-        self.graphics.CreateDrawingSurface(
-            Size {
-                Width: w.clamp(1.0, most),
-                Height: h.clamp(1.0, most),
-            },
-            DirectXPixelFormat::B8G8R8A8UIntNormalized,
-            DirectXAlphaMode::Premultiplied,
-        )
+        self.graphics
+            .CreateDrawingSurface(
+                Size {
+                    Width: w.clamp(1.0, most),
+                    Height: h.clamp(1.0, most),
+                },
+                DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                DirectXAlphaMode::Premultiplied,
+            )
+            .inspect_err(|_| self.note_if_lost())
     }
 
     pub(super) fn paint(
@@ -550,12 +552,12 @@ impl Renderer {
             }));
             let result = draw(&dc);
             interop.EndDraw().inspect_err(|_| self.note_if_lost())?;
-            result
+            result.inspect_err(|_| self.note_if_lost())
         }
     }
 
-    /// A drawing failed: if it's because the GPU went away, the app is told
-    /// to draw everything again.
+    /// A drawing failed, however far it got: if it's because the GPU went
+    /// away, the app is told to draw everything again.
     fn note_if_lost(&self) {
         if self.lost() {
             super::DEVICE_LOST.set(true);
