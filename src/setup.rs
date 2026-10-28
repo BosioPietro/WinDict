@@ -557,20 +557,21 @@ impl Setup {
         } else {
             win::kill_timer(self.hwnd, TIMER_DOTS);
         }
-        let Some(view) = self.view.take() else {
+        let Some(content) = self.view.as_ref().map(|v| v.content.clone()) else {
             return Ok(());
         };
+        let stage = self.build_stage(&content)?;
         let (anim, dx) = (&self.anim, SLIDE * self.scale);
-        let old = view.stage.text.clone();
-        Animator::stop(&old, &["Opacity", "Offset"]);
-        anim.scalar(&old, "Opacity", 0.0, LEAVE_MS, 0, &anim.accelerate)?;
-        anim.vector3(&old, "Offset", v3(-dx, 0.0), LEAVE_MS, 0, &anim.accelerate)?;
-        self.gone.push(old.cast()?);
-        win::set_timer(self.hwnd, TIMER_GONE, GONE_MS);
-
-        let stage = self.build_stage(&view.content)?;
-        picture_card::bring_in(&self.anim, &stage.text, v3(dx, 0.0), LEAVE_MS)?;
-        self.view = Some(View { stage, ..view });
+        // Built first: the view stays whole if it can't be.
+        if let Some(view) = self.view.as_mut() {
+            let old = std::mem::replace(&mut view.stage, stage).text;
+            Animator::stop(&old, &["Opacity", "Offset"]);
+            anim.scalar(&old, "Opacity", 0.0, LEAVE_MS, 0, &anim.accelerate)?;
+            anim.vector3(&old, "Offset", v3(-dx, 0.0), LEAVE_MS, 0, &anim.accelerate)?;
+            self.gone.push(old.cast()?);
+            win::set_timer(self.hwnd, TIMER_GONE, GONE_MS);
+            picture_card::bring_in(anim, &view.stage.text, v3(dx, 0.0), LEAVE_MS)?;
+        }
         if was_working != self.stage.working() {
             self.show_close()?;
         }

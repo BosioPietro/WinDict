@@ -1032,9 +1032,24 @@ impl Intro {
         let forward = to > self.at;
         self.at = to;
         (self.picking, self.tick_at) = (None, None);
-        let Some(view) = self.view.take() else {
+        // Put back even when building fails, for the window to be built
+        // again over it once it can be.
+        let Some(mut view) = self.view.take() else {
             return Ok(());
         };
+        let built = self.change_step(&mut view, forward);
+        self.view = Some(view);
+        built?;
+        self.keep_focus();
+        self.show_switch(false)?;
+        self.show_note()?;
+        self.show_picker()?;
+        self.show_hover(self.hovered)?;
+        self.show_focus()
+    }
+
+    /// The part of `go` that builds the step in `view`.
+    fn change_step(&mut self, view: &mut View, forward: bool) -> Result<()> {
         let (anim, s) = (&self.anim, self.scale);
         let dx = if forward { SLIDE * s } else { -SLIDE * s };
 
@@ -1063,40 +1078,26 @@ impl Intro {
         // the buttons, for a list open over them.
         view.content.Children()?.Remove(&view.footer)?;
         let (footer, buttons) = self.build_footer(&view.content)?;
-        let step = self.build_step(&view.content)?;
-        picture_card::bring_in(&self.anim, &step.text, v3(dx, 0.0), LEAVE_MS)?;
-        self.show_dots(&view.dots, true)?;
-        self.view = Some(View {
-            picture,
-            step,
-            footer,
-            buttons,
-            ..view
-        });
-        self.keep_focus();
-        self.show_switch(false)?;
-        self.show_note()?;
-        self.show_picker()?;
-        self.show_hover(self.hovered)?;
-        self.show_focus()
+        (view.picture, view.footer, view.buttons) = (picture, footer, buttons);
+        view.step = self.build_step(&view.content)?;
+        picture_card::bring_in(&self.anim, &view.step.text, v3(dx, 0.0), LEAVE_MS)?;
+        self.show_dots(&view.dots, true)
     }
 
     /// Builds the buttons that go through the steps again, for what Next
     /// says, where they were.
     fn show_footer(&mut self) -> Result<()> {
-        let Some(view) = self.view.take() else {
+        let Some(content) = self.view.as_ref().map(|v| v.content.clone()) else {
             return Ok(());
         };
-        let children = view.content.Children()?;
-        let (footer, buttons) = self.build_footer(&view.content)?;
+        let children = content.Children()?;
+        let (footer, buttons) = self.build_footer(&content)?;
         children.Remove(&footer)?;
-        children.InsertAbove(&footer, &view.footer)?;
-        children.Remove(&view.footer)?;
-        self.view = Some(View {
-            footer,
-            buttons,
-            ..view
-        });
+        if let Some(view) = self.view.as_mut() {
+            children.InsertAbove(&footer, &view.footer)?;
+            children.Remove(&view.footer)?;
+            (view.footer, view.buttons) = (footer, buttons);
+        }
         self.keep_focus();
         self.show_hover(self.hovered)?;
         self.show_focus()
