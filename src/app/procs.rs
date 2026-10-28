@@ -15,6 +15,12 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use super::*;
 use crate::win;
 
+thread_local! {
+    /// The card being dragged, if one is: it's drawn at its monitor's
+    /// scale once it's let go.
+    static DRAGGED: Cell<Option<HWND>> = const { Cell::new(None) };
+}
+
 /// Posts `msg` to the main window, for the app state to handle once the
 /// procedure that saw it has returned.
 fn post(msg: u32, wparam: WPARAM, lparam: LPARAM) {
@@ -252,7 +258,12 @@ pub(super) unsafe extern "system" fn popup_proc(
         WM_NCHITTEST => win::caption_hit(hwnd, lparam, default(), |x, y| {
             with_app(|app| app.popup_of(hwnd).is_some_and(|p| p.caption_at(x, y))).unwrap_or(false)
         }),
+        WM_ENTERSIZEMOVE => {
+            DRAGGED.set(Some(hwnd));
+            LRESULT(0)
+        }
         WM_EXITSIZEMOVE => {
+            DRAGGED.set(None);
             with_app(|app| app.card_moved(hwnd));
             LRESULT(0)
         }
@@ -382,8 +393,14 @@ pub(super) unsafe extern "system" fn popup_proc(
             with_app(|app| app.on_card_timer(hwnd, wparam.0));
             LRESULT(0)
         }
-        // We size ourselves for the target monitor's DPI already.
-        WM_DPICHANGED => LRESULT(0),
+        // We size ourselves for the target monitor's DPI already: dragged,
+        // once it's let go; otherwise, its monitor's scale changed, now.
+        WM_DPICHANGED => {
+            if DRAGGED.get() != Some(hwnd) {
+                with_app(|app| app.card_moved(hwnd));
+            }
+            LRESULT(0)
+        }
         _ => default(),
     }
 }
