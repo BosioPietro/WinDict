@@ -196,13 +196,27 @@ pub fn fetch(host: &str, path: &str, parse: impl FnOnce(&[u8]) -> Option<Definit
     }
 }
 
-/// A part of speech as shown on the card; sources sometimes leave it out.
+/// A part of speech as the card names it, among those it has words for in
+/// every language, where there's one; sources sometimes leave it out.
 fn part_of_speech(raw: &str) -> String {
-    if raw.is_empty() {
-        "other".to_string()
-    } else {
-        raw.to_lowercase()
-    }
+    let raw = raw.to_lowercase();
+    let key = match raw.as_str() {
+        "noun" | "proper noun" => "noun",
+        "verb" => "verb",
+        "adjective" => "adjective",
+        "adverb" => "adverb",
+        "phrase" | "idiom" | "proverb" => "phrase",
+        "interjection" | "exclamation" => "interjection",
+        "pronoun" => "pronoun",
+        "preposition" | "prepositional phrase" => "preposition",
+        "conjunction" => "conjunction",
+        "article" | "determiner" => "article",
+        "abbreviation" | "acronym" | "initialism" => "abbreviation",
+        "" => "other",
+        // Another, or in another language ("nom"), shows as it's named.
+        _ => return raw,
+    };
+    key.to_string()
 }
 
 #[derive(Deserialize)]
@@ -501,6 +515,14 @@ mod tests {
             strip_html("don&#8217;t &#x2014; a&#xA0;b &bogus; &#xZZ; R&D"),
             "don\u{2019}t \u{2014} a b &bogus; &#xZZ; R&D"
         );
+    }
+
+    #[test]
+    fn parts_of_speech_are_ones_the_card_names() {
+        assert_eq!(part_of_speech("Proper noun"), "noun");
+        assert_eq!(part_of_speech("determiner"), "article");
+        assert_eq!(part_of_speech("Numeral"), "numeral");
+        assert_eq!(part_of_speech(""), "other");
     }
 
     #[test]
