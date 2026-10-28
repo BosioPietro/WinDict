@@ -105,7 +105,9 @@ impl App {
     }
 
     /// Lets the keyboard hook know whether a shortcut is being recorded,
-    /// setting it up the first time one is.
+    /// setting it up when one starts to be. It goes once recording is over
+    /// and the keys it kept are up: one left in while the UI thread is busy
+    /// would be taken out by Windows, without a word, before it's needed.
     pub(super) fn sync_recording(&mut self) {
         let recording = self
             .settings
@@ -113,8 +115,12 @@ impl App {
             .filter(|s| s.visible && s.recording());
         let hwnd = recording.map_or(HWND(std::ptr::null_mut()), |s| s.hwnd);
         RECORDING_IN.set(hwnd);
-        if recording.is_some() && self.keyboard_hook.is_none() {
-            self.keyboard_hook = win::Hook::low_level(WH_KEYBOARD_LL, Some(keyboard_hook));
+        if recording.is_some() {
+            if self.keyboard_hook.is_none() {
+                self.keyboard_hook = win::Hook::low_level(WH_KEYBOARD_LL, Some(keyboard_hook));
+            }
+        } else if SWALLOWED.get() == [0; 4] {
+            self.keyboard_hook = None;
         }
     }
 

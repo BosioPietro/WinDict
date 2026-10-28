@@ -722,6 +722,9 @@ pub(super) unsafe extern "system" fn keyboard_hook(
         let modifiers = held_after(&swallowed, vk, down);
         let state = modifiers.0 as isize | (down as isize) << 16;
         post(WM_APP_RECORD_KEY, WPARAM(vk as usize), LPARAM(state));
+    } else if swallowed == [0; 4] {
+        // The last key kept is up, and recording is over: the hook can go.
+        post(WM_APP_RECORD_KEY, WPARAM(vk as usize), LPARAM(0));
     }
     // A key that went down before recording started goes back up as usual.
     if down || kept {
