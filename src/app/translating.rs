@@ -119,8 +119,9 @@ impl App {
             typed,
         });
         // Answers still on their way are for the definition.
-        self.new_request();
-        if !asking {
+        if asking {
+            self.new_request();
+        } else {
             self.fetch_translation();
         }
         let focus = asking.then_some(Target::Confirm);
@@ -129,7 +130,13 @@ impl App {
     }
 
     /// Translates the word the way the card says, from the cache when it can.
+    /// Answers still on their way, to what the card asked before, are
+    /// dropped.
     pub(super) fn fetch_translation(&mut self) {
+        if self.card.translating.is_none() {
+            return;
+        }
+        self.new_request();
         let Some(t) = self.card.translating.as_ref() else {
             return;
         };
@@ -152,7 +159,6 @@ impl App {
         if let Some(hwnd) = self.card.hwnd() {
             win::set_timer(hwnd, TIMER_TRANSLATING, TRANSLATING_WAIT_MS);
         }
-        self.new_request();
         let (id, events) = (self.card.request, self.events.clone());
         let email = self.config.mymemory_email.clone();
         std::thread::spawn(move || {
@@ -447,7 +453,6 @@ impl App {
         }
         // Until the way is confirmed, only the offer changes.
         if !t.asking {
-            self.new_request();
             self.fetch_translation();
         }
         self.show_translation(Transition::Refine, focus);
