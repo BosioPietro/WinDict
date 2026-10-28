@@ -204,7 +204,7 @@ pub fn run(compositor: Compositor, installer: &'static [u8]) -> Result<()> {
     )?;
     let mut setup = Setup::new(window, compositor, installer, language)?;
     setup.show()?;
-    let (hwnd, folder) = (setup.hwnd, setup.folder.clone());
+    let hwnd = setup.hwnd;
     SETUP.with(|s| *s.borrow_mut() = Some(setup));
     let _ = crate::selection::take_foreground(hwnd);
     unsafe {
@@ -214,8 +214,11 @@ pub fn run(compositor: Compositor, installer: &'static [u8]) -> Result<()> {
             DispatchMessageW(&msg);
         }
     }
-    // Taken out first: the window's destroyed as it goes.
-    drop(SETUP.with(|s| s.borrow_mut().take()));
+    // Taken out first: the window's destroyed as it goes. Where the
+    // installer was written out is only known once it has run.
+    let setup = SETUP.with(|s| s.borrow_mut().take());
+    let folder = setup.as_ref().and_then(|s| s.folder.clone());
+    drop(setup);
     if let Some(folder) = folder {
         let _ = std::fs::remove_dir_all(folder);
     }
