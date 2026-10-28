@@ -285,6 +285,9 @@ fn translate_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
         Ok(to) => to,
         Err(e) => return usage_error(&e),
     };
+    if from.is_some() && from == to {
+        return usage_error(tr().cli_same_language);
+    }
     // Translations come from the internet, like the online answers.
     if !args.online.unwrap_or(config.online_lookup) {
         return failure(tr().translate_offline, tr().cli_translate_offline_detail);

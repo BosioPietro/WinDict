@@ -356,6 +356,7 @@ strings! {
     cli_missing_value: "{option} needs a value",
     /// `{option}`.
     cli_takes_no_value: "{option} takes no value",
+    cli_same_language: "--from and --to are the same language",
     /// `{option}`, `{value}`.
     cli_not_a_number: "{option} takes a number, not \u{201C}{value}\u{201D}",
     cli_see_help: "Run \u{201C}wd help\u{201D} to see how to use it.",

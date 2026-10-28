@@ -270,6 +270,7 @@ pub const FR: Strings = Strings {
     cli_unknown_option: "Option inconnue {option}",
     cli_missing_value: "{option} attend une valeur",
     cli_takes_no_value: "{option} n’attend pas de valeur",
+    cli_same_language: "--from et --to sont la même langue",
     cli_not_a_number: "{option} attend un nombre, pas «\u{A0}{value}\u{A0}»",
     cli_see_help: "Tapez «\u{A0}wd help\u{A0}» pour afficher l\u{2019}aide.",
     cli_no_word: "Indiquez un mot à chercher.",
