@@ -521,15 +521,23 @@ impl Intro {
     }
 
     /// Words are looked up in `languages`, or will be once they're
-    /// downloaded: their dictionaries are ticked, and only those.
+    /// downloaded: their dictionaries are ticked, and only those, but for
+    /// ticks turned and not yet confirmed, which stay as they are.
     pub fn show_languages(&mut self, languages: &[LangCode]) -> Result<()> {
         let used = |code: &&str| languages.iter().any(|l| l.as_str() == *code);
-        self.wanted = dicts::DOWNLOADS
+        let wanted: Vec<_> = dicts::DOWNLOADS
             .iter()
             .map(|d| d.language)
             .filter(used)
             .collect();
-        self.chosen = self.wanted.clone();
+        let (old_wanted, old_chosen) = (&self.wanted, &self.chosen);
+        let unticked = |l: &&str| old_wanted.contains(l) && !old_chosen.contains(l);
+        let ticked = old_chosen
+            .iter()
+            .filter(|l| !old_wanted.contains(l) && !wanted.contains(l));
+        let chosen = wanted.iter().filter(|l| !unticked(l)).chain(ticked);
+        self.chosen = chosen.copied().collect();
+        self.wanted = wanted;
         if self.steps.get(self.at) == Some(&Step::Dictionaries) {
             self.show_footer()?;
             self.show_picker()?;
