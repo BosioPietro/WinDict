@@ -212,16 +212,18 @@ impl Replacing {
         waited == WAIT_OBJECT_0 || waited == WAIT_ABANDONED
     }
 
-    /// Deletes the old executable, if it's one beside this one. Windows may
-    /// hold on to it for a moment after it exits.
+    /// Deletes the old executable, if it's a WinDict one beside this one.
+    /// Windows may hold on to it for a moment after it exits.
     pub fn remove_old(&self) {
         let Ok(current) = std::env::current_exe() else {
             return;
         };
-        let exe = self
+        let name = self
             .old
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("exe"));
+            .file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let exe = name.starts_with("windict") && name.ends_with(".exe");
         if !exe || self.old == current || self.old.parent() != current.parent() {
             return;
         }
