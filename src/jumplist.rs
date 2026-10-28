@@ -81,7 +81,9 @@ unsafe fn link(exe: &HSTRING, switch: &str, title: &str) -> Result<IShellLinkW> 
     link.SetIconLocation(exe, 0)?;
     // A task's name is its title, not a description.
     let mut title: Vec<u16> = title.encode_utf16().chain([0]).collect();
-    let value = PROPVARIANT {
+    // Never dropped: PROPVARIANT's drop clears it, which would free `title`
+    // with CoTaskMemFree, corrupting the heap.
+    let value = std::mem::ManuallyDrop::new(PROPVARIANT {
         Anonymous: PROPVARIANT_0 {
             Anonymous: std::mem::ManuallyDrop::new(PROPVARIANT_0_0 {
                 vt: VT_LPWSTR,
@@ -91,10 +93,10 @@ unsafe fn link(exe: &HSTRING, switch: &str, title: &str) -> Result<IShellLinkW> 
                 ..Default::default()
             }),
         },
-    };
+    });
     // The store copies the value: `title` is still this function's to free.
     let store: IPropertyStore = link.cast()?;
-    store.SetValue(&PKEY_Title, &value)?;
+    store.SetValue(&PKEY_Title, &*value)?;
     store.Commit()?;
     Ok(link)
 }
