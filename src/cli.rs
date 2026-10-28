@@ -11,6 +11,7 @@
 use std::io::{self, IsTerminal, Read, StdoutLock, Write};
 use std::process::ExitCode;
 
+use windows::Win32::Foundation::HANDLE;
 use windows::Win32::Globalization::{MultiByteToWideChar, MULTI_BYTE_TO_WIDE_CHAR_FLAGS};
 use windows::Win32::System::Console::{
     GetConsoleCP, GetConsoleMode, GetConsoleScreenBufferInfo, GetStdHandle, SetConsoleMode,
@@ -563,22 +564,35 @@ struct Printer {
     styled: bool,
     /// How wide lines can be.
     columns: usize,
+    /// The console's mode before styles were turned on, to put back.
+    restore: Option<(HANDLE, CONSOLE_MODE)>,
+}
+
+impl Drop for Printer {
+    fn drop(&mut self) {
+        if let Some((handle, mode)) = self.restore {
+            let _ = self.out.flush();
+            let _ = unsafe { SetConsoleMode(handle, mode) };
+        }
+    }
 }
 
 impl Printer {
     fn new() -> Printer {
-        let (styled, columns) =
-            unsafe { console() }.map_or((false, usize::MAX), |(styled, columns)| {
-                // A column spare: the console moves to the next line once
-                // the last is written.
-                (styled, columns.saturating_sub(1).min(MAX_COLUMNS))
-            });
+        let console = unsafe { console() };
+        let restore = console.and_then(|c| c.restore);
+        let (styled, columns) = console.map_or((false, usize::MAX), |c| {
+            // A column spare: the console moves to the next line once the
+            // last is written.
+            (c.styled, c.columns.saturating_sub(1).min(MAX_COLUMNS))
+        });
         // https://no-color.org
         let styled = styled && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
         Printer {
             out: io::stdout().lock(),
             styled,
             columns,
+            restore,
         }
     }
 
@@ -718,19 +732,34 @@ impl Printer {
     }
 }
 
-/// Whether the console stdout writes to shows styles, turning them on if
-/// they're off, and how many columns its window has; nothing when stdout
-/// isn't a console.
-unsafe fn console() -> Option<(bool, usize)> {
+/// The console stdout writes to.
+#[derive(Clone, Copy)]
+struct Console {
+    /// Whether it shows styles.
+    styled: bool,
+    /// How many columns its window has.
+    columns: usize,
+    /// Its mode before styles were turned on, if they were.
+    restore: Option<(HANDLE, CONSOLE_MODE)>,
+}
+
+/// The console stdout writes to, its styles turned on if they're off;
+/// nothing when stdout isn't a console.
+unsafe fn console() -> Option<Console> {
     let handle = GetStdHandle(STD_OUTPUT_HANDLE).ok()?;
     let mut mode = CONSOLE_MODE::default();
     GetConsoleMode(handle, &mut mode).ok()?;
-    let styled = mode.contains(ENABLE_VIRTUAL_TERMINAL_PROCESSING)
-        || SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING).is_ok();
+    let on = mode.contains(ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    let turned_on =
+        !on && SetConsoleMode(handle, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING).is_ok();
     let mut info = CONSOLE_SCREEN_BUFFER_INFO::default();
     GetConsoleScreenBufferInfo(handle, &mut info).ok()?;
     let columns = info.srWindow.Right - info.srWindow.Left + 1;
-    Some((styled, columns.max(0) as usize))
+    Some(Console {
+        styled: on || turned_on,
+        columns: columns.max(0) as usize,
+        restore: turned_on.then_some((handle, mode)),
+    })
 }
 
 /// `spans` as a paragraph of lines at most `columns` wide, broken between
