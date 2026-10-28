@@ -25,11 +25,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, GetClassNameW, GetCursorPos, GetWindowLongPtrW, KillTimer,
     SendMessageW, SetTimer, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, SetWindowsHookExW,
     ShowWindow, UnhookWindowsHookEx, CW_USEDEFAULT, GWL_EXSTYLE, GWL_STYLE, HHOOK, HOOKPROC,
-    HTCAPTION, HTCLIENT, HWND_TOPMOST, SPI_SETHIGHCONTRAST, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNORMAL, WINDOWS_HOOK_ID,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WM_DWMCOLORIZATIONCOLORCHANGED,
-    WM_SETTINGCHANGE, WM_SYSCOLORCHANGE, WS_EX_APPWINDOW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_SYSMENU,
+    HTCAPTION, HTCLIENT, HWND_MESSAGE, HWND_TOPMOST, SPI_SETHIGHCONTRAST, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNORMAL,
+    WINDOWS_HOOK_ID, WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT,
+    WM_DWMCOLORIZATIONCOLORCHANGED, WM_SETTINGCHANGE, WM_SYSCOLORCHANGE, WS_EX_APPWINDOW,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_SYSMENU,
 };
 
 /// A window of ours, destroyed when dropped.
@@ -43,12 +43,34 @@ impl Window {
         ex_style: WINDOW_EX_STYLE,
         style: WINDOW_STYLE,
     ) -> Result<Window> {
+        Self::create_in(None, class, title, ex_style, style)
+    }
+
+    /// Creates a window of `class` that only gets messages: it's never
+    /// shown, nor listed among the others.
+    pub fn message_only(class: PCWSTR, title: PCWSTR) -> Result<Window> {
+        Self::create_in(
+            Some(HWND_MESSAGE),
+            class,
+            title,
+            WINDOW_EX_STYLE::default(),
+            WINDOW_STYLE::default(),
+        )
+    }
+
+    fn create_in(
+        parent: Option<HWND>,
+        class: PCWSTR,
+        title: PCWSTR,
+        ex_style: WINDOW_EX_STYLE,
+        style: WINDOW_STYLE,
+    ) -> Result<Window> {
         let instance = unsafe { GetModuleHandleW(None) }
             .ok()
             .map(|m| HINSTANCE(m.0));
         let hwnd = unsafe {
             CreateWindowExW(
-                ex_style, class, title, style, 0, 0, 0, 0, None, None, instance, None,
+                ex_style, class, title, style, 0, 0, 0, 0, parent, None, instance, None,
             )
         }?;
         Ok(Window(hwnd))

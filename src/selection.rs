@@ -13,7 +13,6 @@ use windows::Win32::Graphics::Gdi::{MonitorFromRect, MONITOR_DEFAULTTONULL};
 use windows::Win32::Security::{GetTokenInformation, TokenUIAccess, TOKEN_QUERY};
 use windows::Win32::System::Com::*;
 use windows::Win32::System::DataExchange::*;
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Memory::*;
 use windows::Win32::System::Ole::*;
 use windows::Win32::System::Threading::*;
@@ -22,7 +21,7 @@ use windows::Win32::UI::Accessibility::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use crate::win;
+use crate::win::{self, Window};
 
 /// Marks input we inject so it can be recognised.
 const INJECTED: usize = 0x5744_4943; // "WDIC"
@@ -85,7 +84,9 @@ fn selected_text(pattern: &IUIAutomationTextPattern) -> Option<(String, IUIAutom
 pub struct Capturer {
     /// Created on first use, as the setting can be turned on later.
     uia: OnceCell<Option<IUIAutomation>>,
-    clipboard_owner: HWND,
+    /// What opens the clipboard to copy through it. Without it, nothing's
+    /// copied: the clipboard couldn't be put back as it was.
+    clipboard_owner: Option<Window>,
 }
 
 impl Capturer {
@@ -93,25 +94,9 @@ impl Capturer {
     pub fn new() -> Capturer {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            let uia = OnceCell::new();
-            let clipboard_owner = CreateWindowExW(
-                WINDOW_EX_STYLE::default(),
-                w!("STATIC"),
-                w!("WinDict clipboard"),
-                WINDOW_STYLE::default(),
-                0,
-                0,
-                0,
-                0,
-                Some(HWND_MESSAGE),
-                None,
-                GetModuleHandleW(None).ok().map(|m| HINSTANCE(m.0)),
-                None,
-            )
-            .unwrap_or_default();
             Capturer {
-                uia,
-                clipboard_owner,
+                uia: OnceCell::new(),
+                clipboard_owner: Window::message_only(w!("STATIC"), w!("WinDict clipboard")).ok(),
             }
         }
     }
@@ -275,10 +260,11 @@ impl Capturer {
     }
 
     fn via_clipboard(&self) -> Option<String> {
+        let owner = self.clipboard_owner.as_ref()?.hwnd();
         settle_late_copy(true);
         release_modifiers();
         // What can't be saved can't be put back: the clipboard is left alone.
-        let saved = SavedClipboard::take(self.clipboard_owner)?;
+        let saved = SavedClipboard::take(owner)?;
         let before = unsafe { GetClipboardSequenceNumber() };
         send_copy();
 
@@ -294,12 +280,12 @@ impl Capturer {
         let text = if changed {
             // Some apps write several formats one after another.
             wait(Duration::from_millis(25));
-            read_clipboard_text(self.clipboard_owner)
+            read_clipboard_text(owner)
         } else {
             None
         };
         if changed {
-            saved.restore(self.clipboard_owner);
+            saved.restore(owner);
         } else {
             // The app may still copy, too late to be read: then the
             // clipboard is put back once it does.
@@ -308,16 +294,11 @@ impl Capturer {
                     saved,
                     before,
                     until: Instant::now() + LATE_COPY,
-                    owner: self.clipboard_owner,
+                    owner,
                 })
             });
             unsafe {
-                SetTimer(
-                    Some(self.clipboard_owner),
-                    LATE_COPY_TIMER,
-                    50,
-                    Some(late_copy_timer),
-                );
+                SetTimer(Some(owner), LATE_COPY_TIMER, 50, Some(late_copy_timer));
             }
         }
         text.filter(|t| !t.trim().is_empty())
