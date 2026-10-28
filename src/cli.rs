@@ -46,9 +46,6 @@ pub fn run() -> ExitCode {
         Err(e) => (Config::default(), Some(e)),
     };
     i18n::set(config.ui_language);
-    if let Some(e) = config_error {
-        message(tr().settings_not_loaded, &e);
-    }
     let given: Vec<String> = std::env::args_os()
         .skip(1)
         .map(|a| a.to_string_lossy().into_owned())
@@ -61,6 +58,10 @@ pub fn run() -> ExitCode {
         Ok(args) => args,
         Err(e) => return usage_error(&e),
     };
+    // Said only when they're gone by.
+    if let (Some(e), Command::Define | Command::Translate) = (&config_error, args.command) {
+        message(tr().settings_not_loaded, e);
+    }
     let mut out = Printer::new();
     match args.command {
         Command::Help => help(),
