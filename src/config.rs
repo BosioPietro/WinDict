@@ -262,8 +262,17 @@ fn save_to(path: &Path, config: &Config) -> Result<(), String> {
 }
 
 fn parse(bytes: &[u8]) -> Result<Config, String> {
-    let mut config: Config =
+    let mut json: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|e| format!("config.json: {e}"))?;
+    // A choice this version doesn't know, saved by a newer one or mistyped,
+    // goes back to the default instead of making the whole file unreadable.
+    if let Some(fields) = json.as_object_mut() {
+        forget_unknown::<Language>(fields, "ui_language");
+        forget_unknown::<ThemeMode>(fields, "theme");
+        forget_unknown::<SelectionMode>(fields, "selection");
+    }
+    let mut config: Config =
+        serde_json::from_value(json).map_err(|e| format!("config.json: {e}"))?;
     config.max_definitions = config.max_definitions.clamp(DEFINITIONS.0, DEFINITIONS.1);
     config.max_synonyms = config.max_synonyms.clamp(SYNONYMS.0, SYNONYMS.1);
     // Each language once, and at least one, or nothing could be looked up.
@@ -298,6 +307,19 @@ fn parse(bytes: &[u8]) -> Result<Config, String> {
         None => {}
     }
     Ok(config)
+}
+
+/// Removes `name` from `fields` if it isn't one of `T`'s values.
+fn forget_unknown<T: serde::de::DeserializeOwned>(
+    fields: &mut serde_json::Map<String, serde_json::Value>,
+    name: &str,
+) {
+    if fields
+        .get(name)
+        .is_some_and(|value| T::deserialize(value).is_err())
+    {
+        fields.remove(name);
+    }
 }
 
 fn already_onboarded() -> bool {
@@ -383,7 +405,11 @@ mod tests {
         assert_eq!(language(r#"{"ui_language": "english"}"#), Language::English);
         // Unset, it's the system's.
         assert_eq!(language("{}"), Language::system());
-        assert!(parse(br#"{"ui_language": "klingon"}"#).is_err());
+        // One it doesn't know, too.
+        assert_eq!(
+            language(r#"{"ui_language": "klingon"}"#),
+            Language::system()
+        );
     }
 
     #[test]
@@ -401,6 +427,15 @@ mod tests {
         );
         let json = serde_json::to_string(&parse(br#"{"use_ui_automation": false}"#).unwrap());
         assert!(!json.unwrap().contains("use_ui_automation"));
+    }
+
+    #[test]
+    fn forgets_unknown_choices() {
+        let config = parse(br#"{"theme": "sepia", "selection": 3, "hotkey": "Win+F1"}"#).unwrap();
+        let usual = Config::default();
+        assert_eq!(config.theme, usual.theme);
+        assert_eq!(config.selection, usual.selection);
+        assert_eq!(config.hotkey, "Win+F1");
     }
 
     #[test]
@@ -441,7 +476,8 @@ mod tests {
     fn reports_invalid_settings() {
         let error = parse(b"{\n  \"hotkey\": \"Ctrl+D\"\n  \"theme\": \"dark\"\n}").unwrap_err();
         assert!(error.contains("line 3"), "{error}");
-        assert!(parse(br#"{"theme": "purple"}"#).is_err());
+        // A wrong value elsewhere still is.
+        assert!(parse(br#"{"zoom": "big"}"#).is_err());
     }
 
     #[test]
