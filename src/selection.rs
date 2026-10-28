@@ -403,8 +403,8 @@ fn caret_via_accessibility() -> Option<RECT> {
         (height > 0).then(|| RECT {
             left,
             top,
-            right: left + width.max(1),
-            bottom: top + height,
+            right: left.saturating_add(width.max(1)),
+            bottom: top.saturating_add(height),
         })
     }
 }
@@ -428,18 +428,20 @@ fn bounding_rect(range: &IUIAutomationTextRange) -> Option<RECT> {
                 if w <= 0 && h <= 0 {
                     continue;
                 }
+                // Some apps say where things are billions of pixels off.
+                let (r, b) = (l.saturating_add(w), t.saturating_add(h));
                 rect = Some(match rect {
                     None => RECT {
                         left: l,
                         top: t,
-                        right: l + w,
-                        bottom: t + h,
+                        right: r,
+                        bottom: b,
                     },
                     Some(u) => RECT {
                         left: u.left.min(l),
                         top: u.top.min(t),
-                        right: u.right.max(l + w),
-                        bottom: u.bottom.max(t + h),
+                        right: u.right.max(r),
+                        bottom: u.bottom.max(b),
                     },
                 });
             }
