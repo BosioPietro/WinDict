@@ -626,6 +626,34 @@ mod tests {
     }
 
     #[test]
+    fn translations_miss_nothing() {
+        // `..EN` lets a forgotten string through in English; these are the
+        // ones that read the same in the language too.
+        const SAME: &[(Language, &[&str])] = &[
+            (Language::Italian, &["intro_size", "off"]),
+            (Language::Spanish, &["intro_size", "general"]),
+            (
+                Language::French,
+                &["pos_interjection", "pos_article", "animations"],
+            ),
+        ];
+        assert_eq!(
+            SAME.len(),
+            Language::ALL.len() - 1,
+            "a language not checked"
+        );
+        for &(language, same) in SAME {
+            for ((name, text), (_, english)) in language.strings().all().into_iter().zip(EN.all()) {
+                assert_eq!(
+                    text == english,
+                    same.contains(&name),
+                    "{language:?}: {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn names_parts_of_speech() {
         assert_eq!(EN.part_of_speech("noun"), "noun");
         assert_eq!(EN.part_of_speech("nom"), "nom");
