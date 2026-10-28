@@ -20,6 +20,8 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --release --all-targets -- -D warnings
       - run: cargo clippy --release --all-targets --features uiaccess -- -D warnings
+      # Once in debug too, where overflows and debug assertions panic.
+      - run: cargo test
       - run: cargo test --release
       - run: cargo test --release --features uiaccess
       - run: cargo build --release
