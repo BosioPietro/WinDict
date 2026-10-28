@@ -494,13 +494,15 @@ impl Popup {
             (word_w.to_bits(), word_h.to_bits()),
             indent.to_bits(),
         );
-        let header_same = std::mem::replace(&mut self.header_key, key.clone()) == key;
         // An unchanged word keeps the surface it has, so it can't flicker.
+        let header_same = self.header_key == key;
         let header_surface = match self.header.surface().filter(|_| header_same) {
             Some(surface) => surface,
             None => self.renderer.draw(&heading.word, s, &self.theme)?,
         };
         let body_surface = self.renderer.draw(body_layout, s, &self.theme)?;
+        // Only once it's drawn is it the word the surface has.
+        self.header_key = key;
 
         let header_h = (PAD_TOP + heading.height + HEADER_GAP) * s;
         // Only as far as it's drawn can it scroll.
@@ -727,7 +729,10 @@ impl Popup {
     /// Draws the card at the scale of the monitor it's on, in place: it may
     /// have been zoomed, or dragged to a monitor with another scale.
     fn rescale(&mut self) -> Result<()> {
-        let Some(shown) = self.shown.take().filter(|_| self.visible) else {
+        if !self.visible {
+            return Ok(());
+        }
+        let Some(shown) = self.shown.take() else {
             return Ok(());
         };
         let r = self.card_rect();
@@ -753,8 +758,12 @@ impl Popup {
                 );
             }
             self.scroller.at *= self.scale / old;
-            self.apply_theme()?;
-            self.draw_content(&shown, Transition::Rescale, None)?;
+            let drawn = self
+                .apply_theme()
+                .and_then(|()| self.draw_content(&shown, Transition::Rescale, None));
+            // Kept even so, for the card to be drawn again once it can be.
+            self.shown = Some(shown);
+            return drawn;
         }
         self.shown = Some(shown);
         Ok(())
