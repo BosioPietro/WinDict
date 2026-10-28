@@ -95,6 +95,12 @@ pub fn set_ui_access(on: bool) -> Result<(), UiAccessError> {
                 UiAccessError::Failed(e.message())
             });
         }
+        // Started some other way, it can't be waited on.
+        if info.hProcess.is_invalid() {
+            return Err(UiAccessError::Failed(
+                "uiaccess.ps1 couldn't be waited on".into(),
+            ));
+        }
         let process = Owned::new(info.hProcess);
         WaitForSingleObject(*process, INFINITE);
         let mut code = 0u32;
