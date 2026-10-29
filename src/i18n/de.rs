@@ -12,6 +12,8 @@ pub const DE: Strings = Strings {
     dictionary_not_loaded: "Wörterbuch nicht geladen",
     running: "WinDict läuft",
     running_detail: "Markieren Sie irgendwo ein Wort und drücken Sie {hotkey}.",
+    ready: "Sie können loslegen",
+    ready_detail: "Die Einstellungen öffnen Sie jederzeit über das Symbol im Infobereich.",
     shortcut_unavailable: "Tastenkombination nicht verfügbar",
     shortcut_unavailable_detail: "{hotkey} wird bereits von einer anderen App verwendet. Wählen Sie in den Einstellungen eine andere aus.",
     shortcut_invalid: "Ungültige Tastenkombination",

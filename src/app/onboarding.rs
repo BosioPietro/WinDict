@@ -98,6 +98,10 @@ impl App {
             .and_then(|i| f(i).ok().flatten());
         match action {
             Some(Action::Close) => self.finish_onboarding(),
+            Some(Action::Done) => {
+                self.finish_onboarding();
+                self.tray.notify(tr().ready, tr().ready_detail);
+            }
             Some(Action::ShowMe(step)) => self.show_example(step),
             Some(Action::ChooseShortcut) => self.open_settings(),
             Some(Action::UiAccess(on)) => self.ask_ui_access(on),

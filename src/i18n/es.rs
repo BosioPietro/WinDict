@@ -12,6 +12,8 @@ pub const ES: Strings = Strings {
     dictionary_not_loaded: "No se pudo cargar el diccionario",
     running: "WinDict está en ejecución",
     running_detail: "Selecciona una palabra en cualquier aplicación y pulsa {hotkey}.",
+    ready: "Ya puedes empezar",
+    ready_detail: "Puedes abrir la configuración cuando quieras desde el icono del área de notificación.",
     shortcut_unavailable: "Atajo no disponible",
     shortcut_unavailable_detail: "Otra aplicación ya usa {hotkey}. Elige otro en Configuración.",
     shortcut_invalid: "Atajo no válido",

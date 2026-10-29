@@ -242,8 +242,10 @@ pub struct Options {
 /// Something done in the window, for the app to carry out.
 #[derive(Debug, PartialEq)]
 pub enum Action {
-    /// Done, or closed: either way, it's been seen.
+    /// Closed before the last step: it's been seen all the same.
     Close,
+    /// Next on the last step: done.
+    Done,
     /// A card on an example, as the step's shortcut would open it.
     ShowMe(Step),
     /// The settings, to choose another lookup shortcut.
@@ -789,7 +791,7 @@ impl Intro {
                 self.go(self.at + 1)?;
                 return Ok(confirmed);
             }
-            Hit::Next => return Ok(Some(Action::Close)),
+            Hit::Next => return Ok(Some(Action::Done)),
             Hit::Back => {}
             Hit::ShowMe => return Ok(Some(Action::ShowMe(self.steps[self.at]))),
             Hit::ChooseShortcut => return Ok(Some(Action::ChooseShortcut)),

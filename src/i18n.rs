@@ -56,6 +56,9 @@ strings! {
     running: "WinDict is running",
     /// `{hotkey}`.
     running_detail: "Select a word anywhere and press {hotkey}.",
+    /// Once the introduction's last step is done.
+    ready: "You\u{2019}re good to go",
+    ready_detail: "You can always open the settings from the tray menu.",
     shortcut_unavailable: "Shortcut unavailable",
     /// `{hotkey}`.
     shortcut_unavailable_detail: "{hotkey} is already used by another app. Choose another one in Settings.",

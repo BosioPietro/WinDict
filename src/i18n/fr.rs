@@ -13,6 +13,8 @@ pub const FR: Strings = Strings {
     dictionary_not_loaded: "Dictionnaire non chargé",
     running: "WinDict est lancé",
     running_detail: "Sélectionnez un mot n\u{2019}importe où et appuyez sur {hotkey}.",
+    ready: "C\u{2019}est parti",
+    ready_detail: "Vous pouvez ouvrir les paramètres à tout moment depuis l\u{2019}icône de la zone de notification.",
     shortcut_unavailable: "Raccourci indisponible",
     shortcut_unavailable_detail: "{hotkey} est déjà utilisé par une autre application. Choisissez-en un autre dans les paramètres.",
     shortcut_invalid: "Raccourci non valide",

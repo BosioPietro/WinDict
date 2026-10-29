@@ -10,6 +10,8 @@ pub const IT: Strings = Strings {
     dictionary_not_loaded: "Dizionario non caricato",
     running: "WinDict è in esecuzione",
     running_detail: "Seleziona una parola in qualsiasi app e premi {hotkey}.",
+    ready: "Tutto pronto per iniziare",
+    ready_detail: "Puoi sempre aprire le impostazioni dal menu dell\u{2019}area di notifica.",
     shortcut_unavailable: "Scorciatoia non disponibile",
     shortcut_unavailable_detail: "{hotkey} è già usata da un\u{2019}altra app.",
     shortcut_invalid: "Scorciatoia non valida",
