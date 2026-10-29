@@ -122,6 +122,7 @@ fn behind(language: Language) -> [Language; 2] {
         Language::Italian => [Language::Spanish, Language::French],
         Language::Spanish => [Language::French, Language::Italian],
         Language::German => [Language::French, Language::Spanish],
+        Language::Portuguese => [Language::Spanish, Language::Italian],
     }
 }
 
@@ -295,6 +296,7 @@ impl Book {
             Language::Spanish => &BOOK_ES,
             Language::French => &BOOK_FR,
             Language::German => &BOOK_DE,
+            Language::Portuguese => &BOOK_PT,
         }
     }
 
@@ -437,6 +439,7 @@ impl Mail {
             Language::Spanish => (&MAIL_EN, "es"),
             Language::French => (&MAIL_EN, "fr"),
             Language::German => (&MAIL_EN, "de"),
+            Language::Portuguese => (&MAIL_EN, "pt"),
         }
     }
 
@@ -796,6 +799,56 @@ static BOOK_DE: Book = Book {
     source: dictionary::DEUTSCHES_WIKTIONARY,
 };
 
+static BOOK_PT: Book = Book {
+    paragraphs: &[
+        &[
+            "Quando Mara chegou ao muro do porto, o sol já tinha",
+            "se escondido atrás do cabo, e o último lampejo",
+            "se estendia sobre a água como um fio solto de um",
+            "casaco. Sentou-se nas pedras frias e esperou. Lá",
+            "embaixo, os barcos batiam uns nos outros no",
+            "balanço das ondas, pacientes como cães velhos.",
+        ],
+        &[
+            "O pai lhe dissera uma vez que o mar cumpria toda",
+            "promessa feita à sua beira, só que nunca do jeito",
+            "que se queria. Na época, ela não acreditou. Nem",
+            "sabia se acreditava agora, mas tinha vindo mesmo",
+            "assim, e isso, pensou, já era uma espécie de resposta.",
+        ],
+        &[
+            "Uma luz se acendeu na janela da alfândega. Alguém",
+            "ainda estava acordado lá embaixo, debruçado sobre",
+            "um livro de contas ou uma carta, e pensar nisso fez",
+            "a noite parecer um pouco menos imensa.",
+        ],
+    ],
+    word: "lampejo",
+    language: "pt",
+    part_of_speech: "noun",
+    senses: &[
+        (
+            "Claridade intensa e repentina.",
+            Some("O lampejo de um relâmpago"),
+        ),
+        (
+            "Brilho breve da luz refletida numa superfície.",
+            Some("O último lampejo do sol na água"),
+        ),
+        (
+            "Luz que se acende e se apaga a intervalos.",
+            Some("O lampejo distante de um farol"),
+        ),
+        (
+            "Manifestação súbita e passageira de algo.",
+            Some("Um lampejo de esperança"),
+        ),
+    ],
+    synonyms: &["clarão", "brilho", "fulgor", "centelha", "cintilação"],
+    also: None,
+    source: dictionary::WIKCIONARIO_PT,
+};
+
 static MAIL_EN: Mail = Mail {
     subject: "Milan showroom: revised floor plans",
     folder: "Inbox",
@@ -820,6 +873,7 @@ static MAIL_EN: Mail = Mail {
         ("es", "Te mantendré al tanto"),
         ("fr", "Je vous tiendrai au courant"),
         ("de", "Ich halte Sie auf dem Laufenden"),
+        ("pt", "Mantenho você informado"),
     ],
     sign: &["Best regards,", "Sarah Whitfield"],
 };

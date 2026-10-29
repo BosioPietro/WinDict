@@ -17,6 +17,7 @@ mod de;
 mod es;
 mod fr;
 mod it;
+mod pt;
 
 use std::fmt::Display;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -428,6 +429,7 @@ pub enum Language {
     Spanish,
     French,
     German,
+    Portuguese,
 }
 
 impl Language {
@@ -437,6 +439,7 @@ impl Language {
         Language::Spanish,
         Language::French,
         Language::German,
+        Language::Portuguese,
     ];
 
     fn strings(self) -> &'static Strings {
@@ -446,6 +449,7 @@ impl Language {
             Language::Spanish => &es::ES,
             Language::French => &fr::FR,
             Language::German => &de::DE,
+            Language::Portuguese => &pt::PT,
         }
     }
 
@@ -457,6 +461,7 @@ impl Language {
             Language::Spanish => "es",
             Language::French => "fr",
             Language::German => "de",
+            Language::Portuguese => "pt",
         }
     }
 
@@ -478,11 +483,13 @@ impl Language {
         const LANG_SPANISH: u16 = 0x0A;
         const LANG_FRENCH: u16 = 0x0C;
         const LANG_GERMAN: u16 = 0x07;
+        const LANG_PORTUGUESE: u16 = 0x16;
         match id & 0x3FF {
             LANG_ITALIAN => Language::Italian,
             LANG_SPANISH => Language::Spanish,
             LANG_FRENCH => Language::French,
             LANG_GERMAN => Language::German,
+            LANG_PORTUGUESE => Language::Portuguese,
             _ => Language::English,
         }
     }
@@ -619,6 +626,10 @@ mod tests {
         for id in [0x0407, 0x0C07, 0x0807, 0x0007] {
             assert_eq!(Language::from_lang_id(id), Language::German);
         }
+        // Brazil's, Portugal's, and the neutral Portuguese.
+        for id in [0x0416, 0x0816, 0x0016] {
+            assert_eq!(Language::from_lang_id(id), Language::Portuguese);
+        }
         // English, and what WinDict has no translation for.
         for id in [0x0409, 0x0809, 0x0413, 0x0000] {
             assert_eq!(Language::from_lang_id(id), Language::English);
@@ -657,6 +668,7 @@ mod tests {
                 &["pos_interjection", "pos_article", "animations"],
             ),
             (Language::German, &["theme_system"]),
+            (Language::Portuguese, &["intro_size"]),
         ];
         assert_eq!(
             SAME.len(),

@@ -53,14 +53,14 @@ theme and accent color.
 
 - **Definitions in place: select a word, press Alt+D**
 - **Translations of a word, a phrase or a whole passage with Alt+T, between 22 languages**
-- **Dictionaries in English, Spanish, French, German and Italian that work offline**
+- **Dictionaries in English, Spanish, French, German, Italian and Portuguese that work offline**
 - **Shows above Start and Search, once installed**
 - Inflected forms are looked up by their base word ("ran" shows "run")
 - Similar and opposite words, each a click away
 - Pronunciation in the word's own language, with Windows' own voices
 - A box to type into, for text that can't be selected
 - `wd`, to look up and translate from the command line
-- An interface in English, Spanish, French, German or Italian
+- An interface in English, Spanish, French, German, Italian or Portuguese
 - Follows the system's light or dark theme and accent color
 - Adjustable text size and shortcuts
 - Updates itself from the tray
@@ -234,7 +234,8 @@ by hand, use **Open config.json** at the bottom of the settings window, then
 - English comes from Open English WordNet (about 150,000 words and phrases),
   which is built into the executable. Lookups in it take under a millisecond.
 - French (about 490,000 words), German (about 185,000), Spanish (about
-  135,000) and Italian (about 75,000) come from their Wiktionaries. Each is downloaded once, when it's
+  135,000), Portuguese (about 85,000) and Italian (about 75,000) come from
+  their Wiktionaries. Each is downloaded once, when it's
   picked on the introduction or in the settings, and works offline from then
   on.
 - The online dictionary is used for pronunciations and for words the built-in
@@ -305,6 +306,9 @@ cargo build --release --features setup --bin windict-setup   # target\release\wi
 - German dictionary and online lookups:
   [Wiktionary](https://de.wiktionary.org/), through
   [wiktextract](https://kaikki.org/dewiktionary/) (CC BY-SA 4.0).
+- Portuguese dictionary and online lookups:
+  [Wikcionário](https://pt.wiktionary.org/), through
+  [wiktextract](https://kaikki.org/ptwiktionary/) (CC BY-SA 4.0).
 - Translations: Google Translate's public web endpoint, which is unofficial
   and may change, falling back to [MyMemory](https://mymemory.translated.net/).
 

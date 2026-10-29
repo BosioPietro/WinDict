@@ -113,6 +113,8 @@ pub const WIKTIONNAIRE: &str = "Wiktionnaire";
 /// The German one, which is called Wiktionary too: named apart, so that
 /// its links go to its own pages.
 pub const DEUTSCHES_WIKTIONARY: &str = "Deutsches Wiktionary";
+/// The Portuguese one.
+pub const WIKCIONARIO_PT: &str = "Wikcion\u{E1}rio";
 
 #[derive(Clone, Debug)]
 pub struct Meaning {
@@ -421,6 +423,10 @@ mod tests {
         assert_eq!(
             source_url(DEUTSCHES_WIKTIONARY, "Haus").as_deref(),
             Some("https://de.wiktionary.org/wiki/Haus")
+        );
+        assert_eq!(
+            source_url(WIKCIONARIO_PT, "pão de queijo").as_deref(),
+            Some("https://pt.wiktionary.org/wiki/p%C3%A3o_de_queijo")
         );
         assert_eq!(source_url("Elsewhere", "x"), None);
     }

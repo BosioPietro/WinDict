@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use crate::dictionary::{
     percent_encode, Definition, Lookup, Meaning, Sense, DEUTSCHES_WIKTIONARY, MAX_ANTONYMS,
-    WIKCIONARIO, WIKIZIONARIO, WIKTIONNAIRE,
+    WIKCIONARIO, WIKCIONARIO_PT, WIKIZIONARIO, WIKTIONNAIRE,
 };
 use crate::i18n::{fill, tr};
 use crate::offline::sentence;
@@ -63,6 +63,14 @@ pub const EDITIONS: &[Edition] = &[
         pages: None,
         dir: "dewiktionary",
         heading: "Deutsch",
+    },
+    Edition {
+        language: "pt",
+        source: WIKCIONARIO_PT,
+        host: "pt.wiktionary.org",
+        pages: None,
+        dir: "ptwiktionary",
+        heading: "Portugu\u{EA}s",
     },
 ];
 
@@ -390,6 +398,10 @@ mod tests {
         assert_eq!(
             edition("de").unwrap().path("Übung"),
             "/dewiktionary/Deutsch/meaning/%C3%9C/%C3%9Cb/%C3%9Cbung.jsonl"
+        );
+        assert_eq!(
+            edition("pt").unwrap().path("lampejo"),
+            "/ptwiktionary/Portugu%C3%AAs/meaning/l/la/lampejo.jsonl"
         );
         assert!(edition("en").is_none());
     }

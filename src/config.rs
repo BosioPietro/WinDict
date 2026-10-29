@@ -53,7 +53,7 @@ pub struct Config {
     /// Global shortcut that translates the selection instead.
     pub translate_hotkey: String,
     /// The language WinDict is shown in, "english", "italian", "spanish",
-    /// "french" or "german". Unset, it's the language of Windows if WinDict has it,
+    /// "french", "german" or "portuguese". Unset, it's the language of Windows if WinDict has it,
     /// else English.
     pub ui_language: Language,
     /// "system", "dark" or "light".
