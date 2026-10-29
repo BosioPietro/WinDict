@@ -170,6 +170,11 @@ pub(super) unsafe extern "system" fn main_proc(
             with_app(|app| app.close_settings());
             LRESULT(0)
         }
+        // The area of the screen to read is picked (1), or given up on (0).
+        WM_APP_SNIPPED => {
+            with_app(|app| app.end_snip(wparam.0 == 1));
+            LRESULT(0)
+        }
         WM_APP_TASK => {
             let task = if wparam.0 == 1 {
                 Shortcut::Translate

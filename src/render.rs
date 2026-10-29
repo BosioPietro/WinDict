@@ -287,6 +287,8 @@ pub enum Target {
     Back,
     /// The card's pin button: keeps it open, or lets it go.
     Pin,
+    /// The search box's scan button: reads text off the screen into it.
+    Scan,
     /// Lists the languages to translate from, or into.
     Language(Side),
     /// Lists the languages WinDict can be shown in.
@@ -561,6 +563,9 @@ struct Formats {
     setting: IDWriteTextFormat,
     value: IDWriteTextFormat,
     chrome: IDWriteTextFormat,
+    /// Whether the symbols are Segoe Fluent Icons, which has some Segoe MDL2
+    /// Assets lacks.
+    fluent: bool,
 }
 
 thread_local! {
@@ -624,6 +629,12 @@ impl Renderer {
     }
 
     /// The widest and tallest surface the GPU draws, in pixels.
+    /// Whether icons are drawn in Segoe Fluent Icons (Windows 11), rather
+    /// than Segoe MDL2 Assets (Windows 10).
+    pub fn fluent_icons(&self) -> bool {
+        self.formats.fluent
+    }
+
     pub fn max_px(&self) -> f32 {
         let level = unsafe { self.d3d.borrow().GetFeatureLevel() };
         if level.0 >= D3D_FEATURE_LEVEL_11_0.0 {
@@ -765,7 +776,8 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
     unsafe { menu.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)? };
     // Windows 11 ships Segoe Fluent Icons; Windows 10 has Segoe MDL2 Assets.
     let fluent = HSTRING::from("Segoe Fluent Icons");
-    let symbols = if font_exists(dwrite, &fluent) {
+    let has_fluent = font_exists(dwrite, &fluent);
+    let symbols = if has_fluent {
         fluent
     } else {
         HSTRING::from("Segoe MDL2 Assets")
@@ -793,6 +805,7 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
     let chrome = make(&symbols, 10.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
     unsafe { chrome.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)? };
     Ok(Formats {
+        fluent: has_fluent,
         word: make(
             &display,
             WORD_SIZE,

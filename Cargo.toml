@@ -48,10 +48,13 @@ version = "0.62"
 features = [
     "Foundation",
     "Foundation_Numerics",
+    "Globalization",
     "Graphics",
     "Graphics_DirectX",
+    "Graphics_Imaging",
     "Media",
     "Media_Core",
+    "Media_Ocr",
     "Media_Playback",
     "Media_SpeechSynthesis",
     "Networking_Connectivity",

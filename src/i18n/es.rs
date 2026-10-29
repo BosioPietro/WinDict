@@ -56,6 +56,11 @@ pub const ES: Strings = Strings {
     key_look_up: "Buscar",
     key_translate: "Traducir",
     key_close: "Cerrar",
+    scan_tip: "Leer texto de la pantalla",
+    scan_hint: "Arrastra sobre el texto que quieres leer \u{b7} Esc para cancelar",
+    scan_reading: "Leyendo el texto\u{2026}",
+    scan_nothing: "No se encontró texto ahí",
+    scan_unavailable: "Windows no puede leer texto en pantalla",
 
     // The card: a definition.
     looking_up: "Buscando\u{2026}",

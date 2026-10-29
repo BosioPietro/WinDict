@@ -69,6 +69,11 @@ impl LineEdit {
         &self.text
     }
 
+    /// Holds `text` instead, as much of it as it takes, the caret after it.
+    pub fn replace(&mut self, text: &str) {
+        *self = Self::new(text, self.limit);
+    }
+
     /// Where the caret is, in the UTF-16 units DirectWrite counts.
     pub fn caret_utf16(&self) -> u32 {
         self.text[..self.caret].encode_utf16().count() as u32

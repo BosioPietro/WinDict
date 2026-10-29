@@ -17,6 +17,9 @@ use crate::ui::{scale, ts, v2, v3, Animator, Text, RESIZE_MS};
 
 // Geometry, in DIPs.
 const TITLE_GAP: f32 = 10.0;
+/// How much narrower the heading is than the field, for the card's scan
+/// button beside it.
+const TITLE_ROOM: f32 = 34.0;
 const FIELD_H: f32 = 40.0;
 const FIELD_RADIUS: f32 = 6.0;
 const GLYPH_X: f32 = 8.0;
@@ -59,6 +62,8 @@ pub(crate) struct SearchBox {
     /// The heading, and the one it replaces while they cross-fade.
     title: Text,
     old_title: Text,
+    /// The bottom of the heading's first line, in DIPs below its top.
+    title_line: f32,
     field: ContainerVisual,
     field_clip: CompositionRoundedRectangleGeometry,
     fill: CompositionColorBrush,
@@ -175,6 +180,7 @@ impl SearchBox {
             visual,
             title,
             old_title,
+            title_line: 0.0,
             field,
             field_clip,
             fill,
@@ -246,7 +252,8 @@ impl SearchBox {
         self.underline_brush.SetColor(theme.accent)?;
         self.caret_brush.SetColor(theme.accent)?;
 
-        let heading = renderer.layout_line(title, Face::Title, Ink::Primary, width)?;
+        let heading = renderer.layout_line(title, Face::Title, Ink::Primary, width - TITLE_ROOM)?;
+        self.title_line = heading.first_line_bottom();
         let title_size = self.title.show(renderer, &heading, s, theme)?;
         Animator::stop(&self.old_title.visual, &["Opacity"]);
         self.old_title.visual.SetOpacity(0.0)?;
@@ -511,6 +518,11 @@ impl SearchBox {
         Ok(self.height(shown))
     }
 
+    /// How many suggestions it shows.
+    pub(crate) fn count(&self) -> usize {
+        self.count
+    }
+
     /// The picked suggestion, if any.
     pub(crate) fn selected(&self) -> Option<usize> {
         self.selected
@@ -579,7 +591,7 @@ impl SearchBox {
         let s = self.scale;
         // The heading on show becomes the old one.
         std::mem::swap(&mut self.title, &mut self.old_title);
-        let width = CARD_W - 2.0 * PAD_X;
+        let width = CARD_W - 2.0 * PAD_X - TITLE_ROOM;
         let heading = renderer.layout_line(title, Face::Title, Ink::Primary, width)?;
         self.title.show(renderer, &heading, s, theme)?;
         let rest = v3((PAD_X * s).round(), (PAD_TOP * s).round());
@@ -678,6 +690,11 @@ impl SearchBox {
             anim.vector3(footer, "Offset", to, RESIZE_MS, 0, &anim.decelerate)?;
         }
         Ok(self.height(0))
+    }
+
+    /// The bottom of the heading's first line, in DIPs below its top.
+    pub(crate) fn title_line(&self) -> f32 {
+        self.title_line
     }
 
     /// Where the field starts, below the heading, in card pixels.

@@ -101,6 +101,7 @@ impl App {
             Target::Translate => self.translate(),
             Target::Speak => self.speak(),
             Target::Back => self.back(),
+            Target::Scan => self.scan(),
             // Pinning moves the card out from where it's handled, so it's
             // done once this is.
             Target::Pin => {

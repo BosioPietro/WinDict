@@ -62,7 +62,7 @@ impl App {
         let (edit, languages) = match purpose {
             Shortcut::Lookup => (LineEdit::default(), None),
             Shortcut::Translate => {
-                let way = typed_direction("", &self.config);
+                let way = typed_direction("", None, &self.config);
                 let languages = Languages {
                     pair: LanguagePair::new(way.from, way.to),
                     picked: false,
@@ -106,7 +106,11 @@ impl App {
         match search.edit.type_unit(unit) {
             Input::Edited => {}
             Input::Enter => {
-                let picked = self.card.popup.as_ref().and_then(|p| p.suggestion());
+                let popup = self.card.popup.as_ref();
+                if popup.and_then(|p| p.focused_link()) == Some(&Target::Scan) {
+                    return self.scan();
+                }
+                let picked = popup.and_then(|p| p.suggestion());
                 return self.submit_search(picked);
             }
             Input::Paste => {
@@ -118,8 +122,8 @@ impl App {
         self.refresh_search();
     }
 
-    /// A key pressed in the card (WM_KEYDOWN): Up, Down, Tab and Shift+Tab
-    /// pick a suggestion; Left, Right, Home and End move the caret, by
+    /// A key pressed in the card (WM_KEYDOWN): Up and Down pick a
+    /// suggestion, and Tab and Shift+Tab go on to the scan button; Left, Right, Home and End move the caret, by
     /// words with Ctrl; Delete removes what's after it.
     pub(super) fn on_key(&mut self, key: VIRTUAL_KEY) {
         if self.card.pinned && self.pinned_key(key) {
@@ -133,10 +137,13 @@ impl App {
             return;
         };
         let ctrl = hotkey::is_held(VK_CONTROL);
+        if key == VK_TAB {
+            let _ = popup.tab_search(!hotkey::is_held(VK_SHIFT));
+            return;
+        }
         let down = match key {
             VK_DOWN => Some(true),
             VK_UP => Some(false),
-            VK_TAB => Some(!hotkey::is_held(VK_SHIFT)),
             _ => None,
         };
         if let Some(down) = down {
@@ -201,7 +208,11 @@ impl App {
             if l.picked {
                 return;
             }
-            let way = typed_direction(search.edit.text(), &self.config);
+            if search.edit.text().trim().is_empty() {
+                search.scanned = None;
+            }
+            let scanned = search.scanned.as_ref();
+            let way = typed_direction(search.edit.text(), scanned, &self.config);
             if (&way.from, &way.to) == (&l.pair.from, &l.pair.to) {
                 return;
             }
@@ -332,10 +343,15 @@ impl App {
     }
 }
 
-/// Which way `text`, typed to be translated, goes: from the language its
-/// words are in, among the dictionaries', as the `config` says.
-fn typed_direction(text: &str, config: &Config) -> translate::Direction {
+/// Which way `text`, typed to be translated, goes: from the language it
+/// was `scanned` in, read off the screen, or else its words are in, among
+/// the dictionaries', as the `config` says.
+fn typed_direction(
+    text: &str,
+    scanned: Option<&LangCode>,
+    config: &Config,
+) -> translate::Direction {
     let defaults = (config.translate_from.as_str(), config.translate_to.as_str());
-    let from = offline::detect(text);
+    let from = scanned.cloned().or_else(|| offline::detect(text));
     translate::typed(from.as_deref(), &config.languages, defaults)
 }

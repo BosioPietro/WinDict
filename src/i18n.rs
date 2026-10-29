@@ -110,6 +110,15 @@ strings! {
     key_translate: "Translate",
     /// Beside the Esc key.
     key_close: "Close",
+    /// The search box's button that reads text off the screen into it.
+    scan_tip: "Read text on screen",
+    /// Over the dimmed screen, while an area of it is picked to read.
+    scan_hint: "Drag over the text to read \u{b7} Esc to cancel",
+    /// The search box's heading while it reads it.
+    scan_reading: "Reading the text\u{2026}",
+    scan_nothing: "No text found there",
+    /// Windows has no text recognition for any language installed.
+    scan_unavailable: "Windows can\u{2019}t read text on screen",
 
     // The card: a definition.
     /// The heading while the selection is being looked up.

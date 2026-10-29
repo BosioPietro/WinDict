@@ -2,7 +2,7 @@
 //!
 //! This file holds the state, the hotkey, the timers and the dismissal of the
 //! card; the rest of `impl App` is split by flow into the submodules:
-//! `search`, `lookup`, `translating`, `links`, `pinning`, `zooming`,
+//! `search`, `scanning`, `lookup`, `translating`, `links`, `pinning`, `zooming`,
 //! `tray_menu`, `prefs`, `updating` and `onboarding`.
 //! `procs` has the window procedures, `edit` and `picking` the pure text and
 //! list logic.
@@ -16,6 +16,7 @@ mod pinning;
 mod prefs;
 mod procs;
 mod recent;
+mod scanning;
 mod search;
 mod state;
 mod translating;
@@ -113,6 +114,8 @@ const WM_APP_CLOSE_INTRO: u32 = WM_APP + 14;
 /// A task in the Jump List: the shortcut whose box to open in `wparam`, as
 /// [`task_param`] makes it. Posted by the WinDict started for it.
 const WM_APP_TASK: u32 = WM_APP + 15;
+/// From the window an area of the screen is picked in, to read text from.
+const WM_APP_SNIPPED: u32 = WM_APP + 16;
 
 const HOTKEY_LOOKUP: i32 = 1;
 const HOTKEY_ESCAPE: i32 = 2;
@@ -251,6 +254,7 @@ const TIMER_TRANSLATING: usize = 9;
 const TIMER_UPDATE_CHECK: usize = 10;
 const TIMER_CLOSED: usize = 11;
 const TIMER_INTRO_HIDE: usize = 12;
+const TIMER_SNIP: usize = 13;
 
 /// Free the GPU resources after this long without a lookup.
 const IDLE_TEARDOWN_MS: u32 = 3 * 60 * 1000;
@@ -314,6 +318,9 @@ pub struct App {
     pinned: Vec<Card>,
     /// Cards unpinned or closed, fading out before their windows go.
     closing: Vec<Popup>,
+    /// The search box put aside while an area of the screen is picked to
+    /// read text from.
+    scanning: Option<scanning::Scanning>,
     menu: Option<Menu>,
     /// The settings window, while it's open.
     settings: Option<Settings>,
@@ -460,6 +467,7 @@ pub fn run(
             card: Card::default(),
             pinned: Vec::new(),
             closing: Vec::new(),
+            scanning: None,
             menu: None,
             settings: None,
             intro: None,
@@ -777,6 +785,7 @@ impl App {
     /// A shortcut was pressed: the selection is read, to look it up or,
     /// with the translation shortcut, to translate it.
     fn on_hotkey(&mut self, shortcut: Shortcut) {
+        self.cancel_scan();
         self.new_request();
         // The card has the keyboard (a search): there's no selection to
         // read, so open a fresh search box, or close the one that's open
@@ -824,6 +833,7 @@ impl App {
                 Event::Looked(looked) => self.with_request(looked.id, |app| app.on_result(looked)),
                 Event::Corrected(c) => self.with_request(c.id, |app| app.on_corrected(c)),
                 Event::Words(id, words) => self.on_words(id, words),
+                Event::Scanned(id, result) => self.on_scanned(id, result),
                 Event::Installing(language, percent) => self.on_installing(language, percent),
                 Event::Installed(language, result) => self.on_installed(language, result),
                 Event::Translated(translated) => {
@@ -1034,6 +1044,7 @@ impl App {
         win::kill_timer(self.hwnd, id);
         match id {
             TIMER_AUTOHIDE => self.dismiss(),
+            TIMER_SNIP => self.start_snip(),
             TIMER_COVERED => self.uncover(),
             TIMER_UPDATE_CHECK => self.check_for_update(),
             TIMER_CLOSED => {
@@ -1119,6 +1130,7 @@ impl App {
             Some(CardButton::Back) => return self.back(),
             Some(CardButton::Translate) => return self.translate(),
             Some(CardButton::Speak) => return self.speak(),
+            Some(CardButton::Scan) => return self.scan(),
             Some(CardButton::Pin) | None => {}
         }
         if let Some(target) = self

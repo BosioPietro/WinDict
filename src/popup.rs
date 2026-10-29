@@ -33,7 +33,7 @@ use crate::win::{self, create_tooltip, set_tooltip_rect, Window};
 
 use body::Content;
 use parts::{Arrival, Badge, Header, IconButton, IconSpec, Loader};
-pub use placement::{anchor_beside, centred_anchor};
+pub use placement::{anchor_beside, anchor_where, centred_anchor};
 use placement::{placement, rescaled, zoomed};
 use scrolling::ScrollChrome;
 
@@ -75,6 +75,13 @@ const SWAP_TOOL: usize = 3;
 const SPEAK_TOOL: usize = 4;
 /// The pin button's tooltip's tool, after the speak button's.
 const PIN_TOOL: usize = 5;
+/// The scan button's tooltip's tool, after the pin button's.
+const SCAN_TOOL: usize = 6;
+/// "Text recognition" in Segoe Fluent Icons: an A in a dashed frame.
+const SCAN_GLYPH: &str = "\u{F683}";
+/// "Screen clipping", scissors over a screen, for Segoe MDL2 Assets, which
+/// has no text recognition.
+const SCAN_GLYPH_MDL2: &str = "\u{F406}";
 /// "Volume" in Segoe Fluent Icons and Segoe MDL2 Assets.
 const SPEAK_GLYPH: &str = "\u{E767}";
 /// How far the speak button slides in from the left as it appears.
@@ -151,6 +158,8 @@ pub struct Popup {
     speak: IconButton,
     /// Keeps the card open, or lets it go again.
     pin: IconButton,
+    /// Reads text off the screen into the search box: there only with it.
+    scan: IconButton,
     search: SearchBox,
     glide: SpriteVisual,
     glide_source: CompositionSurfaceBrush,
@@ -201,6 +210,7 @@ pub enum CardButton {
     Speak,
     Translate,
     Pin,
+    Scan,
     Back,
 }
 
@@ -208,18 +218,26 @@ impl CardButton {
     /// Every button, in the order Tab goes through them: the ones by the
     /// word as they read, and the back button last, so Tab doesn't start on
     /// it.
-    const ALL: [CardButton; 4] = [Self::Speak, Self::Translate, Self::Pin, Self::Back];
+    const ALL: [CardButton; 5] = [
+        Self::Speak,
+        Self::Translate,
+        Self::Pin,
+        Self::Scan,
+        Self::Back,
+    ];
 
     /// What pressing the button does.
     fn target(self) -> &'static Target {
         static SPEAK: Target = Target::Speak;
         static TRANSLATE: Target = Target::Translate;
         static PIN: Target = Target::Pin;
+        static SCAN: Target = Target::Scan;
         static BACK: Target = Target::Back;
         match self {
             Self::Speak => &SPEAK,
             Self::Translate => &TRANSLATE,
             Self::Pin => &PIN,
+            Self::Scan => &SCAN,
             Self::Back => &BACK,
         }
     }
@@ -321,6 +339,26 @@ impl Popup {
                 slide_from: 0.0,
             },
         )?;
+        // Where the pin button is, by the search box's heading instead.
+        let scan = IconButton::new(
+            c,
+            &frame.card,
+            hwnd,
+            IconSpec {
+                icon: if renderer.fluent_icons() {
+                    SCAN_GLYPH
+                } else {
+                    SCAN_GLYPH_MDL2
+                },
+                face: Face::Button,
+                ink: Ink::Secondary,
+                tip: tr().scan_tip,
+                tool: SCAN_TOOL,
+                x: PIN_X,
+                origin: v2(0.0, 0.0),
+                slide_from: 0.0,
+            },
+        )?;
         let content = Content::new(c, &frame.card, hwnd)?;
         let loader = Loader::new(c, content.host(), &theme)?;
         let scroll_chrome = ScrollChrome::new(c, &frame.card)?;
@@ -357,6 +395,7 @@ impl Popup {
             translate,
             speak,
             pin,
+            scan,
             search,
             glide,
             glide_source,
@@ -425,6 +464,7 @@ impl Popup {
         self.translate.release();
         self.speak.release();
         self.pin.release();
+        self.scan.release();
         self.badge.release();
         self.loader.stop();
         self.search.reset();
@@ -453,6 +493,7 @@ impl Popup {
         let indent = if self.back.shown() { BACK_INDENT } else { 0.0 };
         // The pin button's there whenever the search box isn't.
         self.pin.set_shown(&self.anim, true, self.scale)?;
+        self.scan.set_shown(&self.anim, false, self.scale)?;
         let room = if self.translate.shown() {
             TRANSLATE_ROOM
         } else {
@@ -686,6 +727,11 @@ impl Popup {
         } else {
             (None, Ink::Secondary, tr().pin_tip)
         };
+        // A pinned card stays put, so the screen can't be read from behind it.
+        if pinned {
+            self.scan.set_shown(&self.anim, false, self.scale)?;
+            self.sync_tooltip();
+        }
         self.pin.set_icon(PIN_GLYPH, fill, ink);
         self.pin.set_tip(self.hwnd, tip);
         self.pin
@@ -823,17 +869,16 @@ impl Popup {
         let on_list = self.content.list().hover_bar(&self.anim, in_body)?;
         let point = if on_list { None } else { point };
         let point = if self.hover_bar(point)? { None } else { point };
-        if self.search.active {
-            let card_point = point.map(|(x, y)| self.card_point(x, y));
-            self.search.hover(&self.anim, card_point)?;
-            // The languages under the field have a swap button to lighten.
-            return self.sync_swap();
-        }
         let over = point.and_then(|(x, y)| self.button_at(x, y));
         for button in CardButton::ALL {
             let (button_ui, anim) = self.button_mut(button);
             button_ui.set_hovered(anim, over == Some(button))?;
         }
+        if self.search.active {
+            let card_point = point.map(|(x, y)| self.card_point(x, y));
+            self.search.hover(&self.anim, card_point)?;
+        }
+        // The languages under the field have a swap button to lighten.
         self.sync_swap()
     }
 
@@ -887,6 +932,7 @@ impl Popup {
             CardButton::Speak => &self.speak,
             CardButton::Translate => &self.translate,
             CardButton::Pin => &self.pin,
+            CardButton::Scan => &self.scan,
             CardButton::Back => &self.back,
         }
     }
@@ -897,6 +943,7 @@ impl Popup {
             CardButton::Speak => &mut self.speak,
             CardButton::Translate => &mut self.translate,
             CardButton::Pin => &mut self.pin,
+            CardButton::Scan => &mut self.scan,
             CardButton::Back => &mut self.back,
         };
         (ui, &self.anim)
@@ -975,6 +1022,8 @@ impl Popup {
         self.translate.reset()?;
         self.speak.reset()?;
         self.pin.reset()?;
+        // Shown, sliding in, with the search box.
+        self.scan.hide_at_once()?;
         self.search.reset();
         self.badge.reset()?;
         // The pointer comes back to the card afresh.
@@ -1056,6 +1105,7 @@ impl Popup {
         self.translate.apply_theme(&self.renderer, &t, self.scale)?;
         self.speak.apply_theme(&self.renderer, &t, self.scale)?;
         self.pin.apply_theme(&self.renderer, &t, self.scale)?;
+        self.scan.apply_theme(&self.renderer, &t, self.scale)?;
         self.badge.apply_theme(&self.renderer, &t, self.scale)?;
         self.scroll_chrome.apply_theme(&t)
     }

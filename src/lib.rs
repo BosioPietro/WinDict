@@ -19,6 +19,8 @@
 //! - `config`, `hotkey`, `autostart`, `tray`: settings and their storage, the
 //!   shortcut, "Start with Windows", and the notification-area icon.
 //! - `speech`: saying the word out loud, in its language's voice.
+//! - `snip` and `ocr`: picking an area of the screen, and reading the text
+//!   in it into the search box.
 //! - `update`: looking for a new version, and installing it.
 //! - `installed`: the copy the installer put in Program Files, and handing
 //!   over to its UI access build.
@@ -47,6 +49,7 @@ mod jumplist;
 mod kaikki;
 mod lang;
 mod menu;
+mod ocr;
 mod offline;
 mod online;
 mod popup;
@@ -55,6 +58,7 @@ mod searchbox;
 mod selection;
 mod settings;
 mod setup;
+mod snip;
 mod speech;
 mod theme;
 mod translate;

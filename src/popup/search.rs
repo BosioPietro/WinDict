@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::config::Shortcut;
+use crate::ocr;
 use crate::render::{Picker, Side, LANGUAGES_TOP, QUERY_SIZE};
 
 impl Popup {
@@ -33,6 +34,8 @@ impl Popup {
 
     /// Shows `text` in the search box, the caret `at` UTF-16 units in.
     pub fn set_query(&mut self, text: &str, at: u32) -> Result<()> {
+        // Typing, or moving the caret, is back in the field.
+        self.scan.set_focused(false)?;
         self.search
             .set_query(&self.renderer, &self.anim, &self.theme, text, at)
     }
@@ -125,7 +128,34 @@ impl Popup {
 
     /// Picks the next suggestion down, or up.
     pub fn step_suggestion(&mut self, down: bool) -> Result<()> {
+        self.scan.set_focused(false)?;
         self.search.step(&self.anim, down)
+    }
+
+    /// Tab, or Shift+Tab with `forward` false: from the field through the
+    /// suggestions to the scan button, if it's there, and back to the field.
+    pub fn tab_search(&mut self, forward: bool) -> Result<()> {
+        let count = self.search.count();
+        let scan = self.scan.shown();
+        // The field is the last stop, after the scan button.
+        let stops = count + scan as usize + 1;
+        let at = if self.scan.focused() {
+            count
+        } else {
+            self.search.selected().unwrap_or(stops - 1)
+        };
+        let next = if forward {
+            (at + 1) % stops
+        } else {
+            (at + stops - 1) % stops
+        };
+        self.search
+            .pick(&self.anim, (next < count).then_some(next))?;
+        if scan && next == count {
+            self.focus_button(CardButton::Scan, 0)
+        } else {
+            self.scan.set_focused(false)
+        }
     }
 
     /// Picks suggestion `row`, or none, as the one to look up.
@@ -192,11 +222,20 @@ impl Popup {
             self.search.await_heading(anim, RESIZE_MS - fade, fade)?;
             self.body_glides = true;
         }
+        // The scan button sits level with the heading, where the pin button
+        // was; a pinned card stays put, so it can't be read from behind, and
+        // without a language to read in, Windows can't read it at all.
+        let s = self.scale;
+        let top = ((PAD_TOP + (self.search.title_line() - BACK_SIZE) / 2.0) * s).round();
+        self.scan.place(top, s)?;
+        let scannable = !self.pinned && ocr::available();
+        self.scan.set_shown(&self.anim, scannable, s)?;
         // Nothing below the box: no body to scroll or click.
         (self.header_h, self.body_h) = (h, 0.0);
         self.scroller.stop_at(0.0);
         self.resize(h, in_place)?;
         self.update_scroll_chrome(false)?;
+        self.sync_tooltip();
         self.sync_swap()
     }
 }

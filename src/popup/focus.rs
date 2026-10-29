@@ -181,6 +181,7 @@ impl Popup {
         self.translate.set_focused(false)?;
         self.back.set_focused(false)?;
         self.pin.set_focused(false)?;
+        self.scan.set_focused(false)?;
         self.content
             .focus(&self.anim, &self.renderer, start, reveal, self.scale)
     }

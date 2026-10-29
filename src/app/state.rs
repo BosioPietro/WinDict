@@ -15,6 +15,7 @@ use crate::dictionary::{Definition, Lookup};
 use crate::dicts;
 use crate::installed;
 use crate::lang::LangCode;
+use crate::ocr;
 use crate::offline;
 use crate::popup::{Popup, Transition};
 use crate::render::{self, Side, Target};
@@ -150,6 +151,8 @@ pub(super) enum Event {
     /// The words the search box suggests from, for the request it was
     /// opened with.
     Words(u64, offline::Words),
+    /// The text read off the screen for the request, into the search box.
+    Scanned(u64, Result<ocr::Scanned, ocr::ScanError>),
     /// How far the download of a language's dictionary has got, in percent.
     Installing(&'static str, u32),
     Installed(&'static str, Result<(), String>),
@@ -200,6 +203,9 @@ pub(super) struct Search {
     pub(super) words: Option<offline::Words>,
     /// Opened to translate: the languages it's translated between.
     pub(super) languages: Option<Languages>,
+    /// The language of the text read off the screen into it, while there's
+    /// text in it: it says better than the words what's to be translated.
+    pub(super) scanned: Option<LangCode>,
 }
 
 /// The languages what's typed in the box is translated between, shown in

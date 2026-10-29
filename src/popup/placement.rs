@@ -97,6 +97,27 @@ pub fn anchor_beside(window: RECT, zoom: f32) -> RECT {
     }
 }
 
+/// An anchor that opens a search box where the card at `card` (screen
+/// pixels) was, on a card zoomed to `zoom`.
+pub fn anchor_where(card: RECT, zoom: f32) -> RECT {
+    let near = POINT {
+        x: (card.left + card.right) / 2,
+        y: card.top,
+    };
+    let (work, scale) = monitor_at(near);
+    let s = zoomed(work, scale, zoom);
+    let px = |dip: f32| (dip * s).round() as i32;
+    // `placement` puts a search box's top that far under the anchor, and
+    // its left that far left of it.
+    let bottom = card.top - px(ANCHOR_GAP);
+    RECT {
+        left: card.left + px(PAD_X),
+        top: bottom - px(BESIDE_LINE),
+        right: card.left + px(PAD_X) + 1,
+        bottom,
+    }
+}
+
 /// Between a window and a card opened beside it, and how tall the line the
 /// card's anchored to is, in DIPs.
 const BESIDE_GAP: f32 = 12.0;
