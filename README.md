@@ -24,10 +24,11 @@
 
 WinDict is a Windows tray app for looking up and translating words. Select a
 word in any app and press **Alt+D**: its definition opens in a card next to
-the selection. Esc or a click elsewhere closes it.
+the selection. Press **Alt+T** instead to translate it into any of 22
+languages. Esc or a click elsewhere closes the card.
 
 It's meant to stay out of the way: it uses about 3 MB of memory while idle,
-English lookups work offline, and the card follows the system's light or dark
+its dictionaries work offline, and the card follows the system's light or dark
 theme and accent color.
 
 <p align="center">
@@ -36,30 +37,30 @@ theme and accent color.
 
 <p align="center">
 	<picture>
-		<source media="(prefers-color-scheme: dark)" srcset="assets/intro/lookup-dark.jpg" />
-		<source media="(prefers-color-scheme: light)" srcset="assets/intro/lookup-light.jpg" />
-		<img width="400" alt="A word's definition in WinDict's card" src="assets/intro/lookup-dark.jpg" />
+		<source media="(prefers-color-scheme: dark)" srcset="assets/readme/lookup-dark.jpg" />
+		<source media="(prefers-color-scheme: light)" srcset="assets/readme/lookup-light.jpg" />
+		<img width="400" alt="A word's definition in WinDict's card" src="assets/readme/lookup-dark.jpg" />
 	</picture>
 	&nbsp;
 	<picture>
-		<source media="(prefers-color-scheme: dark)" srcset="assets/intro/translate-dark.jpg" />
-		<source media="(prefers-color-scheme: light)" srcset="assets/intro/translate-light.jpg" />
-		<img width="400" alt="A phrase translated in WinDict's card" src="assets/intro/translate-light.jpg" />
+		<source media="(prefers-color-scheme: dark)" srcset="assets/readme/translate-dark.jpg" />
+		<source media="(prefers-color-scheme: light)" srcset="assets/readme/translate-light.jpg" />
+		<img width="400" alt="A phrase translated in WinDict's card" src="assets/readme/translate-light.jpg" />
 	</picture>
 </p>
 
 ## Features ✨
 
 - **Definitions in place: select a word, press Alt+D**
-- **Translations of a word, a phrase or a whole passage with Alt+T**
-- **Works offline for English, with about 150,000 words and phrases built in**
+- **Translations of a word, a phrase or a whole passage with Alt+T, between 22 languages**
+- **Dictionaries in English, Spanish, French and Italian that work offline**
 - **Shows above Start and Search, once installed**
 - Inflected forms are looked up by their base word ("ran" shows "run")
 - Similar and opposite words, each a click away
 - Pronunciation in the word's own language, with Windows' own voices
 - A box to type into, for text that can't be selected
 - `wd`, to look up and translate from the command line
-- English, Italian, Spanish and French dictionaries
+- An interface in English, Spanish, French or Italian
 - Follows the system's light or dark theme and accent color
 - Adjustable text size and shortcuts
 - Updates itself from the tray
@@ -89,6 +90,9 @@ the same keys work there. The size is kept, and it's also under **Text size**
 in the settings.
 
 ## Translating 🌐
+
+WinDict translates between 22 languages, from English, Spanish and German to
+Polish, Greek, Japanese, Korean and Chinese.
 
 When online lookup is on, the translate button at the top right of the card,
 or **Ctrl+T**, shows a translation of the word instead.
@@ -228,11 +232,11 @@ by hand, use **Open config.json** at the bottom of the settings window, then
 ## Dictionaries and network use 📚
 
 - English comes from Open English WordNet (about 150,000 words and phrases),
-  which is built into the executable. Lookups in it don't use the network and
-  take under a millisecond.
-- Italian comes from Wikizionario (about 75,000 words), Spanish from
-  Wikcionario (about 135,000) and French from Wiktionnaire (about 490,000).
-  Each is downloaded once, when it's chosen in the settings.
+  which is built into the executable. Lookups in it take under a millisecond.
+- French (about 490,000 words), Spanish (about 135,000) and Italian (about
+  75,000) come from their Wiktionaries. Each is downloaded once, when it's
+  picked on the introduction or in the settings, and works offline from then
+  on.
 - The online dictionary is used for pronunciations and for words the built-in
   one doesn't have. Translations are fetched only when asked for. Both can be
   turned off in the settings.
