@@ -474,13 +474,73 @@ impl Renderer {
         // The picture's own pixels, from here on.
         let own =
             Matrix3x2::translation(-source.left, -source.top) * Matrix3x2::scale(k, k) * outer;
-        let draw = |over: &Over| {
-            dc.SetTransform(
-                &(Matrix3x2::scale(over.scale, over.scale)
-                    * Matrix3x2::translation(over.x, over.y)
-                    * own),
-            );
-            self.draw_items(dc, over.layout, k * over.scale, theme)
+        let draw = |over: &Over| -> Result<()> {
+            let place = Matrix3x2::scale(over.scale, over.scale)
+                * Matrix3x2::translation(over.x, over.y)
+                * own;
+            if over.clip.is_none() && over.opacity >= 1.0 && over.blur <= 0.0 {
+                dc.SetTransform(&place);
+                return self.draw_items(dc, over.layout, k * over.scale, theme);
+            }
+            // Blurred, it's drawn into a list first, which is drawn through
+            // a Gaussian blur, in the target's pixels.
+            let blurred = if over.blur > 0.0 {
+                let target = dc.GetTarget()?;
+                let list = dc.CreateCommandList()?;
+                dc.SetTarget(&list);
+                dc.SetTransform(&place);
+                let drawn = self.draw_items(dc, over.layout, k * over.scale, theme);
+                dc.SetTarget(&target);
+                drawn?;
+                list.Close()?;
+                let effect = dc.CreateEffect(&CLSID_D2D1GaussianBlur)?;
+                effect.SetInput(0, &list, true);
+                let deviation = over.blur * k;
+                effect.SetValue(
+                    D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
+                    D2D1_PROPERTY_TYPE_FLOAT,
+                    &deviation.to_ne_bytes(),
+                )?;
+                Some(effect.GetOutput()?)
+            } else {
+                None
+            };
+            dc.SetTransform(&own);
+            let everywhere = D2D_RECT_F {
+                left: f32::MIN,
+                top: f32::MIN,
+                right: f32::MAX,
+                bottom: f32::MAX,
+            };
+            let layer = D2D1_LAYER_PARAMETERS1 {
+                contentBounds: over.clip.unwrap_or(everywhere),
+                geometricMask: std::mem::ManuallyDrop::new(None),
+                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                maskTransform: Matrix3x2::identity(),
+                opacity: over.opacity,
+                opacityBrush: std::mem::ManuallyDrop::new(None),
+                layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+            };
+            dc.PushLayer(&layer, None);
+            let drawn = match &blurred {
+                Some(image) => {
+                    dc.SetTransform(&Matrix3x2::identity());
+                    dc.DrawImage(
+                        image,
+                        None,
+                        None,
+                        D2D1_INTERPOLATION_MODE_LINEAR,
+                        D2D1_COMPOSITE_MODE_SOURCE_OVER,
+                    );
+                    Ok(())
+                }
+                None => {
+                    dc.SetTransform(&place);
+                    self.draw_items(dc, over.layout, k * over.scale, theme)
+                }
+            };
+            dc.PopLayer();
+            drawn
         };
         for over in &scene.under {
             draw(over)?;

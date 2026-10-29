@@ -115,12 +115,16 @@ pub struct Scene<'a> {
 }
 
 /// A layout over a picture, its top left at `x`, `y` in the picture's
-/// pixels, `scale` of them to a DIP.
+/// pixels, `scale` of them to a DIP: only what's within `clip`, if it's
+/// cut to one, `opacity` opaque and blurred by `blur` of the pixels.
 pub struct Over<'a> {
     pub layout: &'a Layout,
     pub x: f32,
     pub y: f32,
     pub scale: f32,
+    pub clip: Option<D2D_RECT_F>,
+    pub opacity: f32,
+    pub blur: f32,
 }
 
 /// The colors of an [`Item::Shape`].

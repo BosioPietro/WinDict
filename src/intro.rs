@@ -12,8 +12,9 @@
 //! card opened on an example, or a switch for UI access, or for starting
 //! with Windows.
 //!
-//! The pictures are close-ups of WinDict on the Windows desktop, in light
-//! and dark: the one for the system's theme shows.
+//! The pictures are close-ups of WinDict on the Windows desktop, but for the
+//! welcome's, its icon among letters of many scripts, in light and dark: the
+//! one for the system's theme shows.
 
 use std::rc::Rc;
 
@@ -183,19 +184,21 @@ impl Step {
         }
     }
 
-    /// The picture drawn live, in the language WinDict's shown in: the
-    /// languages have a translation's, and the dictionaries a definition's.
+    /// The picture drawn live, in the language WinDict's shown in.
     fn scene(self) -> Option<scene::Shot> {
         match self {
-            Step::Lookup | Step::Dictionaries => Some(scene::Shot::Lookup),
-            Step::Translate | Step::Languages => Some(scene::Shot::Translate),
-            Step::AboveStart | Step::Ready => None,
+            Step::Lookup => Some(scene::Shot::Lookup),
+            Step::Translate => Some(scene::Shot::Translate),
+            Step::Dictionaries => Some(scene::Shot::Dictionaries),
+            Step::Languages | Step::AboveStart | Step::Ready => None,
         }
     }
 
     /// The picture, in light or `dark`, of a step that isn't drawn live.
     fn picture(self, dark: bool) -> &'static [u8] {
         match (self, dark) {
+            (Step::Languages, false) => include_bytes!("../assets/intro/welcome-light.jpg"),
+            (Step::Languages, true) => include_bytes!("../assets/intro/welcome-dark.jpg"),
             (Step::AboveStart, false) => include_bytes!("../assets/intro/start-light.jpg"),
             (Step::AboveStart, true) => include_bytes!("../assets/intro/start-dark.jpg"),
             (_, false) => include_bytes!("../assets/intro/tray-light.jpg"),

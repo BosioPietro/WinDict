@@ -1,8 +1,9 @@
-//! The pictures of a word looked up and a phrase translated, drawn in the
-//! language WinDict's shown in. Each is a screenshot with its text wiped:
-//! the page behind the card and the card's content are set here, as they'd
-//! be in that language, a definition and a translation baked in for the
-//! dictionaries that aren't downloaded yet.
+//! The pictures of a word looked up, a phrase translated, and the
+//! dictionaries, drawn in the language WinDict's shown in. Each is a
+//! screenshot or a render with its text wiped: the page behind the card and
+//! the cards' content are set here, as they'd be in that language,
+//! definitions and a translation baked in for the dictionaries that aren't
+//! downloaded yet.
 
 use windows::core::Result;
 use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
@@ -27,6 +28,24 @@ const LINE_H: f32 = 32.3;
 const INDENT: f32 = 30.4;
 /// The card's corners', in the screenshots' pixels.
 const CARD_RADIUS: f32 = 8.0 * SHOT;
+/// The dictionaries' render's pixels to a DIP of the intro's picture pane:
+/// it was drawn at 1235 by 1566, for the pane's 328 by 416.
+const PANE: f32 = 1235.0 / 328.0;
+/// The middle of the pane, where the dictionaries' cards stand, in its DIPs.
+const PANE_MIDDLE: f32 = 328.0 / 2.0;
+/// The dictionaries' card in front: its top, in the pane's DIPs, and how
+/// big it's drawn.
+const FRONT_TOP: f32 = 118.0;
+const FRONT: f32 = 0.66;
+/// Each card behind is this much higher than the one in front of it, in
+/// the pane's DIPs, and this much smaller, and fades and blurs this much
+/// more, the blur in the pane's DIPs.
+const STEP: f32 = 40.0;
+const BACK: f32 = 0.84;
+const DIM: f32 = 0.2;
+const BLUR: f32 = 0.5;
+/// The cards' height, in DIPs: the Lookup screenshot's card's.
+const CARD_H: f32 = (1258.0 - 341.0) / SHOT;
 
 /// The pictures drawn here.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -35,6 +54,8 @@ pub enum Shot {
     Lookup,
     /// A mail, a phrase in it translated.
     Translate,
+    /// The same word in three dictionaries, their cards one behind another.
+    Dictionaries,
 }
 
 impl Shot {
@@ -45,15 +66,61 @@ impl Shot {
             (Shot::Lookup, true) => include_bytes!("../../assets/intro/lookup-dark.jpg"),
             (Shot::Translate, false) => include_bytes!("../../assets/intro/translate-light.jpg"),
             (Shot::Translate, true) => include_bytes!("../../assets/intro/translate-dark.jpg"),
+            (Shot::Dictionaries, false) => {
+                include_bytes!("../../assets/intro/dictionaries-light.jpg")
+            }
+            (Shot::Dictionaries, true) => {
+                include_bytes!("../../assets/intro/dictionaries-dark.jpg")
+            }
         }
     }
 
-    /// The card's frame in the screenshot, in its pixels.
+    /// The card's frame in the screenshot, in its pixels: the dictionaries'
+    /// is the one in front.
     fn card(self) -> D2D_RECT_F {
         match self {
             Shot::Lookup => rect(182.0, 341.0, 1045.0, 1258.0),
             Shot::Translate => rect(191.0, 600.0, 1053.0, 1038.0),
+            Shot::Dictionaries => stacked(0),
         }
+    }
+
+    /// The screenshot's pixels to a DIP of the card's content.
+    fn scale(self) -> f32 {
+        match self {
+            Shot::Lookup | Shot::Translate => SHOT,
+            Shot::Dictionaries => FRONT * PANE,
+        }
+    }
+}
+
+/// How big the dictionaries' card `depth` cards behind the front one is
+/// drawn, the front one's 0.
+fn stacked_scale(depth: usize) -> f32 {
+    FRONT * BACK.powi(depth as i32)
+}
+
+/// The frame, in the render's pixels, of the dictionaries' card `depth`
+/// cards behind the front one: on the pane's middle, a step higher each.
+fn stacked(depth: usize) -> D2D_RECT_F {
+    let k = stacked_scale(depth);
+    let left = PANE_MIDDLE - popup::CARD_W / 2.0 * k;
+    let top = FRONT_TOP - depth as f32 * STEP;
+    rect(
+        left * PANE,
+        top * PANE,
+        (left + popup::CARD_W * k) * PANE,
+        (top + CARD_H * k) * PANE,
+    )
+}
+
+/// The dictionaries behind `language`'s, nearest first: those to download,
+/// as English's comes with WinDict.
+fn behind(language: Language) -> [Language; 2] {
+    match language {
+        Language::English | Language::French => [Language::Italian, Language::Spanish],
+        Language::Italian => [Language::Spanish, Language::French],
+        Language::Spanish => [Language::French, Language::Italian],
     }
 }
 
@@ -85,10 +152,12 @@ pub fn draw(
     )
 }
 
-/// What's drawn over a screenshot: the page, and the card's content.
+/// What's drawn over a screenshot: the page, or the cards behind, nearest
+/// first, and the card's content.
 struct Parts {
     shot: Shot,
-    page: Layout,
+    page: Option<Layout>,
+    behind: Vec<Vec<(Layout, f32, f32)>>,
     card: Vec<(Layout, f32, f32)>,
     /// The card's content's height, in DIPs, which the tests check.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -97,19 +166,27 @@ struct Parts {
 
 impl Parts {
     fn new(r: &Renderer, shot: Shot, language: Language, dark: bool) -> Result<Parts> {
+        let mut behind = Vec::new();
         let (page, (card, card_h)) = match shot {
             Shot::Lookup => {
                 let book = Book::of(language);
-                (book.layout(r, dark)?, definition_card(r, book)?)
+                (Some(book.layout(r, dark)?), definition_card(r, book)?)
             }
             Shot::Translate => {
                 let (mail, to) = Mail::of(language);
-                (mail.layout(r, dark)?, translation_card(r, mail, to)?)
+                (Some(mail.layout(r, dark)?), translation_card(r, mail, to)?)
+            }
+            Shot::Dictionaries => {
+                for other in self::behind(language) {
+                    behind.push(definition_card(r, Book::of(other))?.0);
+                }
+                (None, definition_card(r, Book::of(language))?)
             }
         };
         Ok(Parts {
             shot,
             page,
+            behind,
             card,
             card_h,
         })
@@ -117,21 +194,48 @@ impl Parts {
 
     fn scene(&self) -> Scene<'_> {
         let frame = self.shot.card();
+        let scale = self.shot.scale();
         let over = |layout, x, y| Over {
             layout,
             x,
             y,
-            scale: SHOT,
+            scale,
+            clip: None,
+            opacity: 1.0,
+            blur: 0.0,
         };
+        let mut under: Vec<Over> = (self.page.iter())
+            .map(|page| over(page, 0.0, 0.0))
+            .collect();
+        // Each card behind shows only above the one in front of it, fainter
+        // and softer the further back it is.
+        let mut above = frame.top;
+        for (i, card) in self.behind.iter().enumerate() {
+            let depth = i + 1;
+            let at = stacked(depth);
+            let k = stacked_scale(depth) * PANE;
+            let clip = rect(at.left, at.top, at.right, above);
+            above = at.top;
+            under.extend(card.iter().map(|(layout, x, y)| Over {
+                layout,
+                x: at.left + x * k,
+                y: at.top + y * k,
+                scale: k,
+                clip: Some(clip),
+                opacity: 1.0 - DIM * depth as f32,
+                blur: BLUR * depth as f32 * PANE,
+            }));
+        }
         Scene {
-            under: vec![over(&self.page, 0.0, 0.0)],
-            card: Some(D2D1_ROUNDED_RECT {
+            under,
+            // The page's covered where the screenshot's card is.
+            card: self.page.as_ref().map(|_| D2D1_ROUNDED_RECT {
                 rect: frame,
                 radiusX: CARD_RADIUS,
                 radiusY: CARD_RADIUS,
             }),
             on: (self.card.iter())
-                .map(|(layout, x, y)| over(layout, frame.left + x * SHOT, frame.top + y * SHOT))
+                .map(|(layout, x, y)| over(layout, frame.left + x * scale, frame.top + y * scale))
                 .collect(),
         }
     }
@@ -690,9 +794,9 @@ mod tests {
     #[test]
     fn cards_fit_their_frames() {
         let r = renderer();
-        for shot in [Shot::Lookup, Shot::Translate] {
+        for shot in [Shot::Lookup, Shot::Translate, Shot::Dictionaries] {
             let frame = shot.card();
-            let frame_h = (frame.bottom - frame.top) / SHOT;
+            let frame_h = (frame.bottom - frame.top) / shot.scale();
             for &language in Language::ALL {
                 let parts = Parts::new(&r, shot, language, false).unwrap();
                 println!("{shot:?} {language:?}: {:.1} of {frame_h:.1}", parts.card_h);
@@ -708,7 +812,7 @@ mod tests {
     fn scenes() {
         let dir = std::env::var("WINDICT_SCENES").unwrap();
         let r = renderer();
-        for shot in [Shot::Lookup, Shot::Translate] {
+        for shot in [Shot::Lookup, Shot::Translate, Shot::Dictionaries] {
             for &language in Language::ALL {
                 for dark in [false, true] {
                     let mode = if dark {
