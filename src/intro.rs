@@ -814,8 +814,7 @@ impl Intro {
         if self.steps[self.at] != Step::Dictionaries {
             return Ok(None);
         }
-        let download = i.checked_sub(1).and_then(|i| dicts::DOWNLOADS.get(i));
-        let Some(language) = download.map(|d| d.language) else {
+        let Some(language) = self.dictionaries().get(i).copied().filter(|&l| l != "en") else {
             return Ok(None);
         };
         self.tick_at = Some(i);
@@ -1194,10 +1193,7 @@ impl Intro {
 
     /// The dictionaries, `rows` of them at once.
     fn layout_picker(&self, rows: usize) -> Result<Layout> {
-        // English, which comes with WinDict and can't be unticked here,
-        // then those to download.
-        let asides: Vec<(&str, String)> = std::iter::once("en")
-            .chain(dicts::DOWNLOADS.iter().map(|d| d.language))
+        let asides: Vec<(&str, String)> = (self.dictionaries().into_iter())
             .map(|code| (code, self.aside(code)))
             .collect();
         let ticks: Vec<Tick> = asides
@@ -1210,6 +1206,20 @@ impl Intro {
             })
             .collect();
         (self.renderer).layout_ticks(&ticks, self.tick_highlight(), rows, TEXT_W)
+    }
+
+    /// The dictionaries' rows, in order: English, which comes with WinDict
+    /// and can't be unticked here, then the one of the language WinDict is
+    /// shown in, then the others to download.
+    fn dictionaries(&self) -> Vec<&'static str> {
+        let interface = self.options.interface.code();
+        let others = (dicts::DOWNLOADS.iter())
+            .map(|d| d.language)
+            .filter(|&l| l != interface);
+        std::iter::once("en")
+            .chain(dicts::find(interface).map(|d| d.language))
+            .chain(others)
+            .collect()
     }
 
     /// What's said at the right of a dictionary's row: how big it is, or
