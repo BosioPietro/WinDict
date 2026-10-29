@@ -32,12 +32,13 @@ impl Popup {
         self.enter_search(title, purpose, true, true)
     }
 
-    /// Shows `text` in the search box, the caret `at` UTF-16 units in.
-    pub fn set_query(&mut self, text: &str, at: u32) -> Result<()> {
+    /// Shows `text` in the search box, the caret `at` UTF-16 units in, and
+    /// what's `selected`, from where to where, likewise.
+    pub fn set_query(&mut self, text: &str, at: u32, selected: Option<(u32, u32)>) -> Result<()> {
         // Typing, or moving the caret, is back in the field.
         self.scan.set_focused(false)?;
         self.search
-            .set_query(&self.renderer, &self.anim, &self.theme, text, at)
+            .set_query(&self.renderer, &self.anim, &self.theme, text, at, selected)
     }
 
     /// Changes the search box's heading.

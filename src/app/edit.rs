@@ -4,6 +4,7 @@
 use crate::dictionary::MAX_LOOKUP_CHARS;
 
 // Keys that arrive as characters (WM_CHAR).
+const CTRL_A: u16 = 0x01;
 const ENTER: u16 = 0x0D;
 const BACKSPACE: u16 = 0x08;
 const CTRL_BACKSPACE: u16 = 0x7F;
@@ -18,6 +19,9 @@ pub enum Input {
     Enter,
     /// Ctrl+V: paste the clipboard's text with [`LineEdit::paste`].
     Paste,
+    /// Ctrl+A: select it all with [`LineEdit::select_all`], where the field
+    /// shows a selection.
+    SelectAll,
     /// Nothing, or not yet (half of a character outside the BMP).
     Nothing,
 }
@@ -44,6 +48,10 @@ pub struct LineEdit {
     high_surrogate: Option<u16>,
     /// How many characters it takes.
     limit: usize,
+    /// Where the selection, by Ctrl+A or Shift and the keys that move the
+    /// caret, reaches back to from the caret, in bytes; what's typed next
+    /// replaces it. None when nothing's selected.
+    anchor: Option<usize>,
 }
 
 /// Empty, and taking as much as a lookup does.
@@ -62,11 +70,38 @@ impl LineEdit {
             text,
             high_surrogate: None,
             limit,
+            anchor: None,
         }
     }
 
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// What's selected, from where to where, in UTF-16 units.
+    pub fn selection_utf16(&self) -> Option<(u32, u32)> {
+        let (from, to) = self.selection()?;
+        let units = |at: usize| self.text[..at].encode_utf16().count() as u32;
+        Some((units(from), units(to)))
+    }
+
+    /// Selects all of it, if there's anything, the caret after it.
+    pub fn select_all(&mut self) {
+        self.caret = self.text.len();
+        self.anchor = (!self.text.is_empty()).then_some(0);
+    }
+
+    /// Moves the caret where `motion` leads, selecting what it passes, as
+    /// Shift does. Returns whether it moved.
+    pub fn extend(&mut self, motion: Motion) -> bool {
+        let anchor = *self.anchor.get_or_insert(self.caret);
+        let to = self.target(motion);
+        let moved = to != self.caret;
+        self.caret = to;
+        if anchor == to {
+            self.anchor = None;
+        }
+        moved
     }
 
     /// Holds `text` instead, as much of it as it takes, the caret after it.
@@ -81,6 +116,7 @@ impl LineEdit {
 
     /// Puts the caret `at` UTF-16 units in, or at the end if that's past it.
     pub fn set_caret_utf16(&mut self, at: u32) {
+        self.anchor = None;
         let mut units = 0;
         self.caret = self
             .text
@@ -107,6 +143,7 @@ impl LineEdit {
                 Input::Edited
             }
             CTRL_V => Input::Paste,
+            CTRL_A => Input::SelectAll,
             0xD800..=0xDBFF => {
                 self.high_surrogate = Some(unit);
                 Input::Nothing
@@ -138,17 +175,30 @@ impl LineEdit {
         }
     }
 
-    /// Moves the caret. Returns whether it moved.
+    /// Moves the caret. Returns whether it moved, or a selection went.
     pub fn move_caret(&mut self, motion: Motion) -> bool {
+        // Left and Right go to the selection's ends, as in a Windows field.
+        if let Some((from, to)) = self.selection() {
+            self.caret = match motion {
+                Motion::CharBack => from,
+                Motion::CharForward => to,
+                _ => self.target(motion),
+            };
+            self.anchor = None;
+            return true;
+        }
         let to = self.target(motion);
         let moved = to != self.caret;
         self.caret = to;
         moved
     }
 
-    /// Deletes from the caret to where `motion` leads. Returns whether
-    /// anything was.
+    /// Deletes from the caret to where `motion` leads, or what's selected
+    /// instead. Returns whether anything was.
     pub fn delete(&mut self, motion: Motion) -> bool {
+        if self.take_selected() {
+            return true;
+        }
         let to = self.target(motion);
         let (from, to) = (to.min(self.caret), to.max(self.caret));
         self.text.replace_range(from..to, "");
@@ -156,8 +206,28 @@ impl LineEdit {
         from != to
     }
 
+    /// What's selected, from where to where, in bytes.
+    fn selection(&self) -> Option<(usize, usize)> {
+        let anchor = self.anchor.filter(|&a| a != self.caret)?;
+        Some((anchor.min(self.caret), anchor.max(self.caret)))
+    }
+
+    /// Deletes what's selected, if anything is. Returns whether it was.
+    fn take_selected(&mut self) -> bool {
+        let Some((from, to)) = self.selection() else {
+            return false;
+        };
+        self.text.replace_range(from..to, "");
+        (self.caret, self.anchor) = (from, None);
+        true
+    }
+
     fn insert(&mut self, c: char) {
-        if !c.is_control() && self.text.chars().count() < self.limit {
+        if c.is_control() {
+            return;
+        }
+        self.take_selected();
+        if self.text.chars().count() < self.limit {
             self.text.insert(self.caret, c);
             self.caret += c.len_utf8();
         }
@@ -302,6 +372,71 @@ mod tests {
         edit.set_caret_utf16(99);
         assert_eq!(edit.caret_utf16(), 6);
         assert_eq!(LineEdit::new("abc", 2).text(), "ab");
+    }
+
+    #[test]
+    fn replaces_what_is_selected() {
+        let mut edit = typed("ice cream");
+        assert_eq!(edit.type_unit(CTRL_A), Input::SelectAll);
+        edit.select_all();
+        assert_eq!(edit.selection_utf16(), Some((0, 9)));
+        edit.type_unit(b'x' as u16);
+        assert_eq!(edit.text(), "x");
+        assert_eq!(edit.selection_utf16(), None);
+        // Backspace, or a paste, likewise.
+        edit.select_all();
+        edit.type_unit(BACKSPACE);
+        assert_eq!(edit.text(), "");
+        let mut edit = typed("ice");
+        edit.select_all();
+        edit.paste("cream");
+        assert_eq!(edit.text(), "cream");
+        // Nothing to select in an empty field.
+        let mut edit = LineEdit::default();
+        edit.select_all();
+        assert_eq!(edit.selection_utf16(), None);
+    }
+
+    #[test]
+    fn selects_as_the_caret_moves() {
+        let mut edit = typed("ice cream cone");
+        assert!(edit.extend(Motion::WordBack));
+        assert!(edit.extend(Motion::CharBack));
+        assert_eq!(edit.selection_utf16(), Some((9, 14)));
+        // Back over where it started, it selects the other way.
+        edit.move_caret(Motion::CharForward);
+        edit.extend(Motion::CharBack);
+        edit.extend(Motion::CharForward);
+        assert_eq!(edit.selection_utf16(), None);
+        assert!(!edit.extend(Motion::CharForward));
+        assert_eq!(edit.selection_utf16(), None);
+        edit.move_caret(Motion::Start);
+        edit.extend(Motion::WordForward);
+        edit.type_unit(b'x' as u16);
+        assert_eq!(edit.text(), "xcream cone");
+        // Delete takes what's selected, and Left goes to its start.
+        edit.extend(Motion::End);
+        assert!(edit.delete(Motion::CharForward));
+        assert_eq!(edit.text(), "x");
+        edit.extend(Motion::Start);
+        assert!(edit.move_caret(Motion::CharBack));
+        assert_eq!(edit.caret_utf16(), 0);
+    }
+
+    #[test]
+    fn moves_off_what_is_selected() {
+        let mut edit = typed("ice cream");
+        edit.select_all();
+        assert!(edit.move_caret(Motion::CharBack));
+        assert_eq!(edit.caret_utf16(), 0);
+        assert_eq!(edit.selection_utf16(), None);
+        edit.select_all();
+        // The caret's already at the end, but the selection goes.
+        assert!(edit.move_caret(Motion::CharForward));
+        assert_eq!(edit.caret_utf16(), 9);
+        edit.select_all();
+        assert!(edit.delete(Motion::CharForward));
+        assert_eq!(edit.text(), "");
     }
 
     #[test]

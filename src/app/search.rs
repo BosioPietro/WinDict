@@ -117,6 +117,15 @@ impl App {
                 let pasted = selection::clipboard_text(hwnd).unwrap_or_default();
                 search.edit.paste(&pasted);
             }
+            Input::SelectAll => {
+                let edit = &mut search.edit;
+                edit.select_all();
+                if let Some(popup) = self.card.popup.as_mut() {
+                    let _ =
+                        popup.set_query(edit.text(), edit.caret_utf16(), edit.selection_utf16());
+                }
+                return;
+            }
             Input::Nothing => return,
         }
         self.refresh_search();
@@ -124,7 +133,7 @@ impl App {
 
     /// A key pressed in the card (WM_KEYDOWN): Up and Down pick a
     /// suggestion, and Tab and Shift+Tab go on to the scan button; Left, Right, Home and End move the caret, by
-    /// words with Ctrl; Delete removes what's after it.
+    /// words with Ctrl, selecting with Shift; Delete removes what's after it.
     pub(super) fn on_key(&mut self, key: VIRTUAL_KEY) {
         if self.card.pinned && self.pinned_key(key) {
             return;
@@ -171,8 +180,13 @@ impl App {
             }
             _ => return,
         };
-        if edit.move_caret(motion) {
-            let _ = popup.set_query(edit.text(), edit.caret_utf16());
+        let moved = if hotkey::is_held(VK_SHIFT) {
+            edit.extend(motion)
+        } else {
+            edit.move_caret(motion)
+        };
+        if moved {
+            let _ = popup.set_query(edit.text(), edit.caret_utf16(), edit.selection_utf16());
         }
     }
 
@@ -200,7 +214,8 @@ impl App {
         if std::mem::take(&mut search.error) {
             let _ = popup.set_search_title(search.title);
         }
-        let _ = popup.set_query(search.edit.text(), search.edit.caret_utf16());
+        let edit = &search.edit;
+        let _ = popup.set_query(edit.text(), edit.caret_utf16(), edit.selection_utf16());
         // What's to be translated shows, instead of words, the languages
         // it'll go between, following what it's typed in until one's picked.
         // They're drawn again only when that changes them.

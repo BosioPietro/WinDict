@@ -177,7 +177,7 @@ impl Settings {
                 picking.query.paste(&pasted);
             }
             // The key going down picked it already.
-            Input::Enter | Input::Nothing => return Ok(None),
+            Input::Enter | Input::SelectAll | Input::Nothing => return Ok(None),
         }
         picking.refilter(&current);
         self.relayout()?;

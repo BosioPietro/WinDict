@@ -536,6 +536,9 @@ pub struct Caret {
     pub height: f32,
 }
 
+/// Where a stretch of laid-out text starts and ends, across it, in DIPs.
+pub type Span = (f32, f32);
+
 struct Formats {
     word: IDWriteTextFormat,
     /// The search box's text, on a single line.

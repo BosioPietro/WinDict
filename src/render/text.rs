@@ -95,15 +95,29 @@ impl Renderer {
     }
 
     /// What's typed in the search box, on one line at least `width` wide,
-    /// its width, and where the caret goes when it's `at` UTF-16 units in.
-    pub fn layout_query(&self, text: &str, at: u32, width: f32) -> Result<(Layout, f32, Caret)> {
+    /// its width, where the caret goes when it's `at` UTF-16 units in, and
+    /// how far in each end of what's `selected` is, from where to where.
+    pub fn layout_query(
+        &self,
+        text: &str,
+        at: u32,
+        selected: Option<(u32, u32)>,
+        width: f32,
+    ) -> Result<(Layout, f32, Caret, Option<Span>)> {
         let line = self.text(text, &self.formats.query, width)?;
         let (w, height, baseline) = metrics(&line);
-        let (mut x, mut y) = (0.0, 0.0);
-        let mut hit = DWRITE_HIT_TEST_METRICS::default();
-        unsafe { line.HitTestTextPosition(at, false, &mut x, &mut y, &mut hit)? };
+        let x_at = |at: u32| -> Result<f32> {
+            let (mut x, mut y) = (0.0, 0.0);
+            let mut hit = DWRITE_HIT_TEST_METRICS::default();
+            unsafe { line.HitTestTextPosition(at, false, &mut x, &mut y, &mut hit)? };
+            Ok(x)
+        };
+        let span = match selected {
+            Some((from, to)) => Some((x_at(from)?, x_at(to)?)),
+            None => None,
+        };
         let caret = Caret {
-            x,
+            x: x_at(at)?,
             top: baseline - QUERY_SIZE * 0.86,
             height: QUERY_SIZE * 1.1,
         };
@@ -117,7 +131,7 @@ impl Renderer {
             caret: None,
             list: None,
         };
-        Ok((layout, w, caret))
+        Ok((layout, w, caret, span))
     }
 
     /// What's typed in a settings field, on one line in `ink`, its width,

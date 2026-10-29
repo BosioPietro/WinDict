@@ -77,6 +77,9 @@ pub(crate) struct SearchBox {
     text_host: ContainerVisual,
     placeholder: Text,
     query: Text,
+    /// Behind what's selected of the text.
+    selection: SpriteVisual,
+    selection_brush: CompositionColorBrush,
     caret: SpriteVisual,
     caret_brush: CompositionColorBrush,
     /// The suggestions under the field, and the soft highlight behind the
@@ -153,6 +156,11 @@ impl SearchBox {
         text_host.SetClip(&c.CreateInsetClip()?)?;
         field.Children()?.InsertAtTop(&text_host)?;
         let placeholder = Text::new(c, &text_host)?;
+        let selection = c.CreateSpriteVisual()?;
+        let selection_brush = c.CreateColorBrush()?;
+        selection.SetBrush(&selection_brush)?;
+        selection.SetOpacity(0.0)?;
+        text_host.Children()?.InsertAtTop(&selection)?;
         let query = Text::new(c, &text_host)?;
         let caret = c.CreateSpriteVisual()?;
         let caret_brush = c.CreateColorBrush()?;
@@ -193,6 +201,8 @@ impl SearchBox {
             text_host,
             placeholder,
             query,
+            selection,
+            selection_brush,
             caret,
             caret_brush,
             list,
@@ -251,6 +261,7 @@ impl SearchBox {
         self.stroke_brush.SetColor(theme.border())?;
         self.underline_brush.SetColor(theme.accent)?;
         self.caret_brush.SetColor(theme.accent)?;
+        self.selection_brush.SetColor(theme.selection())?;
 
         let heading = renderer.layout_line(title, Face::Title, Ink::Primary, width - TITLE_ROOM)?;
         self.title_line = heading.first_line_bottom();
@@ -305,7 +316,7 @@ impl SearchBox {
         Animator::stop(&self.query.visual, &["Offset", "Opacity"]);
         self.query.visual.SetOffset(v3(0.0, self.query_y))?;
         self.query.visual.SetOpacity(1.0)?;
-        let (_, _, caret) = renderer.layout_query("", 0, width)?;
+        let (_, _, caret, _) = renderer.layout_query("", 0, None, width)?;
         self.caret_y = self.query_y + (caret.top * s).round();
         self.caret.SetSize(v2(
             (CARET_W * s).round().max(1.0),
@@ -313,6 +324,7 @@ impl SearchBox {
         ))?;
         Animator::stop(&self.caret, &["Offset"]);
         self.caret.SetOffset(v3(0.0, self.caret_y))?;
+        self.selection.SetOpacity(0.0)?;
 
         // No suggestions yet.
         self.list
@@ -381,7 +393,8 @@ impl SearchBox {
 
     /// Shows `text` in the field. The caret glides to `at` (UTF-16 units
     /// in), the text scrolls to keep it in view, and the placeholder fades
-    /// out or back in.
+    /// out or back in. What's `selected` (from where to where, likewise)
+    /// shows on the selection's color, with no caret, as in a Windows field.
     pub(crate) fn set_query(
         &mut self,
         renderer: &Renderer,
@@ -389,10 +402,11 @@ impl SearchBox {
         theme: &Theme,
         text: &str,
         at: u32,
+        selected: Option<(u32, u32)>,
     ) -> Result<()> {
         let s = self.scale;
         let room = self.text_host.Size()?.X;
-        let (layout, width, caret) = renderer.layout_query(text, at, room / s)?;
+        let (layout, width, caret, span) = renderer.layout_query(text, at, selected, room / s)?;
         if text.is_empty() {
             self.query.clear();
         } else {
@@ -415,6 +429,16 @@ impl SearchBox {
             let ease = &anim.decelerate;
             anim.vector3(&self.query.visual, "Offset", to, CARET_GLIDE_MS, 0, ease)?;
         }
+        if let Some((from, to)) = span {
+            let (from, to) = ((from * s).round(), (to * s).round());
+            Animator::stop(&self.selection, &["Offset"]);
+            self.selection.SetOffset(v3(from - shift, self.caret_y))?;
+            self.selection
+                .SetSize(v2(to - from, self.caret.Size()?.Y))?;
+        }
+        let selected = span.is_some();
+        self.selection
+            .SetOpacity(if selected { 1.0 } else { 0.0 })?;
         let to = v3((x - shift).round(), self.caret_y);
         anim.vector3(
             &self.caret,
@@ -426,7 +450,12 @@ impl SearchBox {
         )?;
         // Held back while the heading's on its way into the field.
         let hold = std::mem::take(&mut self.caret_hold);
-        self.blink(anim, hold)?;
+        if selected {
+            Animator::stop(&self.caret, &["Opacity"]);
+            self.caret.SetOpacity(0.0)?;
+        } else {
+            self.blink(anim, hold)?;
+        }
 
         let empty = text.is_empty();
         if empty != self.empty {

@@ -732,7 +732,7 @@ impl Settings {
                     self.email.paste(&text);
                 }
             }
-            Input::Enter | Input::Nothing => return Ok(None),
+            Input::Enter | Input::SelectAll | Input::Nothing => return Ok(None),
         }
         self.typed(&before)
     }

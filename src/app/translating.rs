@@ -362,7 +362,7 @@ impl App {
                 let pasted = hwnd.and_then(selection::clipboard_text).unwrap_or_default();
                 picking.query.paste(&pasted);
             }
-            Input::Nothing => return,
+            Input::SelectAll | Input::Nothing => return,
         }
         let current = current.to_string();
         picking.refilter(&current);

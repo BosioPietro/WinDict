@@ -155,6 +155,13 @@ impl Theme {
         }
     }
 
+    /// Behind selected text: the accent, or the contrast theme's color for
+    /// what's chosen, faint enough to read the text through.
+    pub fn selection(&self) -> Color {
+        let c = self.contrast.map_or(self.accent, |c| c.chosen);
+        Color { A: 0x66, ..c }
+    }
+
     /// Laid over the tint where something sits on the card: lighter in
     /// light mode, darker in dark mode.
     pub fn badge_shade(&self) -> Color {
