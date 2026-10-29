@@ -1344,7 +1344,7 @@ impl Intro {
                 rows,
             });
             let language = self.options.interface.code();
-            let (layout, moving) = r.layout_interface(language, picker.as_ref(), TEXT_W)?;
+            let (layout, moving) = r.layout_interface(language, picker.as_ref(), TEXT_W, TEXT_W)?;
             return Ok((layout, Some(moving)));
         }
         // English, which comes with WinDict and can't be unticked here,

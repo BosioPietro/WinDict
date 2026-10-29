@@ -147,7 +147,7 @@ impl Renderer {
                         brush(match p {
                             Paint::Control => to_d2d(theme.control()),
                             Paint::ControlStroke => to_d2d(theme.control_stroke()),
-                            Paint::Field => to_d2d(theme.field()),
+                            Paint::List => to_d2d(theme.list()),
                             Paint::Focus => theme.accent_d2d(),
                             // A fill, under the text that goes on the accent.
                             Paint::Accent => to_d2d(theme.accent),

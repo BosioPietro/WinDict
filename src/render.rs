@@ -139,7 +139,7 @@ enum Paint {
     Control,
     ControlStroke,
     /// The list a language is picked from.
-    Field,
+    List,
     /// The accent, as thick as the rings round focused controls.
     Focus,
     /// A box to tick: the accent once it's ticked, the groove and outline

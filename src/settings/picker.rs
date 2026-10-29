@@ -60,7 +60,8 @@ impl Settings {
 
     /// The box of the language WinDict is shown in, with the list that
     /// covers the rows under it while it's open, and what moves in the box
-    /// as it opens or shuts.
+    /// as it opens or shuts. The list is wider than the box, as wide as its
+    /// rows need, reaching left over the row's name as far as that starts.
     pub(super) fn layout_interface(&self) -> Result<(Layout, Moving)> {
         let picker = self.picker();
         let open = picker
@@ -68,7 +69,11 @@ impl Settings {
             .filter(|(select, _)| *select == Select::Interface)
             .map(|(_, p)| p);
         let language = self.language(Select::Interface);
-        self.renderer.layout_interface(language, open, INTERFACE_W)
+        let codes: Vec<&str> = Language::ALL.iter().map(|l| l.code()).collect();
+        let list_w = self.renderer.list_width(&codes)?;
+        let list_w = list_w.clamp(INTERFACE_W, GROUP_W - ROW_PAD - TEXT_X);
+        self.renderer
+            .layout_interface(language, open, INTERFACE_W, list_w)
     }
 
     /// Builds the window's view again, for what the languages' boxes show

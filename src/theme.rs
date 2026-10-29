@@ -199,6 +199,19 @@ impl Theme {
         }
     }
 
+    /// The list a language is picked from: solid, as it covers what's
+    /// under it, a step up from the card in dark mode, as a flyout is.
+    pub fn list(&self) -> Color {
+        if let Some(c) = self.contrast {
+            return c.back;
+        }
+        if self.dark {
+            rgb(0x2C, 0x2C, 0x2C)
+        } else {
+            rgb(0xFF, 0xFF, 0xFF)
+        }
+    }
+
     /// A group of settings, a step up from the card it's on.
     pub fn group(&self) -> Color {
         if let Some(c) = self.contrast {

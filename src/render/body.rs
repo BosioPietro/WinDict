@@ -249,7 +249,7 @@ impl Renderer {
                 Side::From => card.from,
                 Side::To => card.to,
             };
-            return self.layout_picker(out, picker, current, width);
+            return self.layout_picker(out, picker, current, 0.0, width);
         }
         out.y += 16.0;
         match card.state {
@@ -322,7 +322,7 @@ impl Renderer {
                 Side::From => from,
                 Side::To => to,
             };
-            self.layout_picker(&mut out, picker, current, width)?;
+            self.layout_picker(&mut out, picker, current, 0.0, width)?;
         }
         Ok(Layout {
             items: out.items,
@@ -335,13 +335,15 @@ impl Renderer {
     }
 
     /// The box of the language WinDict is shown in, `language`'s code,
-    /// `width` wide, with `picker`'s list under it while it's open, and
-    /// what moves in it as it opens or shuts, apart.
+    /// `width` wide, with `picker`'s list under it while it's open,
+    /// `list_w` wide and lined up with the box's right, and what moves in
+    /// it as it opens or shuts, apart.
     pub fn layout_interface(
         &self,
         language: &str,
         picker: Option<&Picker>,
         width: f32,
+        list_w: f32,
     ) -> Result<(Layout, Moving)> {
         let mut out = Stack::default();
         let (chevron, name) =
@@ -353,7 +355,7 @@ impl Renderer {
         let chevron = take(&mut out.items, chevron, 0.0);
         out.y += SELECT_H;
         if let Some(picker) = picker {
-            self.layout_picker(&mut out, picker, language, width)?;
+            self.layout_picker(&mut out, picker, language, width - list_w, list_w)?;
         }
         let layout = Layout {
             items: out.items,
@@ -519,13 +521,15 @@ impl Renderer {
     }
 
     /// The list of the languages `picker` lists, under the box it's open
-    /// on: its outline, with room for as many rows as show at once, and
-    /// all of them laid out apart (see [`Renderer::layout_rows`]).
+    /// on, `x` from its left and `width` wide: its outline, with room for
+    /// as many rows as show at once, and all of them laid out apart (see
+    /// [`Renderer::layout_rows`]).
     pub(super) fn layout_picker(
         &self,
         out: &mut Stack,
         picker: &Picker,
         current: &str,
+        x: f32,
         width: f32,
     ) -> Result<()> {
         out.y += LIST_GAP;
@@ -536,13 +540,13 @@ impl Renderer {
             panel: list_panel(width, height),
             rows: self.layout_rows(picker, current, row_w)?,
             frame: Mark {
-                x: 0.0,
+                x,
                 y: top,
                 width,
                 height,
             },
             viewport: Mark {
-                x: LIST_PAD,
+                x: x + LIST_PAD,
                 y: top + LIST_PAD,
                 width: row_w,
                 height: height - 2.0 * LIST_PAD,
@@ -553,6 +557,29 @@ impl Renderer {
         }));
         out.y += height;
         Ok(())
+    }
+
+    /// How wide a list of `codes` has to be for each one's row to show
+    /// whole, ticked, with its name in English too, and the scrollbar.
+    pub fn list_width(&self, codes: &[&str]) -> Result<f32> {
+        let line_w = |text: &str, format| -> Result<f32> {
+            Ok(metrics(&self.text(text, format, f32::from(u16::MAX))?.layout).0)
+        };
+        let format = &self.formats.suggestion;
+        let check = line_w(CHECK_ICON, &self.formats.icon)?;
+        let mut widest: f32 = 0.0;
+        for code in codes {
+            let name = translate::name(code);
+            let mut w = line_w(&name, format)?;
+            if let Some(english) = translate::english_name(code).filter(|e| *e != name) {
+                w += 8.0 + line_w(english, format)?;
+            }
+            widest = widest.max(w);
+        }
+        // As [`Renderer::layout_rows`] lays a row out, and a little over,
+        // as the ticked one's name is bolder.
+        let row = SELECT_PAD + BADGE_W + 10.0 + widest + 8.0 + check + 8.0 + 6.0 + SELECT_PAD;
+        Ok((row + 2.0 * LIST_PAD + 4.0).ceil())
     }
 
     /// Every language `picker` lists, a row each, `width` wide, `current`
@@ -957,7 +984,7 @@ fn list_panel(width: f32, height: f32) -> Layout {
             width,
             height,
             radius: LIST_RADIUS,
-            fill: Some(Paint::Field),
+            fill: Some(Paint::List),
             stroke: Some(Paint::ControlStroke),
         }],
         width,
