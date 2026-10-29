@@ -368,6 +368,71 @@ impl Renderer {
         Ok((layout, Moving { name, chevron }))
     }
 
+    /// A tile to pick `language` by, `width` by `height`: its flag and its
+    /// name in itself, outlined in the accent and ticked when it's `on`.
+    pub fn layout_tile(&self, language: &str, on: bool, width: f32, height: f32) -> Result<Layout> {
+        let mut out = Stack::default();
+        out.items.push(Item::Shape {
+            x: 0.0,
+            y: 0.0,
+            width,
+            height,
+            radius: CONTROL_RADIUS,
+            fill: Some(Paint::Control),
+            stroke: Some(if on {
+                Paint::Focus
+            } else {
+                Paint::ControlStroke
+            }),
+        });
+        let format = &self.formats.suggestion;
+        let line_h = metrics(&self.text("Ag", format, width)?.layout).1;
+        let line_y = ((height - line_h) / 2.0).round();
+        let mut x = SELECT_PAD;
+        x += self.badge(&mut out, language, x, line_y, line_h)? + 10.0;
+        let mut end = width - SELECT_PAD;
+        if on {
+            let check = self.text(CHECK_ICON, &self.formats.icon, width)?;
+            let (check_w, check_h, _) = metrics(&check);
+            end -= check_w;
+            out.items.push(Item::Text {
+                layout: check,
+                x: end,
+                y: ((height - check_h) / 2.0).round(),
+                ink: Ink::Accent,
+                accents: Vec::new(),
+                selectable: false,
+            });
+            end -= 8.0;
+        }
+        let line = self.text(&translate::name(language), format, (end - x).max(1.0))?;
+        if on {
+            let all = DWRITE_TEXT_RANGE {
+                startPosition: 0,
+                length: u32::MAX,
+            };
+            unsafe {
+                let _ = line.SetFontWeight(DWRITE_FONT_WEIGHT_SEMI_BOLD, all);
+            }
+        }
+        out.items.push(Item::Text {
+            layout: line,
+            x,
+            y: line_y,
+            ink: Ink::Primary,
+            accents: Vec::new(),
+            selectable: false,
+        });
+        Ok(Layout {
+            items: out.items,
+            width,
+            height,
+            links: Vec::new(),
+            caret: None,
+            list: None,
+        })
+    }
+
     /// A box for each language, which lists the others to pick from, and
     /// the arrows between them, which swap them. `open`'s side shows what's
     /// typed in its picker.

@@ -640,12 +640,6 @@ pub(super) unsafe extern "system" fn intro_proc(
             with_app(|app| app.in_intro(|i| i.key(key)));
             LRESULT(0)
         }
-        // Typed in the box of languages, to narrow its list.
-        WM_CHAR => {
-            let unit = wparam.0 as u16;
-            with_app(|app| app.in_intro(|i| i.char(unit)));
-            LRESULT(0)
-        }
         WM_KEYUP if snip(wparam) => LRESULT(0),
         // Alt on its own: there's no menu bar to go to.
         WM_SYSCOMMAND if (wparam.0 & 0xFFF0) as u32 == SC_KEYMENU && lparam.0 == 0 => LRESULT(0),

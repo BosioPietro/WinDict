@@ -352,14 +352,6 @@ impl Picker<'_> {
     pub fn spare(&self) -> f32 {
         (self.rows.max(1) - self.shown()) as f32 * ROW_H
     }
-
-    /// How many rows fit in `height` DIPs under a box, its list's outline
-    /// and all.
-    pub fn rows_in(height: f32) -> usize {
-        ((height - LIST_GAP - 2.0 * LIST_PAD) / ROW_H)
-            .floor()
-            .max(1.0) as usize
-    }
 }
 
 /// How many languages the list shows at once; the rest scroll.
