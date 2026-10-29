@@ -6,13 +6,12 @@
 
 use super::*;
 use crate::installed::UiAccessError;
-use crate::intro::{Action, Intro, Options, Shortcuts, Step};
+use crate::intro::{scene, Action, Intro, Options, Shortcuts, Step};
 
-/// What "Show me" looks up: in the dictionary that comes with WinDict, a
-/// noun and a verb, with synonyms and examples for both. And what it
-/// translates, short enough for one line.
+/// What "Show me" looks up when the word in WinDict's language can't be:
+/// in the dictionary that comes with WinDict, a noun and a verb, with
+/// synonyms and examples for both.
 const EXAMPLE_WORD: &str = "gleam";
-const EXAMPLE_PASSAGE: &str = "I'll keep you in the loop";
 
 impl App {
     /// At start, when the introduction hasn't been shown yet.
@@ -130,24 +129,66 @@ impl App {
     }
 
     /// Opens a card beside the introduction as `step`'s shortcut would, on
-    /// an example.
+    /// the example its picture shows in WinDict's language.
     fn show_example(&mut self, step: Step) {
         let Some(intro) = self.intro.as_ref() else {
             return;
         };
         let anchor = popup::anchor_beside(intro.card_rect(), self.config.zoom_factor());
         self.dismiss();
+        let language = i18n::current();
         match step {
-            Step::Translate => self.translate_selection(EXAMPLE_PASSAGE, Some(anchor), false),
+            Step::Translate => {
+                let (passage, from, to) = scene::example_passage(language);
+                self.translate_example(passage, (from.into(), to.into()), anchor);
+            }
             _ => {
                 self.new_request();
-                let query = Query {
-                    word: EXAMPLE_WORD.into(),
-                    language: None,
+                // Online, or in a dictionary downloaded for it; or else in
+                // English.
+                let (word, language) = scene::example_word(language);
+                let found =
+                    self.config.online_lookup || offline::languages().iter().any(|l| l == language);
+                let query = match found {
+                    true => Query {
+                        word: word.into(),
+                        language: Some(language.into()),
+                    },
+                    false => Query {
+                        word: EXAMPLE_WORD.into(),
+                        language: None,
+                    },
                 };
                 self.lookup(query, Place::New(anchor));
             }
         }
+    }
+
+    /// Translates `passage` as the translating shortcut would, but the
+    /// way given: into WinDict's language, whatever the settings say.
+    fn translate_example(&mut self, passage: &str, direction: (LangCode, LangCode), anchor: RECT) {
+        if !self.config.online_lookup {
+            return self.show_message(
+                Some(anchor),
+                tr().translate_offline,
+                tr().translate_offline_detail,
+                true,
+            );
+        }
+        self.show_body(
+            anchor,
+            tr().translating,
+            None,
+            Body::Loading { status: true },
+            false,
+        );
+        (self.card.current, self.card.speakable) = (None, None);
+        let about = Translatable {
+            word: passage.into(),
+            senses: Vec::new(),
+        };
+        self.card.translatable = Some(about.clone());
+        self.begin_translation(about, direction, false, None);
     }
 
     /// Turns UI access on or off, which restarts WinDict, on a thread of its

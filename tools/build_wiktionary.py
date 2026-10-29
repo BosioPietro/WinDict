@@ -19,7 +19,7 @@ import sys
 from wdict import add_spellings, new_entry, write
 
 # Each Wiktionary's name, as the card credits it.
-NAMES = {"it": "Wikizionario", "en": "Wiktionary", "fr": "Wiktionnaire", "de": "Wiktionary",
+NAMES = {"it": "Wikizionario", "en": "Wiktionary", "fr": "Wiktionnaire", "de": "Deutsches Wiktionary",
          "es": "Wikcionario", "pt": "Wikcionário"}
 # wiktextract's parts of speech, as wdict.py lists them. The rest (prefixes,
 # symbols, letters) aren't looked up as words.

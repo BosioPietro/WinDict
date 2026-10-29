@@ -6,8 +6,8 @@
 use serde::Deserialize;
 
 use crate::dictionary::{
-    percent_encode, Definition, Lookup, Meaning, Sense, MAX_ANTONYMS, WIKCIONARIO, WIKIZIONARIO,
-    WIKTIONNAIRE,
+    percent_encode, Definition, Lookup, Meaning, Sense, DEUTSCHES_WIKTIONARY, MAX_ANTONYMS,
+    WIKCIONARIO, WIKIZIONARIO, WIKTIONNAIRE,
 };
 use crate::i18n::{fill, tr};
 use crate::offline::sentence;
@@ -55,6 +55,14 @@ pub const EDITIONS: &[Edition] = &[
         pages: None,
         dir: "frwiktionary",
         heading: "Fran\u{E7}ais",
+    },
+    Edition {
+        language: "de",
+        source: DEUTSCHES_WIKTIONARY,
+        host: "de.wiktionary.org",
+        pages: None,
+        dir: "dewiktionary",
+        heading: "Deutsch",
     },
 ];
 
@@ -378,6 +386,10 @@ mod tests {
         assert_eq!(
             edition("fr").unwrap().path("œuf"),
             "/frwiktionary/Fran%C3%A7ais/meaning/%C5%93/%C5%93u/%C5%93uf.jsonl"
+        );
+        assert_eq!(
+            edition("de").unwrap().path("Übung"),
+            "/dewiktionary/Deutsch/meaning/%C3%9C/%C3%9Cb/%C3%9Cbung.jsonl"
         );
         assert!(edition("en").is_none());
     }

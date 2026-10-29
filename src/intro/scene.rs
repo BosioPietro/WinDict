@@ -121,6 +121,7 @@ fn behind(language: Language) -> [Language; 2] {
         Language::English | Language::French => [Language::Italian, Language::Spanish],
         Language::Italian => [Language::Spanish, Language::French],
         Language::Spanish => [Language::French, Language::Italian],
+        Language::German => [Language::French, Language::Spanish],
     }
 }
 
@@ -273,6 +274,19 @@ const BOOK_LEFT: f32 = BOOK_RIGHT - 560.0;
 /// The first line's top, in DIPs.
 const BOOK_TOP: f32 = 83.26;
 
+/// What "Show me" looks up: the book's word, and the language it's in.
+pub(crate) fn example_word(language: Language) -> (&'static str, &'static str) {
+    let book = Book::of(language);
+    (book.word, book.language)
+}
+
+/// What it translates: the mail's phrase, from the language it's in into
+/// the one it's shown translated into.
+pub(crate) fn example_passage(language: Language) -> (&'static str, &'static str, &'static str) {
+    let (mail, to) = Mail::of(language);
+    (mail.phrase, mail.language, to)
+}
+
 impl Book {
     fn of(language: Language) -> &'static Book {
         match language {
@@ -280,6 +294,7 @@ impl Book {
             Language::Italian => &BOOK_IT,
             Language::Spanish => &BOOK_ES,
             Language::French => &BOOK_FR,
+            Language::German => &BOOK_DE,
         }
     }
 
@@ -421,6 +436,7 @@ impl Mail {
             Language::Italian => (&MAIL_EN, "it"),
             Language::Spanish => (&MAIL_EN, "es"),
             Language::French => (&MAIL_EN, "fr"),
+            Language::German => (&MAIL_EN, "de"),
         }
     }
 
@@ -729,6 +745,57 @@ static BOOK_FR: Book = Book {
     source: dictionary::WIKTIONNAIRE,
 };
 
+static BOOK_DE: Book = Book {
+    paragraphs: &[
+        &[
+            "Als Mara die Hafenmauer erreichte, war die Sonne",
+            "hinter das Kap geglitten, und der letzte Schimmer",
+            "lag auf dem Wasser wie ein Faden, der sich aus einem",
+            "Mantel gelöst hat. Sie setzte sich auf die kalten Steine",
+            "und wartete. Unter ihr stießen die Boote in der Dünung",
+            "aneinander, geduldig wie alte Hunde.",
+        ],
+        &[
+            "Ihr Vater hatte ihr einmal gesagt, das Meer halte jedes",
+            "Versprechen, das man an seinem Ufer gibt, nur nie so,",
+            "wie man es meint. Damals hatte sie ihm nicht geglaubt.",
+            "Sie war nicht sicher, ob sie ihm jetzt glaubte, aber",
+            "sie war trotzdem gekommen, und das, dachte sie, war",
+            "schon eine Art Antwort.",
+        ],
+        &[
+            "Im Fenster des Zollhauses ging ein Licht an. Dort unten",
+            "war noch jemand wach, über ein Kassenbuch oder einen",
+            "Brief gebeugt, und der Gedanke daran ließ den Abend",
+            "ein wenig kleiner erscheinen.",
+        ],
+    ],
+    word: "Schimmer",
+    language: "de",
+    part_of_speech: "noun",
+    senses: &[
+        (
+            "Matter Lichtschein, schwacher Glanz.",
+            Some("Der matte Schimmer des Mondes lag über dem See"),
+        ),
+        (
+            "Kurzes, schwaches Aufleuchten.",
+            Some("Der letzte Schimmer der Sonne auf dem Wasser"),
+        ),
+        (
+            "Leiser Anflug, geringe Spur von etwas.",
+            Some("Ein Schimmer von Hoffnung"),
+        ),
+        (
+            "Geringe Kenntnis von etwas.",
+            Some("Er hat keinen blassen Schimmer"),
+        ),
+    ],
+    synonyms: &["Glanz", "Schein", "Glimmer", "Abglanz", "Leuchten"],
+    also: None,
+    source: dictionary::DEUTSCHES_WIKTIONARY,
+};
+
 static MAIL_EN: Mail = Mail {
     subject: "Milan showroom: revised floor plans",
     folder: "Inbox",
@@ -752,6 +819,7 @@ static MAIL_EN: Mail = Mail {
         ("it", "Vi terrò aggiornati"),
         ("es", "Te mantendré al tanto"),
         ("fr", "Je vous tiendrai au courant"),
+        ("de", "Ich halte Sie auf dem Laufenden"),
     ],
     sign: &["Best regards,", "Sarah Whitfield"],
 };

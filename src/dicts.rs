@@ -46,6 +46,13 @@ pub const DOWNLOADS: &[Download] = &[
         size: 89_322_553,
         sha256: "ec77c51e8b5082c51583a66449d5d589d360ccacf078d275c28f262e02fa0f3f",
     },
+    Download {
+        language: "de",
+        name: "Deutsch",
+        file: "de-fe79dac8ab67.wdict",
+        size: 45_122_581,
+        sha256: "fe79dac8ab671e24bf8f2f8fad2bc3fed88a8c51b1d4f9d09ed6175f30259be0",
+    },
 ];
 
 const HOST: &str = "github.com";
@@ -229,6 +236,7 @@ mod tests {
         assert!(find("it").is_some());
         assert!(find("es").is_some());
         assert!(find("fr").is_some());
+        assert!(find("de").is_some());
         assert!(find("en").is_none());
     }
 

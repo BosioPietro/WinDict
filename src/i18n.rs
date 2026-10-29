@@ -13,6 +13,7 @@
 //! What stays as it is: names of languages (each in itself, so they can be
 //! found whichever language WinDict is in), key names, and "WinDict".
 
+mod de;
 mod es;
 mod fr;
 mod it;
@@ -426,6 +427,7 @@ pub enum Language {
     Italian,
     Spanish,
     French,
+    German,
 }
 
 impl Language {
@@ -434,6 +436,7 @@ impl Language {
         Language::Italian,
         Language::Spanish,
         Language::French,
+        Language::German,
     ];
 
     fn strings(self) -> &'static Strings {
@@ -442,6 +445,7 @@ impl Language {
             Language::Italian => &it::IT,
             Language::Spanish => &es::ES,
             Language::French => &fr::FR,
+            Language::German => &de::DE,
         }
     }
 
@@ -452,6 +456,7 @@ impl Language {
             Language::Italian => "it",
             Language::Spanish => "es",
             Language::French => "fr",
+            Language::German => "de",
         }
     }
 
@@ -472,10 +477,12 @@ impl Language {
         const LANG_ITALIAN: u16 = 0x10;
         const LANG_SPANISH: u16 = 0x0A;
         const LANG_FRENCH: u16 = 0x0C;
+        const LANG_GERMAN: u16 = 0x07;
         match id & 0x3FF {
             LANG_ITALIAN => Language::Italian,
             LANG_SPANISH => Language::Spanish,
             LANG_FRENCH => Language::French,
+            LANG_GERMAN => Language::German,
             _ => Language::English,
         }
     }
@@ -608,8 +615,12 @@ mod tests {
         for id in [0x040C, 0x0C0C, 0x100C, 0x000C] {
             assert_eq!(Language::from_lang_id(id), Language::French);
         }
+        // Germany's, Austria's, Switzerland's, and the neutral German.
+        for id in [0x0407, 0x0C07, 0x0807, 0x0007] {
+            assert_eq!(Language::from_lang_id(id), Language::German);
+        }
         // English, and what WinDict has no translation for.
-        for id in [0x0409, 0x0809, 0x0407, 0x0000] {
+        for id in [0x0409, 0x0809, 0x0413, 0x0000] {
             assert_eq!(Language::from_lang_id(id), Language::English);
         }
     }
@@ -645,6 +656,7 @@ mod tests {
                 Language::French,
                 &["pos_interjection", "pos_article", "animations"],
             ),
+            (Language::German, &["theme_system"]),
         ];
         assert_eq!(
             SAME.len(),
