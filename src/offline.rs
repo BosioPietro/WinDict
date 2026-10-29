@@ -29,6 +29,9 @@ use format::{Dict, HEADER};
 pub use words::{Suggestion, Words};
 
 static ENGLISH: &[u8] = include_bytes!("../data/english.wdict");
+/// The name and link `ENGLISH` gives itself, for [`link`].
+const ENGLISH_NAME: &str = "Open English WordNet";
+const ENGLISH_LINK: &str = "https://en-word.net/lemma/{}";
 
 /// How many of a text's words are enough to tell its language.
 const DETECT_WORDS: usize = 12;
@@ -150,9 +153,16 @@ pub fn dicts_dir() -> PathBuf {
 
 /// The page for `word` at `source`, if it's a dictionary in use.
 pub fn link(source: &str, word: &str) -> Option<String> {
-    let active = active();
-    let info = &active.iter().find(|d| d.info.name == source)?.info;
-    Some(info.link.as_ref()?.replace("{}", &percent_encode(word)))
+    let word = percent_encode(word);
+    match ACTIVE.read() {
+        Ok(active) if !active.is_empty() => {
+            let info = &active.iter().find(|d| d.info.name == source)?.info;
+            Some(info.link.as_ref()?.replace("{}", &word))
+        }
+        // English's, as `active` would, but without reading it: the setup
+        // draws a card with its source, and so doesn't carry the dictionary.
+        _ => (source == ENGLISH_NAME).then(|| ENGLISH_LINK.replace("{}", &word)),
+    }
 }
 
 /// An offline dictionary, embedded or read from a file.
@@ -408,6 +418,10 @@ mod tests {
         let english = english();
         assert_eq!(english.language(), "en");
         assert_eq!(english.info.name, "Open English WordNet");
+        assert_eq!(
+            (english.info.name, english.info.link.as_deref()),
+            (ENGLISH_NAME, Some(ENGLISH_LINK))
+        );
         assert_eq!(find("dog").sources, ["Open English WordNet"]);
         assert_eq!(
             link("Open English WordNet", "ice cream").as_deref(),
