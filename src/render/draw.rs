@@ -47,6 +47,7 @@ impl Renderer {
                     y,
                     ink,
                     accents,
+                    ..
                 } => {
                     for range in accents {
                         let _ = layout.SetDrawingEffect(&accent, *range);
@@ -66,7 +67,7 @@ impl Renderer {
                     };
                     dc.DrawTextLayout(
                         Vector2 { X: *x, Y: *y },
-                        layout,
+                        &layout.layout,
                         b,
                         D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
                     );

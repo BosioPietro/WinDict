@@ -112,6 +112,7 @@ impl Renderer {
                 y: out.y + (h - word_h) / 2.0,
                 ink: Ink::Secondary,
                 accents: Vec::new(),
+                selectable: true,
             });
         }
         out.y += h + 10.0;
@@ -388,6 +389,7 @@ impl Renderer {
             y: out.y + ((SELECT_H - icon_h) / 2.0).round(),
             ink: Ink::Secondary,
             accents: Vec::new(),
+            selectable: false,
         });
         out.links.push(Link {
             x,
@@ -438,7 +440,7 @@ impl Renderer {
             target,
         });
         let format = &self.formats.suggestion;
-        let line_h = metrics(&self.text("Ag", format, width)?).1;
+        let line_h = metrics(&self.text("Ag", format, width)?.layout).1;
         let line_y = y + ((SELECT_H - line_h) / 2.0).round();
         let centred = |h: f32| y + ((SELECT_H - h) / 2.0).round();
 
@@ -457,6 +459,7 @@ impl Renderer {
             y: centred(chevron_h),
             ink: Ink::Secondary,
             accents: Vec::new(),
+            selectable: false,
         });
 
         let mut left = x + SELECT_PAD;
@@ -472,6 +475,7 @@ impl Renderer {
                 y: line_y,
                 ink: Ink::Primary,
                 accents: Vec::new(),
+                selectable: false,
             });
             return Ok((chevron_at, name_at));
         };
@@ -483,6 +487,7 @@ impl Renderer {
             y: centred(glyph_h),
             ink: Ink::Secondary,
             accents: Vec::new(),
+            selectable: false,
         });
         left += glyph_w + 8.0;
         // Until something's typed, the language it is now, faintly.
@@ -502,6 +507,7 @@ impl Renderer {
             y: line_y,
             ink,
             accents: Vec::new(),
+            selectable: false,
         });
         out.caret = Some(Mark {
             x: left + caret_x.round(),
@@ -555,7 +561,7 @@ impl Renderer {
     fn layout_rows(&self, picker: &Picker, current: &str, width: f32) -> Result<Layout> {
         let mut out = Stack::default();
         let format = &self.formats.suggestion;
-        let line_h = metrics(&self.text("Ag", format, width)?).1;
+        let line_h = metrics(&self.text("Ag", format, width)?.layout).1;
         let line_y = |y: f32| y + ((ROW_H - line_h) / 2.0).round();
         if picker.matches.is_empty() {
             let line = self.text(tr().no_languages_match, format, width)?;
@@ -565,6 +571,7 @@ impl Renderer {
                 y: line_y(0.0),
                 ink: Ink::Tertiary,
                 accents: Vec::new(),
+                selectable: false,
             });
         }
         let scrolls = picker.matches.len() > picker.shown();
@@ -592,6 +599,7 @@ impl Renderer {
                 y: line_y(y),
                 ink: Ink::Primary,
                 accents: Vec::new(),
+                selectable: false,
             });
             x += w + 8.0;
             let mut end = right;
@@ -605,6 +613,7 @@ impl Renderer {
                     y: y + ((ROW_H - check_h) / 2.0).round(),
                     ink: Ink::Accent,
                     accents: Vec::new(),
+                    selectable: false,
                 });
                 end -= 8.0;
             }
@@ -618,6 +627,7 @@ impl Renderer {
                         y: line_y(y),
                         ink: Ink::Tertiary,
                         accents: Vec::new(),
+                        selectable: false,
                     });
                 }
             }
@@ -688,7 +698,7 @@ impl Renderer {
     fn layout_tick_rows(&self, ticks: &[Tick], scrolls: bool, width: f32) -> Result<Layout> {
         let mut out = Stack::default();
         let format = &self.formats.suggestion;
-        let line_h = metrics(&self.text("Ag", format, width)?).1;
+        let line_h = metrics(&self.text("Ag", format, width)?.layout).1;
         let right = width - SELECT_PAD - if scrolls { 6.0 } else { 0.0 };
         for (i, tick) in ticks.iter().enumerate() {
             let y = i as f32 * TICK_ROW_H;
@@ -719,6 +729,7 @@ impl Renderer {
                     y: box_y + ((TICK_BOX - check_h) / 2.0).round(),
                     ink: Ink::OnAccent,
                     accents: Vec::new(),
+                    selectable: false,
                 });
             }
             x += TICK_BOX + 12.0;
@@ -735,6 +746,7 @@ impl Renderer {
                     y: y + ((TICK_ROW_H - aside_h) / 2.0).round(),
                     ink: Ink::Secondary,
                     accents: Vec::new(),
+                    selectable: false,
                 });
                 end -= 8.0;
             }
@@ -752,6 +764,7 @@ impl Renderer {
                 y: line_y,
                 ink,
                 accents: Vec::new(),
+                selectable: false,
             });
             x += w + 8.0;
             // Its name in English too, where that's another.
@@ -764,6 +777,7 @@ impl Renderer {
                         y: line_y,
                         ink: Ink::Tertiary,
                         accents: Vec::new(),
+                        selectable: false,
                     });
                 }
             }
@@ -855,6 +869,7 @@ impl Renderer {
                     y,
                     ink: Ink::Tertiary,
                     accents: Vec::new(),
+                    selectable: true,
                 });
                 out.y = if beside {
                     (out.y + h).max(y + back_h)

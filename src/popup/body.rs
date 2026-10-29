@@ -22,6 +22,10 @@ pub(super) struct Content {
     /// The list a translation's language is picked from, while it's open;
     /// inside `visual` too.
     list: List,
+    /// What's selected of the text, from where the selection began to where
+    /// it ends, and its shading, inside `visual` under the rest.
+    selection: Option<(TextPoint, TextPoint)>,
+    shading: Shading,
 }
 
 impl Content {
@@ -30,6 +34,7 @@ impl Content {
         host.SetClip(&c.CreateInsetClip()?)?;
         let (visual, brush) = text_sprite(c)?;
         host.Children()?.InsertAtTop(&visual)?;
+        let shading = Shading::new(c, &visual)?;
         // Inside `visual`, so they scroll with it, in this order.
         let swap = SwapHighlight::new(c, &visual, hwnd)?;
         let rings = Rings::new(c, &visual)?;
@@ -53,6 +58,8 @@ impl Content {
             focused: None,
             swap,
             list,
+            selection: None,
+            shading,
         })
     }
 
@@ -76,6 +83,7 @@ impl Content {
         self.rings.brush.SetColor(t.focus())?;
         self.swap.brush.SetColor(t.highlight())?;
         self.caret_brush.SetColor(t.accent)?;
+        self.shading.brush.SetColor(t.selection())?;
         self.list.apply_theme(t)?;
         self.fade.set_scale(c, s)
     }
@@ -105,6 +113,28 @@ impl Content {
             .iter()
             .find(|l| x >= l.x && x < l.x + l.width && y >= l.y && y < l.y + l.height)
             .map(|l| &l.target)
+    }
+
+    /// What's selected of the text, from where the selection began.
+    pub(super) fn selection(&self) -> Option<(TextPoint, TextPoint)> {
+        self.selection
+    }
+
+    /// Selects the text between two places in `body`, or nothing, and
+    /// shades it at `s` pixels per DIP.
+    pub(super) fn select(
+        &mut self,
+        c: &Compositor,
+        selection: Option<(TextPoint, TextPoint)>,
+        body: Option<&render::Layout>,
+        s: f32,
+    ) -> Result<()> {
+        self.selection = selection.filter(|(a, b)| a != b);
+        let rects = match (self.selection, body) {
+            (Some((a, b)), Some(body)) => body.selection_rects(a, b),
+            _ => Vec::new(),
+        };
+        self.shading.show(c, &rects, s)
     }
 
     /// The list of languages, which takes points in the body's pixels.
@@ -304,6 +334,53 @@ impl Content {
     /// Takes the swap button's highlight away at once, for a new card.
     pub(super) fn reset_swap(&mut self) -> Result<()> {
         self.swap.reset()
+    }
+}
+
+/// Shades what's selected of the text: a rectangle for each line of each
+/// text it spans; the ones not in use are hidden.
+struct Shading {
+    container: ContainerVisual,
+    brush: CompositionColorBrush,
+    marks: Vec<SpriteVisual>,
+}
+
+impl Shading {
+    fn new(c: &Compositor, parent: &SpriteVisual) -> Result<Shading> {
+        let container = c.CreateContainerVisual()?;
+        parent.Children()?.InsertAtBottom(&container)?;
+        Ok(Shading {
+            container,
+            brush: c.CreateColorBrush()?,
+            marks: Vec::new(),
+        })
+    }
+
+    /// Shades `rects`, in DIPs in the body, at `s` pixels per DIP.
+    fn show(&mut self, c: &Compositor, rects: &[Mark], s: f32) -> Result<()> {
+        for (i, r) in rects.iter().enumerate() {
+            if i == self.marks.len() {
+                let mark = c.CreateSpriteVisual()?;
+                mark.SetBrush(&self.brush)?;
+                self.container.Children()?.InsertAtTop(&mark)?;
+                self.marks.push(mark);
+            }
+            // Edge to edge, so lines one under another meet without a seam
+            // or an overlap.
+            let (left, top) = ((r.x * s).round(), (r.y * s).round());
+            let (right, bottom) = (
+                ((r.x + r.width) * s).round(),
+                ((r.y + r.height) * s).round(),
+            );
+            let mark = &self.marks[i];
+            mark.SetOffset(v3(left, top))?;
+            mark.SetSize(v2(right - left, bottom - top))?;
+            mark.SetIsVisible(true)?;
+        }
+        for mark in self.marks.iter().skip(rects.len()) {
+            mark.SetIsVisible(false)?;
+        }
+        Ok(())
     }
 }
 

@@ -71,7 +71,7 @@ use procs::{
 use recent::Recent;
 use state::{
     Captured, Card, Corrected, Event, Events, Installing, LanguagePair, Languages, Looked, Place,
-    Query, Search, Translatable, Translated, Translating, TranslationKey,
+    Query, Search, Selected, Translatable, Translated, Translating, TranslationKey,
 };
 
 const MAIN_CLASS: PCWSTR = w!("WinDict.Main");
@@ -141,6 +141,7 @@ const HOTKEY_MENU_HOME: i32 = 21;
 const HOTKEY_MENU_END: i32 = 22;
 const HOTKEY_MENU_ENTER: i32 = 23;
 const HOTKEY_MENU_SPACE: i32 = 24;
+const HOTKEY_REPLACE: i32 = 25;
 
 /// The id `shortcut` is registered with.
 fn hotkey_id(shortcut: Shortcut) -> i32 {
@@ -223,6 +224,11 @@ const COPY_KEY: Keys = &[(
     HOTKEY_COPY,
     HOT_KEY_MODIFIERS(MOD_CONTROL.0 | MOD_NOREPEAT.0),
     VIRTUAL_KEY(b'C' as u16),
+)];
+const REPLACE_KEY: Keys = &[(
+    HOTKEY_REPLACE,
+    HOT_KEY_MODIFIERS(MOD_CONTROL.0 | MOD_NOREPEAT.0),
+    VK_RETURN,
 )];
 /// Held down, Ctrl+plus and Ctrl+minus keep zooming.
 const ZOOM_KEYS: Keys = &[
@@ -355,6 +361,8 @@ pub struct App {
     scroll_keys: KeySet,
     /// Ctrl+C.
     copy_key: KeySet,
+    /// Ctrl+Enter.
+    replace_key: KeySet,
     /// The tray menu's arrows, Home, End, Enter and Space.
     menu_keys: KeySet,
     /// Ctrl+plus, Ctrl+minus and Ctrl+0.
@@ -488,6 +496,7 @@ pub fn run(
             open_key: KeySet::new(OPEN_KEY),
             scroll_keys: KeySet::new(SCROLL_KEYS),
             copy_key: KeySet::new(COPY_KEY),
+            replace_key: KeySet::new(REPLACE_KEY),
             menu_keys: KeySet::new(MENU_KEYS),
             zoom_keys: KeySet::new(ZOOM_KEYS),
             zoom_wheel: 0,
@@ -809,6 +818,7 @@ impl App {
             return self.open_search(shortcut, None);
         }
         self.card.to_translate = shortcut == Shortcut::Translate;
+        self.card.selected = None;
         // The capture may press Ctrl+C itself, which is the app's to read.
         self.copy_key.set(self.hwnd, false);
         self.card.capturing = true;
@@ -939,21 +949,23 @@ impl App {
     }
 
     /// The left button down on the card: on the scrollbar, it grabs the
-    /// thumb or pages. Returns whether it was on it.
+    /// thumb or pages; on the text, it starts selecting it. Returns whether
+    /// it was on either, for the card to follow the pointer off it.
     fn press_card(&mut self, x: i32, y: i32) -> bool {
-        self.card
-            .popup
-            .as_mut()
-            .is_some_and(|p| p.press(x, y).unwrap_or(false))
+        let pressed = (self.card.popup.as_mut()).is_some_and(|p| p.press(x, y).unwrap_or(false));
+        // What was selected may be gone.
+        self.sync_link_keys();
+        pressed
     }
 
     /// The left button up on the card. Returns whether it had gone down on
-    /// the scrollbar, and so isn't a click.
-    fn release_card(&mut self) -> bool {
-        self.card
-            .popup
-            .as_mut()
-            .is_some_and(|p| p.release().unwrap_or(false))
+    /// the scrollbar or the text, and if so whether it's a click all the
+    /// same.
+    fn release_card(&mut self) -> Option<bool> {
+        let released = self.card.popup.as_mut()?.release().unwrap_or(None);
+        // Ctrl+C copies what was selected.
+        self.sync_link_keys();
+        released
     }
 
     /// The mouse wheel: scrolls the list of languages, when it's over it,
@@ -1011,7 +1023,9 @@ impl App {
         self.scroll_keys.set(self.hwnd, false);
         self.translate_key.set(self.hwnd, false);
         self.copy_key.set(self.hwnd, false);
+        self.replace_key.set(self.hwnd, false);
         self.zoom_keys.set(self.hwnd, false);
+        self.card.selected = None;
         self.remove_dismiss_hooks();
         self.dismiss_menu();
         self.card.search = None;

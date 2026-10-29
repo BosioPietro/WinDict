@@ -59,6 +59,7 @@ impl Renderer {
                         y: 0.0,
                         ink: Ink::Secondary,
                         accents: Vec::new(),
+                        selectable: false,
                     }],
                     // A little over, so the last glyph's overhang isn't cut.
                     width: phon_w.ceil() + 1.0,
@@ -78,6 +79,7 @@ impl Renderer {
                 y: 0.0,
                 ink: if muted { Ink::Tertiary } else { Ink::Primary },
                 accents: Vec::new(),
+                selectable: false,
             }],
             width,
             height: title_h,
@@ -185,7 +187,7 @@ impl Renderer {
         let mut out = Stack::default();
         let mut x = 0.0;
         if let Some(code) = badge {
-            let line_h = metrics(&self.text("Ag", &self.formats.suggestion, width)?).1;
+            let line_h = metrics(&self.text("Ag", &self.formats.suggestion, width)?.layout).1;
             x = self.badge(&mut out, code, 0.0, 0.0, line_h)? + 8.0;
         }
         let width = (width - x).max(1.0);
@@ -547,12 +549,13 @@ impl Renderer {
             y: out.y + (h - icon_h) / 2.0,
             ink: Ink::Accent,
             accents: Vec::new(),
+            selectable: false,
         });
         Ok((w + gap + icon_w, h))
     }
 
     /// `text` in the small spaced capitals of a part of speech.
-    pub(super) fn spaced_caps(&self, text: &str, width: f32) -> Result<IDWriteTextLayout> {
+    pub(super) fn spaced_caps(&self, text: &str, width: f32) -> Result<Text> {
         let caps = self.text(&text.to_uppercase(), &self.formats.part_of_speech, width)?;
         if let Ok(caps1) = caps.cast::<IDWriteTextLayout1>() {
             let range = DWRITE_TEXT_RANGE {
@@ -621,6 +624,7 @@ impl Renderer {
             y: cap_y + pad_y,
             ink: Ink::Secondary,
             accents: Vec::new(),
+            selectable: false,
         });
         Ok(cap_w)
     }

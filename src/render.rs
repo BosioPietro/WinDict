@@ -8,6 +8,7 @@ mod body;
 mod draw;
 mod flags;
 mod page;
+mod select;
 mod text;
 
 use std::cell::{Cell, RefCell};
@@ -37,6 +38,7 @@ use crate::theme::{to_d2d, Theme};
 use crate::translate::{self, Translation};
 use flags::Flag;
 pub use page::{Font, Line, Patch};
+pub use select::TextPoint;
 
 #[derive(Clone, Copy)]
 pub enum Ink {
@@ -61,12 +63,15 @@ pub enum Align {
 
 enum Item {
     Text {
-        layout: IDWriteTextLayout,
+        layout: Text,
         x: f32,
         y: f32,
         ink: Ink,
         /// Ranges drawn in the accent color instead.
         accents: Vec<DWRITE_TEXT_RANGE>,
+        /// Whether it can be selected and copied: what the card says, not
+        /// its controls.
+        selectable: bool,
     },
     Rule {
         y: f32,
@@ -459,14 +464,14 @@ struct Stack {
 impl Stack {
     /// Places text on the current line, `x` from the left. Returns its width
     /// and height; moving down is up to the caller.
-    fn text(&mut self, layout: IDWriteTextLayout, x: f32, ink: Ink) -> (f32, f32) {
+    fn text(&mut self, layout: Text, x: f32, ink: Ink) -> (f32, f32) {
         self.text_with_accents(layout, x, ink, Vec::new())
     }
 
     /// Like [`Stack::text`], with `accents` drawn in the accent color.
     fn text_with_accents(
         &mut self,
-        layout: IDWriteTextLayout,
+        layout: Text,
         x: f32,
         ink: Ink,
         accents: Vec<DWRITE_TEXT_RANGE>,
@@ -478,6 +483,7 @@ impl Stack {
             y: self.y,
             ink,
             accents,
+            selectable: true,
         });
         (w, h)
     }
@@ -679,17 +685,13 @@ impl Renderer {
         self.generation.get()
     }
 
-    fn text(
-        &self,
-        text: &str,
-        format: &IDWriteTextFormat,
-        width: f32,
-    ) -> Result<IDWriteTextLayout> {
+    fn text(&self, text: &str, format: &IDWriteTextFormat, width: f32) -> Result<Text> {
         let wide: Vec<u16> = text.encode_utf16().collect();
-        unsafe {
+        let layout = unsafe {
             self.dwrite
-                .CreateTextLayout(&wide, format, width.max(1.0), 10_000.0)
-        }
+                .CreateTextLayout(&wide, format, width.max(1.0), 10_000.0)?
+        };
+        Ok(Text { layout, wide })
     }
 }
 
@@ -858,6 +860,21 @@ pub fn capitalize(word: &str) -> String {
     match chars.next() {
         Some(c) => c.to_uppercase().chain(chars).collect(),
         None => String::new(),
+    }
+}
+
+/// A laid-out text, and the text, which DirectWrite can't give back: what's
+/// selected of it is copied from that.
+struct Text {
+    layout: IDWriteTextLayout,
+    wide: Vec<u16>,
+}
+
+impl std::ops::Deref for Text {
+    type Target = IDWriteTextLayout;
+
+    fn deref(&self) -> &IDWriteTextLayout {
+        &self.layout
     }
 }
 

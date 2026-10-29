@@ -120,6 +120,7 @@ pub(super) unsafe extern "system" fn main_proc(
                 HOTKEY_SCROLL_UP => with_app(|app| app.scroll_line(false)),
                 HOTKEY_SCROLL_DOWN => with_app(|app| app.scroll_line(true)),
                 HOTKEY_COPY => with_app(|app| app.copy()),
+                HOTKEY_REPLACE => with_app(|app| app.replace_selection()),
                 HOTKEY_ZOOM_IN | HOTKEY_ZOOM_IN_PAD => with_app(|app| app.zoom(Some(1))),
                 HOTKEY_ZOOM_OUT | HOTKEY_ZOOM_OUT_PAD => with_app(|app| app.zoom(Some(-1))),
                 HOTKEY_ZOOM_RESET | HOTKEY_ZOOM_RESET_PAD => with_app(|app| app.zoom(None)),
@@ -300,7 +301,7 @@ pub(super) unsafe extern "system" fn popup_proc(
             LRESULT(0)
         }
         // The scrollbar: its thumb follows the pointer, even off the card,
-        // until the button comes up.
+        // until the button comes up; as does a selection of the text.
         WM_LBUTTONDOWN => {
             let (x, y) = win::lparam_point(lparam);
             let mut pressed = false;
@@ -313,13 +314,15 @@ pub(super) unsafe extern "system" fn popup_proc(
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            let mut released = false;
+            let mut released = None;
             card(&mut |app| released = app.release_card());
-            if released {
+            if released.is_some() {
                 unsafe {
                     let _ = ReleaseCapture();
                 }
-            } else if PRESSED_IN.replace(HWND::default()) == hwnd {
+            }
+            let pressed_here = PRESSED_IN.replace(HWND::default()) == hwnd;
+            if released.unwrap_or(pressed_here) {
                 post(WM_APP_CLICK, WPARAM(hwnd.0 as usize), lparam);
             }
             LRESULT(0)
@@ -338,13 +341,14 @@ pub(super) unsafe extern "system" fn popup_proc(
             }
             LRESULT(1)
         }
-        // A hand over the links, a text cursor over the search field.
+        // A hand over the links, a text cursor over the search field and the
+        // text.
         WM_SETCURSOR if (lparam.0 & 0xFFFF) as u32 == HTCLIENT => {
             let shown = set_cursor(hwnd, |app, pt| {
                 let popup = app.popup_of(hwnd)?;
                 if popup.link_at(pt.x, pt.y).is_some() {
                     Some(IDC_HAND)
-                } else if popup.search_at(pt.x, pt.y) {
+                } else if popup.search_at(pt.x, pt.y) || popup.text_at(pt.x, pt.y) {
                     Some(IDC_IBEAM)
                 } else {
                     None

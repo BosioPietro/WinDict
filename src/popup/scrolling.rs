@@ -129,20 +129,20 @@ impl Popup {
     }
 
     /// The left button went down at a point in window pixels: on the
-    /// scrollbar, it grabs the thumb, or pages towards the point. Returns
-    /// whether it was on it.
+    /// scrollbar, it grabs the thumb, or pages towards the point; on the
+    /// text, it starts selecting it. Returns whether it was on either.
     pub fn press(&mut self, x: i32, y: i32) -> Result<bool> {
         if let Some((bx, by)) = self.body_point(x, y) {
             if self.content.list().press(&self.anim, bx, by)? {
                 return Ok(true);
             }
         }
-        let (over, y) = self.bar_point(x, y);
+        let (over, bar_y) = self.bar_point(x, y);
         if !over {
-            return Ok(false);
+            return self.press_text(x, y);
         }
         let (scroll, track) = (self.visible_scroll(), self.track());
-        let page = self.scroll_chrome.bar.press(y, scroll, track);
+        let page = self.scroll_chrome.bar.press(bar_y, scroll, track);
         self.scroll_chrome.bar.hover(&self.anim, true)?;
         if let Some(to) = page {
             self.scroll_to(to, Push::None, SCROLL_MS)?;
@@ -151,13 +151,15 @@ impl Popup {
     }
 
     /// The left button came up. Returns whether it had gone down on the
-    /// scrollbar.
-    pub fn release(&mut self) -> Result<bool> {
+    /// scrollbar or the text, and if so whether that was a click: one on
+    /// the text that didn't select it is.
+    pub fn release(&mut self) -> Result<Option<bool>> {
         let held = self.content.list().release(&self.anim)? | self.scroll_chrome.bar.release();
         if held {
             self.hover(self.pointer)?;
+            return Ok(Some(false));
         }
-        Ok(held)
+        Ok(self.release_text())
     }
 
     /// The pointer at a point in window pixels, or gone: widens the thumb

@@ -50,8 +50,23 @@ struct LateCopy {
     app: u32,
 }
 
+/// How long the clipboard holds what's pasted before it's put back: the
+/// app reads it once it gets to the Ctrl+V, which some take a while to.
+const PASTE_RESTORE: u32 = 600;
+const PASTE_TIMER: usize = 0x5745;
+
+/// Text pasted, and the clipboard from before it.
+struct Pasted {
+    saved: SavedClipboard,
+    /// The clipboard's sequence number with the text on it: anything copied
+    /// since is the user's own, and stays.
+    after: u32,
+    owner: HWND,
+}
+
 thread_local! {
     static LATE_COPY_PENDING: RefCell<Option<LateCopy>> = const { RefCell::new(None) };
+    static PASTE_PENDING: RefCell<Option<Pasted>> = const { RefCell::new(None) };
 }
 
 pub struct Selection {
@@ -341,6 +356,54 @@ unsafe extern "system" fn late_copy_timer(_: HWND, _: u32, _: usize, _: u32) {
     settle_late_copy(false);
 }
 
+/// Types `text` over the selection of the window in front, by pasting it.
+/// The clipboard is put back a moment later, unless something else was
+/// copied meanwhile. Whether it was pasted.
+pub fn paste(owner: HWND, text: &str) -> bool {
+    settle_late_copy(true);
+    settle_paste();
+    release_modifiers();
+    // What can't be saved can't be put back, but the text is still pasted:
+    // it was asked for.
+    let saved = SavedClipboard::take(owner);
+    if !put_text(owner, text, true) {
+        return false;
+    }
+    let after = unsafe { GetClipboardSequenceNumber() };
+    send_paste();
+    if let Some(saved) = saved {
+        PASTE_PENDING.with(|p| {
+            *p.borrow_mut() = Some(Pasted {
+                saved,
+                after,
+                owner,
+            })
+        });
+        unsafe {
+            SetTimer(Some(owner), PASTE_TIMER, PASTE_RESTORE, Some(paste_timer));
+        }
+    }
+    true
+}
+
+/// Puts the clipboard back as it was before the last paste, if it's still
+/// what was pasted.
+fn settle_paste() {
+    let Some(pasted) = PASTE_PENDING.with(|p| p.borrow_mut().take()) else {
+        return;
+    };
+    unsafe {
+        let _ = KillTimer(Some(pasted.owner), PASTE_TIMER);
+    }
+    if unsafe { GetClipboardSequenceNumber() } == pasted.after {
+        pasted.saved.restore(pasted.owner);
+    }
+}
+
+unsafe extern "system" fn paste_timer(_: HWND, _: u32, _: usize, _: u32) {
+    settle_paste();
+}
+
 fn create_uia() -> Option<IUIAutomation> {
     unsafe {
         if let Ok(uia) =
@@ -621,10 +684,18 @@ fn release_modifiers() {
 }
 
 fn send_copy() {
+    send_ctrl(VIRTUAL_KEY('C' as u16));
+}
+
+fn send_paste() {
+    send_ctrl(VIRTUAL_KEY('V' as u16));
+}
+
+fn send_ctrl(vk: VIRTUAL_KEY) {
     let inputs = [
         key(VK_LCONTROL, false),
-        key(VIRTUAL_KEY('C' as u16), false),
-        key(VIRTUAL_KEY('C' as u16), true),
+        key(vk, false),
+        key(vk, true),
         key(VK_LCONTROL, true),
     ];
     unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
@@ -697,6 +768,12 @@ fn read_clipboard_text(owner: HWND) -> Option<String> {
 
 /// Puts `text` on the clipboard, in place of what was there. Whether it did.
 pub fn set_clipboard_text(owner: HWND, text: &str) -> bool {
+    put_text(owner, text, false)
+}
+
+/// Puts `text` on the clipboard, kept out of clipboard history (Win+V)
+/// with `transient`. Whether it did.
+fn put_text(owner: HWND, text: &str, transient: bool) -> bool {
     if !open_clipboard(owner) {
         return false;
     }
@@ -709,6 +786,9 @@ pub fn set_clipboard_text(owner: HWND, text: &str) -> bool {
         let emptied = EmptyClipboard().is_ok();
         if emptied {
             set_data(CF_UNICODETEXT_ID, &wide);
+            if transient {
+                exclude_from_history();
+            }
         }
         emptied
     };
@@ -776,13 +856,19 @@ impl SavedClipboard {
             }
             if !self.formats.is_empty() {
                 // Keep the restored copy out of clipboard history (Win+V).
-                let exclude =
-                    RegisterClipboardFormatW(w!("ExcludeClipboardContentFromMonitorProcessing"));
-                if exclude != 0 {
-                    set_data(exclude, &[0, 0, 0, 0]);
-                }
+                exclude_from_history();
             }
             let _ = CloseClipboard();
+        }
+    }
+}
+
+/// Keeps what's on the open clipboard out of clipboard history (Win+V).
+unsafe fn exclude_from_history() {
+    unsafe {
+        let exclude = RegisterClipboardFormatW(w!("ExcludeClipboardContentFromMonitorProcessing"));
+        if exclude != 0 {
+            set_data(exclude, &[0, 0, 0, 0]);
         }
     }
 }

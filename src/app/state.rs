@@ -339,6 +339,15 @@ pub(super) struct Card {
     pub(super) search: Option<Search>,
     /// The window the search box took the keyboard from.
     pub(super) return_focus: Option<HWND>,
+    /// The selection the card translates, which Ctrl+Enter replaces with
+    /// the translation.
+    pub(super) selected: Option<Selected>,
+}
+
+/// Text selected in another app, and the window it's in.
+pub(super) struct Selected {
+    pub(super) text: String,
+    pub(super) window: HWND,
 }
 
 impl Card {

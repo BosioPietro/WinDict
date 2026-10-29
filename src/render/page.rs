@@ -61,7 +61,7 @@ impl Renderer {
             .collect();
         for line in lines {
             let format = self.page_format(line.font)?;
-            let measure = |text: &str| -> Result<(IDWriteTextLayout, f32, f32)> {
+            let measure = |text: &str| -> Result<(Text, f32, f32)> {
                 let layout = self.text(text, &format, 10_000.0)?;
                 let (w, h, _) = metrics(&layout);
                 Ok((layout, w, h))
@@ -113,6 +113,7 @@ impl Renderer {
                         Ink::Rgb(line.color)
                     },
                     accents: Vec::new(),
+                    selectable: false,
                 });
                 x += w + gap;
             }

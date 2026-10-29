@@ -31,12 +31,16 @@ impl App {
         let translate = visible && (self.can_translate() || self.has_definition_behind());
         // And Ctrl+C only while there's something to copy.
         let copy = popup.is_some() && self.copyable().is_some();
+        // And Ctrl+Enter only while there's a translation to type over the
+        // selection.
+        let replace = popup.is_some() && self.replacement().is_some();
         // Ctrl+plus and Ctrl+minus zoom any card but the search box.
         let zoom = visible && self.card.search.is_none();
         self.set_link_keys(tab, enter);
         self.scroll_keys.set(self.hwnd, scroll);
         self.translate_key.set(self.hwnd, translate);
         self.copy_key.set(self.hwnd, copy);
+        self.replace_key.set(self.hwnd, replace);
         self.zoom_keys.set(self.hwnd, zoom);
     }
 
@@ -61,10 +65,13 @@ impl App {
         }
     }
 
-    /// What Ctrl+C copies: the word Tab is on, or else the translation the
-    /// card shows, or the word it defines.
+    /// What Ctrl+C copies: the text selected, or else the word Tab is on,
+    /// or the translation the card shows, or the word it defines.
     fn copyable(&self) -> Option<String> {
         let popup = self.visible_popup()?;
+        if let Some(text) = popup.selected_text() {
+            return Some(text);
+        }
         if let Some(Target::Word(word)) = popup.focused_link() {
             return Some(word.clone());
         }
@@ -88,6 +95,33 @@ impl App {
         }
         if let Some(popup) = self.card.popup.as_ref() {
             let _ = popup.show_copied();
+        }
+    }
+
+    /// What Ctrl+Enter types over the selection the card translates: the
+    /// translation, once it's come.
+    fn replacement(&self) -> Option<String> {
+        let selected = self.card.selected.as_ref()?;
+        let t = self.card.translating.as_ref()?;
+        if t.asking || t.typed.is_some() || t.about.word != selected.text {
+            return None;
+        }
+        match &t.result {
+            Some(Ok(translation)) => Some(translation.text.clone()),
+            _ => None,
+        }
+    }
+
+    /// Ctrl+Enter: closes the card and pastes the translation over the
+    /// selection, if its app is still the one in front.
+    pub(super) fn replace_selection(&mut self) {
+        let Some(text) = self.replacement() else {
+            return;
+        };
+        let window = self.card.selected.as_ref().map(|s| s.window);
+        self.dismiss();
+        if window == Some(unsafe { GetForegroundWindow() }) {
+            selection::paste(self.hwnd, &text);
         }
     }
 

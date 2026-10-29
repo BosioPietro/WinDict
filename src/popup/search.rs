@@ -191,6 +191,7 @@ impl Popup {
         self.set_speak(false)?;
         self.pin.set_shown(&self.anim, false, self.scale)?;
         self.focus_link(None, 0)?;
+        self.select(None)?;
         self.header_indent = 0.0;
         let anim = &self.anim;
         let [word, old_word] = self.header.visuals()?;
@@ -209,6 +210,7 @@ impl Popup {
         }
         self.loader.forget();
         self.content.set_links(Vec::new());
+        self.selecting = None;
         self.shown = None;
         let delay = if in_place { MAKE_WAY_MS } else { 0 };
         let (renderer, theme, s) = (&self.renderer, &self.theme, self.scale);

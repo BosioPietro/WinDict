@@ -99,6 +99,8 @@ impl App {
         self.scroll_keys.set(self.hwnd, false);
         self.translate_key.set(self.hwnd, false);
         self.copy_key.set(self.hwnd, false);
+        self.replace_key.set(self.hwnd, false);
+        self.card.selected = None;
         self.zoom_keys.set(self.hwnd, false);
         self.back_keys.set(self.hwnd, false);
         self.remove_dismiss_hooks();

@@ -35,6 +35,12 @@ impl App {
                 return self.show_message(anchor, tr().too_long, tr().translate_too_long, true);
             }
         };
+        // The card doesn't take the keyboard: the app in front is the
+        // selection's.
+        self.card.selected = Some(Selected {
+            text: text.clone(),
+            window: unsafe { GetForegroundWindow() },
+        });
         // Translations come from the internet, like the online answers.
         if !self.config.online_lookup {
             return self.show_message(

@@ -9,6 +9,7 @@ mod parts;
 mod placement;
 mod scrolling;
 mod search;
+mod selecting;
 
 use std::rc::Rc;
 
@@ -21,7 +22,8 @@ use windows_numerics::{Vector2, Vector3};
 
 use crate::i18n::tr;
 use crate::render::{
-    self, Body, Face, Ink, Link, ListLayout, Mark, Renderer, Target, LANGUAGES_TOP, WORD_SIZE,
+    self, Body, Face, Ink, Link, ListLayout, Mark, Renderer, Target, TextPoint, LANGUAGES_TOP,
+    WORD_SIZE,
 };
 use crate::searchbox::SearchBox;
 use crate::theme::Theme;
@@ -197,6 +199,9 @@ pub struct Popup {
     scroller: Scroller,
     /// Where the pointer last was on the window, in window pixels.
     pointer: Option<(i32, i32)>,
+    /// The left button, down on the body's text.
+    selecting: Option<selecting::Selecting>,
+    last_press: Option<selecting::Press>,
     pub visible: bool,
     /// Pinned open: a window of its own, dragged by its heading.
     pinned: bool,
@@ -417,6 +422,8 @@ impl Popup {
             body_glides: false,
             scroller: Scroller::default(),
             pointer: None,
+            selecting: None,
+            last_press: None,
             visible: false,
             pinned: false,
             _window: window,
@@ -479,6 +486,9 @@ impl Popup {
         body: Body,
         transition: Transition,
     ) -> Result<()> {
+        // What was selected goes with what it was selected in.
+        self.selecting = None;
+        self.select(None)?;
         let rise_from = match (self.search.active, transition) {
             (false, _) => None,
             (true, Transition::Instant) => {
@@ -565,6 +575,8 @@ impl Popup {
             Transition::Instant | Transition::Replace => None,
         };
         self.content.set_links(body_layout.links.clone());
+        let selection = self.content.selection();
+        (self.content).select(&self.anim.compositor, selection, Some(body_layout), s)?;
         let kept_button = CardButton::ALL
             .into_iter()
             .find(|&b| kept.as_ref() == Some(b.target()) && self.button(b).shown());
@@ -864,6 +876,9 @@ impl Popup {
     /// Highlights the button the pointer, in window pixels, is on.
     pub fn hover(&mut self, point: Option<(i32, i32)>) -> Result<()> {
         self.pointer = point;
+        if let Some((x, y)) = point {
+            self.drag_text(x, y)?;
+        }
         // On a scrollbar, or dragging its thumb, nothing else is hovered.
         let in_body = point.and_then(|(x, y)| self.body_point(x, y));
         let on_list = self.content.list().hover_bar(&self.anim, in_body)?;
