@@ -165,7 +165,7 @@ impl Default for Config {
             max_synonyms: 6,
             show_examples: true,
             zoom: 100,
-            selection: SelectionMode::Direct,
+            selection: SelectionMode::Automatic,
             use_ui_automation: None,
             online_lookup: true,
             languages: vec!["en".into()],
@@ -300,7 +300,7 @@ fn parse(bytes: &[u8]) -> Result<Config, String> {
     }
     config.mymemory_email = config.mymemory_email.trim().to_string();
     config.zoom = ZOOMS[zoom_index(config.zoom)];
-    // The switch older versions saved, from before the default was Direct.
+    // The switch older versions saved, from before there were three modes.
     match config.use_ui_automation.take() {
         Some(true) => config.selection = SelectionMode::Automatic,
         Some(false) => config.selection = SelectionMode::Clipboard,
@@ -357,7 +357,7 @@ mod tests {
         assert!(config.online_lookup);
         assert!(config.check_updates);
         assert!(config.show_examples);
-        assert_eq!(config.selection, SelectionMode::Direct);
+        assert_eq!(config.selection, SelectionMode::Automatic);
         assert_eq!(config.languages, ["en"]);
         assert_eq!(config.zoom, 100);
         assert_eq!(
