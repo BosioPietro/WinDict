@@ -433,8 +433,7 @@ impl Menu {
 
     /// A point in window pixels, relative to the card's top left.
     fn card_point(&self, x: i32, y: i32) -> (f32, f32) {
-        let m = (MARGIN * self.scale).round();
-        (x as f32 - m, y as f32 - m)
+        ui::card_point(self.scale, x, y)
     }
 
     fn in_card(&self, x: i32, y: i32) -> bool {

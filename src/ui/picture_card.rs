@@ -95,13 +95,6 @@ pub fn centre(s: f32, card_w: f32, card_h: f32) -> Vector3 {
     }
 }
 
-/// A point in window pixels, relative to the card's top left, at `s`
-/// pixels per DIP.
-pub fn card_point(s: f32, x: i32, y: i32) -> (f32, f32) {
-    let m = (MARGIN * s).round();
-    (x as f32 - m, y as f32 - m)
-}
-
 /// Brings each line of `text` in from `from` away, a beat after the one
 /// above it, starting after `delay`.
 pub fn bring_in(anim: &Animator, text: &ContainerVisual, from: Vector3, delay: u64) -> Result<()> {

@@ -878,7 +878,7 @@ impl Setup {
 
     /// A point in window pixels, relative to the card's top left.
     fn card_point(&self, x: i32, y: i32) -> (f32, f32) {
-        picture_card::card_point(self.scale, x, y)
+        ui::card_point(self.scale, x, y)
     }
 
     /// Whether a point in window pixels is on the strip along the top, which

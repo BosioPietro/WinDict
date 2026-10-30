@@ -1760,7 +1760,7 @@ impl Intro {
 
     /// A point in window pixels, relative to the card's top left.
     fn card_point(&self, x: i32, y: i32) -> (f32, f32) {
-        picture_card::card_point(self.scale, x, y)
+        ui::card_point(self.scale, x, y)
     }
 
     fn hit_at(&self, wx: i32, wy: i32) -> Option<Hit> {

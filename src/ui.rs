@@ -102,6 +102,13 @@ pub fn monitor_at(point: POINT) -> (RECT, f32) {
     (info.rcWork, dpi_x as f32 / 96.0)
 }
 
+/// A point in window pixels, relative to the top left of a card `MARGIN`
+/// in from its window's, at `s` pixels per DIP.
+pub fn card_point(s: f32, x: i32, y: i32) -> (f32, f32) {
+    let m = (MARGIN * s).round();
+    (x as f32 - m, y as f32 - m)
+}
+
 /// Makes `hwnd` a composition surface: the host backdrop brush can sample
 /// what's behind it, DWM's own show/hide animations are off, and the
 /// returned target (kept alive by the caller) displays the visual tree.
