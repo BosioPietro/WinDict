@@ -212,13 +212,13 @@ impl App {
     /// Shows the translation as it stands, the focus on `focus`, or where
     /// it was.
     pub(super) fn show_translation(&mut self, transition: Transition, focus: Option<Target>) {
-        let current = self.card.current.is_some();
+        let behind = self.card.current.is_some() || self.card.passage.is_some();
         let Some(t) = self.card.translating.as_mut() else {
             return;
         };
-        // Back goes to the definition, or the box it was typed in, when
-        // there's one to go to.
-        let back = current || t.typed.is_some();
+        // Back goes to the definition, the passage glossed, or the box it
+        // was typed in, when there's one to go to.
+        let back = behind || t.typed.is_some();
         if t.waiting && !t.shown {
             // The definition stays a moment longer.
             t.focus = focus.or(t.focus.take());

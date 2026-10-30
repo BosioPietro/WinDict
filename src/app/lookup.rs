@@ -143,6 +143,16 @@ impl App {
         if matches!(result, Lookup::Found(_)) {
             return self.present_corrected(place, word, result, None);
         }
+        // A phrase selected that the dictionary hasn't is glossed instead,
+        // if any of its words are uncommon.
+        let missing = self.card.gloss_missing.take();
+        if let (Lookup::NotFound, Some(phrase)) = (result, missing.filter(|p| p == word)) {
+            let (anchor, in_place) = match place {
+                Place::New(anchor) => (Some(anchor), false),
+                Place::Same(_) => (None, true),
+            };
+            return self.gloss_selection(&phrase, anchor, in_place, Some(place));
+        }
         let (id, events) = (self.card.request, self.events.clone());
         let (word, result) = (word.to_string(), result.clone());
         std::thread::spawn(move || {
@@ -185,10 +195,16 @@ impl App {
     ) {
         self.card.translatable = match &body {
             Body::Definition(def) => Some(Translatable::of(def)),
+            Body::Gloss(gloss) => Some(Translatable {
+                word: gloss.text.clone(),
+                senses: vec![(gloss.language.clone(), None)],
+            }),
             _ => None,
         };
         self.card.speakable = match &body {
             Body::Definition(def) => self.voice_for(&def.language).map(|v| (def.word.clone(), v)),
+            // A passage's title is its language's name, which the button
+            // would seem to say.
             _ => None,
         };
         self.card.translating = None;
@@ -199,7 +215,7 @@ impl App {
             }
             Place::New(anchor) => self.show_body(anchor, title, phonetic, body, false),
             Place::Same(transition) => {
-                let back = !self.card.history.is_empty();
+                let back = self.has_word_behind();
                 let translate = self.can_translate();
                 let speak = self.card.speakable.is_some();
                 let Some(popup) = self.card.popup.as_mut() else {
@@ -330,20 +346,33 @@ impl App {
     }
 
     /// Shows a synonym's definition in the card, remembering the way back.
-    /// A card in one language stays in it.
+    /// A card in one language stays in it, and a word of a passage is
+    /// looked up in the passage's.
     pub(super) fn follow(&mut self, word: &str) {
         let Ok(word) = dictionary::normalize(word) else {
             return;
         };
-        let language = self.card.current.as_ref().and_then(|q| q.language.clone());
+        let language = match &self.card.current {
+            Some(current) => current.language.clone(),
+            None => self.card.passage.as_ref().map(|p| p.gloss.lookup_language()),
+        };
         let query = Query { word, language };
         if self.card.current.as_ref() == Some(&query) {
             return;
         }
-        if let Some(current) = self.card.current.take() {
-            self.card.history.push(current);
-            if self.card.history.len() > HISTORY_SIZE {
-                self.card.history.remove(0);
+        match self.card.current.take() {
+            Some(current) => {
+                self.card.history.push(current);
+                if self.card.history.len() > HISTORY_SIZE {
+                    self.card.history.remove(0);
+                }
+            }
+            // From the passage, which keeps where the focus was.
+            None => {
+                let focus = self.visible_popup().and_then(|p| p.focused_link()).cloned();
+                if let Some(passage) = self.card.passage.as_mut() {
+                    passage.focus = focus;
+                }
             }
         }
         // Answers still on their way are for the word we're leaving.
@@ -362,30 +391,40 @@ impl App {
         if let Some(typed) = self.card.translating.as_mut().and_then(|t| t.typed.take()) {
             return self.reopen_search(typed);
         }
-        // A passage translated straight away has no definition to go to.
+        // A passage translated straight away has no definition to go to,
+        // but one glossed goes back to its gloss.
         if self.card.translating.is_some() && self.card.current.is_none() {
-            return;
+            return self.back_to_passage();
         }
         let query = match self.card.translating.take() {
             Some(_) => self.card.current.clone(),
             None => self.card.history.pop(),
         };
+        // The first word looked up from a passage goes back to it.
         let Some(query) = query else {
-            return;
+            return self.back_to_passage();
         };
         self.new_request();
         self.lookup(query, Place::Same(Transition::Replace));
         self.sync_back_keys();
     }
 
-    /// Whether the card shows a translation of a definition, or of what
-    /// was typed in the box, which Back and Ctrl+T go back to.
+    /// Whether the card shows a translation of a definition, of a passage
+    /// glossed, or of what was typed in the box, which Back and Ctrl+T go
+    /// back to.
     pub(super) fn has_definition_behind(&self) -> bool {
-        let current = self.card.current.is_some();
+        let behind = self.card.current.is_some() || self.card.passage.is_some();
         self.card
             .translating
             .as_ref()
-            .is_some_and(|t| current || t.typed.is_some())
+            .is_some_and(|t| behind || t.typed.is_some())
+    }
+
+    /// Whether Back goes from the definition to another: one shown before,
+    /// or the passage it was looked up from.
+    pub(super) fn has_word_behind(&self) -> bool {
+        let from_passage = self.card.current.is_some() && self.card.passage.is_some();
+        !self.card.history.is_empty() || from_passage
     }
 
     /// Backspace and Alt+Left go back, but only while there's somewhere to
@@ -401,7 +440,7 @@ impl App {
             .translating
             .as_ref()
             .is_some_and(|t| t.pair.picking.is_some());
-        let wanted = (!self.card.history.is_empty() || self.has_definition_behind()) && !picking;
+        let wanted = (self.has_word_behind() || self.has_definition_behind()) && !picking;
         self.back_keys.set(self.hwnd, wanted);
     }
 }

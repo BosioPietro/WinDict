@@ -1,6 +1,7 @@
 //! What the app keeps track of: the card and what it shows, the search box
 //! and translations, and what the other threads hand the UI thread.
 
+use std::rc::Rc;
 use std::sync::mpsc::Sender;
 
 use windows::core::HSTRING;
@@ -13,6 +14,7 @@ use super::WM_APP_EVENT;
 use crate::config::Shortcut;
 use crate::dictionary::{Definition, Lookup};
 use crate::dicts;
+use crate::gloss::Gloss;
 use crate::installed;
 use crate::lang::LangCode;
 use crate::ocr;
@@ -60,6 +62,28 @@ pub(super) struct Corrected {
     pub(super) word: String,
     pub(super) result: Lookup,
     pub(super) correction: Option<String>,
+}
+
+/// A passage glossed, for the request it was asked with, to show at
+/// `anchor`, unless the card is open `in_place` already: nothing when
+/// which language it's in couldn't be told.
+pub(super) struct Glossed {
+    pub(super) id: u64,
+    pub(super) anchor: Option<RECT>,
+    pub(super) in_place: bool,
+    pub(super) gloss: Option<Gloss>,
+    /// For a phrase the dictionary hadn't: where to say so instead, if
+    /// there's nothing to gloss in it either.
+    pub(super) not_found: Option<(Place, String)>,
+}
+
+/// The passage the card glosses, which the words looked up from it go
+/// back to.
+pub(super) struct Passage {
+    pub(super) gloss: Rc<Gloss>,
+    /// What had the focus when a word was looked up from it, where it goes
+    /// back to.
+    pub(super) focus: Option<Target>,
 }
 
 /// A word, from one language into another.
@@ -148,6 +172,7 @@ pub(super) enum Event {
     Captured(Captured),
     Looked(Looked),
     Corrected(Corrected),
+    Glossed(Glossed),
     /// The words the search box suggests from, for the request it was
     /// opened with.
     Words(u64, offline::Words),
@@ -328,6 +353,11 @@ pub(super) struct Card {
     pub(super) current: Option<Query>,
     /// Words the card showed before synonyms were followed, most recent last.
     pub(super) history: Vec<Query>,
+    /// The passage the first of them was looked up from, if it was.
+    pub(super) passage: Option<Passage>,
+    /// The phrase selected, of several words, glossed instead if the
+    /// dictionary hasn't it.
+    pub(super) gloss_missing: Option<String>,
     /// The definition the card shows, if it does.
     pub(super) translatable: Option<Translatable>,
     /// The translation the card turned into, if it did.
@@ -359,5 +389,6 @@ impl Card {
     /// say, until something else is shown.
     pub(super) fn clear_content(&mut self) {
         (self.translatable, self.translating, self.speakable) = (None, None, None);
+        self.passage = None;
     }
 }

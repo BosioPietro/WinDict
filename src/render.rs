@@ -32,6 +32,7 @@ use windows_numerics::{Matrix3x2, Vector2};
 
 use crate::dictionary::{self, percent_encode, Definition};
 use crate::dicts;
+use crate::gloss::Gloss;
 use crate::i18n::{fill, tr};
 use crate::lang::LangCode;
 use crate::theme::{to_d2d, Theme};
@@ -525,6 +526,9 @@ pub enum Body<'a> {
         suggestion: Option<&'a str>,
     },
     Translation(TranslationCard<'a>),
+    /// A passage too long to look up, its uncommon words underlined, each
+    /// a link to its definition.
+    Gloss(&'a Gloss),
 }
 
 /// Where the caret goes in a laid-out text box, in DIPs.

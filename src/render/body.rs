@@ -25,6 +25,7 @@ impl Renderer {
                 self.layout_sources(&mut out, def, width)?;
             }
             Body::Translation(card) => self.layout_translation(&mut out, card, width)?,
+            Body::Gloss(gloss) => self.layout_gloss(&mut out, gloss, width)?,
         }
         Ok(Layout {
             items: out.items,
@@ -84,6 +85,46 @@ impl Renderer {
             let (_, h) = out.text_with_accents(line, 0.0, Ink::Secondary, vec![range]);
             out.y += h;
         }
+        Ok(())
+    }
+
+    /// The passage, its uncommon words underlined like synonyms, then how
+    /// to look them up, or that there are none.
+    pub(super) fn layout_gloss(&self, out: &mut Stack, gloss: &Gloss, width: f32) -> Result<()> {
+        let text = &gloss.text;
+        let passage = self.text(text, &self.formats.body, width)?;
+        // DirectWrite counts UTF-16 code units.
+        let utf16 = |end: usize| text[..end].encode_utf16().count() as u32;
+        let mut ranges = Vec::new();
+        for word in &gloss.words {
+            let start = utf16(word.start);
+            let range = DWRITE_TEXT_RANGE {
+                startPosition: start,
+                length: utf16(word.end) - start,
+            };
+            unsafe {
+                let _ = passage.SetUnderline(true, range);
+            }
+            // One rectangle per line, should it break across two.
+            for r in hit_rects(&passage, range) {
+                out.links.push(Link {
+                    x: r.left - 2.0,
+                    y: out.y + r.top,
+                    width: r.width + 4.0,
+                    height: r.height,
+                    target: Target::Word(text[word.clone()].to_string()),
+                });
+            }
+            ranges.push(range);
+        }
+        let (_, h) = out.text_with_accents(passage, 0.0, Ink::Primary, ranges);
+        out.y += h + 10.0;
+        let hint = match gloss.words.is_empty() {
+            true => tr().gloss_none,
+            false => tr().gloss_hint,
+        };
+        let (_, h) = out.text(self.text(hint, &self.formats.footer, width)?, 0.0, Ink::Tertiary);
+        out.y += h;
         Ok(())
     }
 

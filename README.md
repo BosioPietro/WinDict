@@ -55,6 +55,7 @@ theme and accent color.
 - **Translations of a word, a phrase or a whole passage with Alt+T, between 22 languages**
 - **Dictionaries in English, Spanish, French, German, Italian and Portuguese that work offline**
 - **Shows above Start and Search, once installed**
+- **Alt+D on a whole passage underlines its uncommon words, each a click or a Tab away from its definition**
 - Inflected forms are looked up by their base word ("ran" shows "run")
 - Similar and opposite words, each a click away
 - Pronunciation in the word's own language, with Windows' own voices
@@ -77,6 +78,15 @@ Under each part of speech the card lists similar words and, where there are
 any, opposite ones ("good": "bad"). Clicking one opens its definition in the
 same card. To go back, use the arrow next to the word, Backspace, Alt+← or the
 mouse's back button.
+
+Select a whole passage instead (up to 500 characters) and **Alt+D** glosses
+it: the card shows the passage with its uncommon words underlined. Click one,
+or move to it with **Tab** and press Enter, to open its definition in the same
+card; Back comes back to the passage. WinDict tells the passage's language
+from its words, in any of the 22 it translates, using a list of each one's
+common words built into the executable. Names, numbers and words in capitals
+are left alone. The translate button translates the whole passage, and
+**Ctrl+Enter** puts the translation in place of the selection.
 
 The speaker button after the word says it out loud, in the word's own
 language, with a voice Windows has for it. It shows only when there's one:
@@ -130,12 +140,13 @@ wd serendipity                   # or: wd define serendipity
 wd translate good morning        # or: wd t good morning
 wd t buongiorno --to German
 Get-Clipboard | wd t
+Get-Clipboard | wd gloss         # or: wd g, with --lang to give the language
 ```
 
 It goes by WinDict's settings (dictionaries, languages, what's shown, the
 online dictionary), and what's given on the command line goes before them:
 `--lang`, `--senses`, `--synonyms` and `--[no-]examples` when looking up,
-`--from` and `--to` when translating (a code like `de`, or a name like
+`--from` and `--to` when translating, `--lang` when glossing (a code like `de`, or a name like
 `German`), and `--online` or `--offline` for both. `wd help` lists them all.
 It exits with 0 for an answer, 1 for none, and 2 for a command it couldn't
 make sense of.
@@ -311,5 +322,7 @@ cargo build --release --features setup --bin windict-setup   # target\release\wi
   [wiktextract](https://kaikki.org/ptwiktionary/) (CC BY-SA 4.0).
 - Translations: Google Translate's public web endpoint, which is unofficial
   and may change, falling back to [MyMemory](https://mymemory.translated.net/).
+- Common words, for glossing: [wordfreq](https://github.com/rspeer/wordfreq)
+  by Robyn Speer (CC BY-SA 4.0; see `data/LICENSE-wordfreq.txt`).
 
 WinDict is [MIT licensed](LICENSE).

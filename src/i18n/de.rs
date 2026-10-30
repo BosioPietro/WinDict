@@ -38,7 +38,7 @@ pub const DE: Strings = Strings {
 
     // The card: messages.
     too_long: "Das ist zu viel Text",
-    too_long_detail: "Markieren Sie ein Wort oder eine kurze Wendung.",
+    too_long_detail: "Markieren Sie einen kürzeren Abschnitt, eine Wendung oder ein einzelnes Wort.",
     nothing_selected: "Nichts markiert",
     nothing_selected_detail: "Markieren Sie in einer App ein Wort und drücken Sie {hotkey}.",
     not_found: "Keine Definition gefunden",
@@ -46,6 +46,12 @@ pub const DE: Strings = Strings {
     not_found_check_spelling: "Dieses Wort steht nicht im Wörterbuch. Stimmt die Schreibweise?",
     lookup_failed: "Nachschlagen fehlgeschlagen",
     did_you_mean: "Meinten Sie {word}?",
+
+    // The card: a passage, its uncommon words underlined.
+    gloss_hint: "Klicken Sie auf ein unterstrichenes Wort oder wählen Sie es mit der Tab-Taste aus, um es nachzuschlagen.",
+    gloss_none: "Keine seltenen Wörter gefunden.",
+    gloss_unknown: "Welche Sprache ist das?",
+    gloss_unknown_detail: "WinDict erkennt die Sprache nicht und kann daher keine seltenen Wörter heraussuchen. Markieren Sie stattdessen ein einzelnes Wort oder eine kurze Wendung.",
 
     // The card: the search box.
     search_placeholder: "Wort zum Nachschlagen eingeben",
@@ -248,10 +254,11 @@ pub const DE: Strings = Strings {
         "Verwendung:\n",
         "  wd [define] <wort> [optionen]    Ein Wort oder eine Wendung nachschlagen\n",
         "  wd translate <text> [optionen]   Ein Wort, einen Satz oder Absatz übersetzen\n",
+        "  wd gloss <text> [optionen]       Seltene Wörter in einem Absatz heraussuchen\n",
         "  wd help                          Diese Hilfe anzeigen\n",
         "\n",
-        "define und translate lassen sich mit d und t abkürzen. Ohne Text wird\n",
-        "die Eingabe aus der Pipeline gelesen, etwa: Get-Clipboard | wd t\n",
+        "define, translate und gloss lassen sich mit d, t und g abkürzen. Ohne\n",
+        "Text wird die Eingabe aus der Pipeline gelesen, etwa: Get-Clipboard | wd t\n",
         "Nach -- ist alles Text, auch help oder -5: wd -- help\n",
         "\n",
         "Nachschlagen:\n",
@@ -265,7 +272,10 @@ pub const DE: Strings = Strings {
         "  -f, --from <sprache>    Die Sprache des Textes, etwa en oder English\n",
         "  -t, --to <sprache>      Die Zielsprache\n",
         "\n",
-        "Für beides:\n",
+        "Glossieren:\n",
+        "  -l, --lang <sprache>    Die Sprache des Textes, etwa it oder Italiano\n",
+        "\n",
+        "Für alle Befehle:\n",
         "      --online            Online-Wörterbücher und -Übersetzer verwenden\n",
         "      --offline           Nur die Wörterbücher auf diesem PC verwenden\n",
         "  -V, --version           Die Version anzeigen\n",
@@ -282,6 +292,9 @@ pub const DE: Strings = Strings {
     cli_no_word: "Geben Sie ein Wort zum Nachschlagen an.",
     cli_no_text: "Geben Sie einen Text zum Übersetzen an.",
     cli_translate_too_long: "Geben Sie einen kürzeren Abschnitt an.",
+    cli_no_passage: "Geben Sie einen Abschnitt an, in dem seltene Wörter gesucht werden sollen.",
+    cli_gloss_too_long: "Geben Sie einen kürzeren Abschnitt an.",
+    cli_gloss_unknown_detail: "Geben Sie die Sprache mit --lang an.",
     cli_translate_offline_detail: "Schalten Sie in den Einstellungen das Online-Wörterbuch ein oder verwenden Sie --online.",
     cli_unknown_language: "\u{201E}{language}\u{201C} ist keine Sprache, die WinDict übersetzt.",
     cli_guessed_direction: "Übersetzt von {from} nach {to}; mit --from oder --to legen Sie die Richtung fest.",

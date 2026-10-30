@@ -2,12 +2,14 @@
 //!
 //! This file holds the state, the hotkey, the timers and the dismissal of the
 //! card; the rest of `impl App` is split by flow into the submodules:
-//! `search`, `scanning`, `lookup`, `translating`, `links`, `pinning`, `zooming`,
+//! `search`, `scanning`, `lookup`, `glossing`, `translating`, `links`, `pinning`,
+//! `zooming`,
 //! `tray_menu`, `prefs`, `updating` and `onboarding`.
 //! `procs` has the window procedures, `edit` and `picking` the pure text and
 //! list logic.
 
 pub(crate) mod edit;
+mod glossing;
 mod links;
 mod lookup;
 mod onboarding;
@@ -70,8 +72,8 @@ use procs::{
 };
 use recent::Recent;
 use state::{
-    Captured, Card, Corrected, Event, Events, Installing, LanguagePair, Languages, Looked, Place,
-    Query, Search, Selected, Translatable, Translated, Translating, TranslationKey,
+    Captured, Card, Corrected, Event, Events, Glossed, Installing, LanguagePair, Languages, Looked,
+    Passage, Place, Query, Search, Selected, Translatable, Translated, Translating, TranslationKey,
 };
 
 const MAIN_CLASS: PCWSTR = w!("WinDict.Main");
@@ -842,6 +844,7 @@ impl App {
                 // The card waiting on it may be pinned.
                 Event::Looked(looked) => self.with_request(looked.id, |app| app.on_result(looked)),
                 Event::Corrected(c) => self.with_request(c.id, |app| app.on_corrected(c)),
+                Event::Glossed(glossed) => self.on_glossed(glossed),
                 Event::Words(id, words) => self.on_words(id, words),
                 Event::Scanned(id, result) => self.on_scanned(id, result),
                 Event::Installing(language, percent) => self.on_installing(language, percent),
@@ -898,6 +901,7 @@ impl App {
         self.card.current = None;
         self.card.search = None;
         self.card.history.clear();
+        self.card.passage = None;
         self.card.translating = None;
         self.sync_back_keys();
         let (text, anchor) = match captured.selection {
@@ -910,10 +914,11 @@ impl App {
         let word = match dictionary::normalize(&text) {
             Ok(word) => word,
             Err(NormalizeError::TooLong) => {
-                return self.show_message(anchor, tr().too_long, tr().too_long_detail, true);
+                return self.gloss_selection(&text, anchor, in_place, None)
             }
             Err(NormalizeError::Empty) => return self.open_search(Shortcut::Lookup, anchor),
         };
+        self.card.gloss_missing = word.contains(' ').then(|| word.clone());
         let query = Query {
             word,
             language: None,

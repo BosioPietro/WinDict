@@ -1,0 +1,27 @@
+The lists of common words that glossing a passage goes by, in
+data/frequency.bin, are taken from wordfreq 3.1.1 by Robyn Speer
+(https://github.com/rspeer/wordfreq; Robyn Speer. (2022). rspeer/wordfreq:
+v3.0 (v3.0.2). Zenodo. https://doi.org/10.5281/zenodo.7199437).
+
+wordfreq's data is available under the Creative Commons Attribution-ShareAlike
+4.0 International License (https://creativecommons.org/licenses/by-sa/4.0/),
+and so are the lists taken from it.
+
+It is built from:
+
+- Google Books Ngrams (http://books.google.com/ngrams) and Google Books
+  Syntactic Ngrams;
+- the Leeds Internet Corpus, from the University of Leeds Centre for
+  Translation Studies (http://corpus.leeds.ac.uk/list.html);
+- Wikipedia, the free encyclopedia (http://www.wikipedia.org);
+- ParaCrawl, a multilingual Web crawl (https://paracrawl.eu);
+- OPUS OpenSubtitles 2018 (http://opus.nlpl.eu/OpenSubtitles.php), whose data
+  originates from the OpenSubtitles project (http://www.opensubtitles.org/);
+- the SUBTLEX word lists SUBTLEX-US, SUBTLEX-UK, SUBTLEX-CH, SUBTLEX-DE and
+  SUBTLEX-NL, created by Marc Brysbaert et al. and freely available at
+  http://crr.ugent.be/programs-data/subtitle-frequencies;
+- word counts from the streaming Twitter API.
+
+Changes: each language's list was cut down to its commonest words, without
+those with digits, and converted into WinDict's format by
+tools/build_frequency.py.

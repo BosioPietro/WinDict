@@ -8,6 +8,8 @@
 //! - `app`: the hotkey → selection → lookup → card flow, the tray menu and
 //!   settings, and the window procedures that feed them.
 //! - `selection`: reads the selected text (UI Automation, else the clipboard).
+//! - `gloss`: what of a passage too long to look up is uncommon, by lists
+//!   of each language's commonest words.
 //! - `dictionary`: entries as the card shows them; `offline` (the bundled
 //!   WordNet) and `online` (Free Dictionary API, Wiktionary, and each
 //!   language's own Wiktionary, through `kaikki` and `wikizionario`, over
@@ -40,6 +42,7 @@ mod cli;
 mod config;
 mod dictionary;
 mod dicts;
+mod gloss;
 mod hotkey;
 mod http;
 mod i18n;

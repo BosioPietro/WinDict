@@ -1,6 +1,7 @@
-//! `wd`, WinDict on the command line: `wd define` looks a word up and
-//! `wd translate` translates text, the way the card does, and prints what
-//! the card would show. They go by WinDict's settings, and what's given on
+//! `wd`, WinDict on the command line: `wd define` looks a word up,
+//! `wd translate` translates text and `wd gloss` picks out the uncommon
+//! words of a passage, the way the card does, and prints what the card
+//! would show. They go by WinDict's settings, and what's given on
 //! the command line goes before them.
 //!
 //! Answers go to stdout, styled and wrapped to the window when it's a
@@ -9,6 +10,7 @@
 //! the command line can't be made sense of.
 
 use std::io::{self, IsTerminal, Read, StdoutLock, Write};
+use std::ops::Range;
 use std::process::ExitCode;
 
 use windows::Win32::Foundation::HANDLE;
@@ -25,7 +27,7 @@ use crate::i18n::{self, fill, tr};
 use crate::lang::LangCode;
 use crate::render::capitalize;
 use crate::translate::{self, Direction, Translation};
-use crate::{dicts, offline, online};
+use crate::{dicts, gloss, offline, online};
 
 /// Exit codes, besides success.
 const NO_ANSWER: u8 = 1;
@@ -60,7 +62,8 @@ pub fn run() -> ExitCode {
         Err(e) => return usage_error(&e),
     };
     // Said only when they're gone by.
-    if let (Some(e), Command::Define | Command::Translate) = (&config_error, args.command) {
+    let answers = matches!(args.command, Command::Define | Command::Translate | Command::Gloss);
+    if let (Some(e), true) = (&config_error, answers) {
         message(tr().settings_not_loaded, e);
     }
     let mut out = Printer::new();
@@ -72,6 +75,7 @@ pub fn run() -> ExitCode {
         }
         Command::Define => define(&args, &config, &mut out),
         Command::Translate => translate_text(&args, &config, &mut out),
+        Command::Gloss => gloss_text(&args, &config, &mut out),
     }
 }
 
@@ -79,6 +83,7 @@ pub fn run() -> ExitCode {
 enum Command {
     Define,
     Translate,
+    Gloss,
     Help,
     Version,
 }
@@ -90,7 +95,8 @@ struct Args {
     command: Command,
     /// What's to be looked up or translated, a word to an argument.
     text: Vec<String>,
-    /// `--lang`: only the definition in this language.
+    /// `--lang`: only the definition in this language, or the language
+    /// the passage to gloss is in.
     language: Option<String>,
     /// `--from` and `--to`: which way to translate.
     from: Option<String>,
@@ -108,6 +114,7 @@ fn parse(given: Vec<String>) -> Result<Args, String> {
     let (command, rest) = match given.first().map(String::as_str) {
         Some("define" | "d") => (Command::Define, &given[1..]),
         Some("translate" | "t") => (Command::Translate, &given[1..]),
+        Some("gloss" | "g") => (Command::Gloss, &given[1..]),
         Some("help") => (Command::Help, &given[1..]),
         _ => (Command::Define, &given[..]),
     };
@@ -187,6 +194,7 @@ fn parse(given: Vec<String>) -> Result<Args, String> {
             (Command::Define, "--no-examples") => args.examples = Some(false),
             (Command::Translate, "-f" | "--from") => args.from = Some(value()?),
             (Command::Translate, "-t" | "--to") => args.to = Some(value()?),
+            (Command::Gloss, "-l" | "--lang") => args.language = Some(value()?),
             _ => return Err(fill(tr().cli_unknown_option, &[("option", &name)])),
         }
     }
@@ -344,6 +352,64 @@ fn translate_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
         }
         Err(e) => failure(tr().translate_failed, &e),
     }
+}
+
+/// Picks out the uncommon words of the passage, by the language it's in,
+/// as the card does, and prints it with them marked, then what each of
+/// them means: offline, and then online, all at once.
+fn gloss_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
+    let text = match translate::passage(&text(&args.text)) {
+        Ok(text) => text,
+        Err(NormalizeError::Empty) => return usage_error(tr().cli_no_passage),
+        Err(NormalizeError::TooLong) => return failure(tr().too_long, tr().cli_gloss_too_long),
+    };
+    // Every language WinDict translates has its list of common words.
+    let language = match args.language.as_deref().map(translation_language).transpose() {
+        Ok(language) => language,
+        Err(e) => return usage_error(&e),
+    };
+    load_dictionaries(config);
+    let Some(gloss) = gloss::with_dictionaries(&text, language.as_ref(), &config.languages) else {
+        return failure(tr().gloss_unknown, tr().cli_gloss_unknown_detail);
+    };
+    // Each word once, as it's first written.
+    let mut words: Vec<&str> = Vec::new();
+    for word in gloss.words() {
+        if !words.iter().any(|w| w.to_lowercase() == word.to_lowercase()) {
+            words.push(word);
+        }
+    }
+    let brief = Detail {
+        senses: 1,
+        synonyms: 0,
+        examples: false,
+    };
+    let language = gloss.lookup_language();
+    let local = |word: &str| {
+        let word = dictionary::normalize(word).ok()?;
+        offline::lookup(&word, brief)?.only(&language)
+    };
+    let mut found: Vec<Option<Definition>> = words.iter().map(|w| local(w)).collect();
+    if args.online.unwrap_or(config.online_lookup) && found.iter().any(Option::is_none) {
+        let _waiting = Waiting::show(tr().looking_up);
+        let languages = std::slice::from_ref(&language);
+        std::thread::scope(|scope| {
+            let lookups: Vec<_> = (words.iter().zip(&found))
+                .map(|(word, def)| {
+                    let word = dictionary::normalize(word).ok().filter(|_| def.is_none())?;
+                    Some(scope.spawn(move || online::lookup(&word, brief, languages)))
+                })
+                .collect();
+            for (def, lookup) in found.iter_mut().zip(lookups) {
+                if let Some(Ok(Lookup::Found(online))) = lookup.map(|l| l.join()) {
+                    *def = online.only(&language);
+                }
+            }
+        });
+    }
+    let glossary: Vec<(&str, Option<Definition>)> = words.into_iter().zip(found).collect();
+    out.gloss(&gloss, &glossary);
+    ExitCode::SUCCESS
 }
 
 /// Which way to translate `text`, which the dictionary has as `def`, if
@@ -544,6 +610,8 @@ enum Style {
     Accent,
     /// Examples.
     Quote,
+    /// A passage's uncommon words.
+    Marked,
 }
 
 impl Style {
@@ -555,6 +623,7 @@ impl Style {
             Style::Faint => "2",
             Style::Accent => "36",
             Style::Quote => "2;3",
+            Style::Marked => "4;36",
         }
     }
 }
@@ -723,6 +792,37 @@ impl Printer {
         self.source(source, url.as_deref());
     }
 
+    /// The language of the passage, the passage with its uncommon words
+    /// marked, then each of them with its first sense, under the base form
+    /// it's of, when it's another.
+    fn gloss(&mut self, gloss: &gloss::Gloss, glossary: &[(&str, Option<Definition>)]) {
+        self.text(&[(Style::Faint, &translate::name(&gloss.language))]);
+        let columns = self.columns.max(20);
+        let passage = mark(&gloss.text, &gloss.words, columns, self.styled);
+        let _ = writeln!(self.out, "{passage}");
+        self.blank();
+        if glossary.is_empty() {
+            self.text(&[(Style::Faint, tr().gloss_none)]);
+            return;
+        }
+        let widest = glossary.iter().map(|(w, _)| w.chars().count()).max();
+        let indent = 2 + widest.unwrap_or(0).min(MAX_TERM_WIDTH) + 2;
+        for (word, def) in glossary {
+            let mut spans = Vec::new();
+            let sense = def.as_ref().and_then(|def| {
+                if def.word.to_lowercase() != word.to_lowercase() {
+                    spans.push((Style::Faint, def.word.as_str()));
+                }
+                Some(def.meanings.first()?.senses.first()?.text.as_str())
+            });
+            match sense {
+                Some(sense) => spans.push((Style::Plain, sense)),
+                None => spans = vec![(Style::Faint, tr().not_found)],
+            }
+            self.line(2, (Style::Strong, word), indent, &spans);
+        }
+    }
+
     /// Where the answer comes from, and its page there, if it has one.
     fn source(&mut self, name: &str, url: Option<&str>) {
         let mut spans = vec![(Style::Faint, name)];
@@ -809,6 +909,39 @@ fn wrap(
     out
 }
 
+/// `text`, its words one space apart, as a paragraph of lines at most
+/// `columns` wide, with the stretches `marked` in it styled as such.
+fn mark(text: &str, marked: &[Range<usize>], columns: usize, styled: bool) -> String {
+    let mut out = String::new();
+    let (mut start, mut column) = (0, 0);
+    for word in text.split(' ') {
+        let end = start + word.len();
+        let width = word.chars().count();
+        if column > 0 && column + 1 + width > columns {
+            out.push('\n');
+            column = 0;
+        } else if column > 0 {
+            out.push(' ');
+            column += 1;
+        }
+        // A word may be marked only in part ("l'ornitorinco").
+        let mut at = start;
+        for range in marked.iter().filter(|r| r.start < end && r.end > start) {
+            let (from, to) = (range.start.max(start), range.end.min(end));
+            out.push_str(&text[at..from]);
+            match styled {
+                true => out.push_str(&format!("\x1b[{}m{}\x1b[0m", Style::Marked.sgr(), &text[from..to])),
+                false => out.push_str(&text[from..to]),
+            }
+            at = to;
+        }
+        out.push_str(&text[at..end]);
+        column += width;
+        start = end + 1;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -847,6 +980,11 @@ mod tests {
         assert_eq!(args("-V").unwrap().command, Command::Version);
         // After "--", and "-" alone, it's text.
         assert_eq!(args("t -- -5 -h").unwrap().text, ["-5", "-h"]);
+        let gloss = args("g the obsequious clerk -l en --offline").unwrap();
+        assert_eq!(gloss.command, Command::Gloss);
+        assert_eq!(gloss.text, ["the", "obsequious", "clerk"]);
+        assert_eq!(gloss.language.as_deref(), Some("en"));
+        assert_eq!(gloss.online, Some(false));
     }
 
     #[test]
@@ -854,6 +992,7 @@ mod tests {
         // Each command's options are its own.
         assert!(args("define cat --to it").is_err());
         assert!(args("translate cat --lang it").is_err());
+        assert!(args("gloss cat --to it").is_err());
         assert!(args("cat --frobnicate").is_err());
         assert!(args("cat -n").is_err());
         assert!(args("cat -n many").is_err());
@@ -865,6 +1004,17 @@ mod tests {
     fn help_and_version_go_before_the_rest() {
         assert_eq!(args("help --lang it").unwrap().command, Command::Help);
         assert_eq!(args("t -V --lang it").unwrap().command, Command::Version);
+    }
+
+    #[test]
+    fn marks_words_and_wraps() {
+        let text = "the obsequious clerk l'ornitorinco";
+        assert_eq!(mark(text, &[4..14], 80, false), text);
+        assert_eq!(
+            mark(text, &[4..14, 23..34], 80, true),
+            "the \x1b[4;36mobsequious\x1b[0m clerk l'\x1b[4;36mornitorinco\x1b[0m"
+        );
+        assert_eq!(mark(text, &[], 15, false), "the obsequious\nclerk\nl'ornitorinco");
     }
 
     #[test]

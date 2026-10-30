@@ -90,7 +90,7 @@ strings! {
 
     // The card: messages.
     too_long: "That\u{2019}s a lot of text",
-    too_long_detail: "Select a single word or a short phrase.",
+    too_long_detail: "Select a shorter passage, a phrase or a single word.",
     nothing_selected: "Nothing selected",
     /// `{hotkey}`.
     nothing_selected_detail: "Select a word in any app, then press {hotkey}.",
@@ -100,6 +100,12 @@ strings! {
     lookup_failed: "Couldn\u{2019}t look that up",
     /// `{word}`, which is the link.
     did_you_mean: "Did you mean {word}?",
+
+    // The card: a passage, its uncommon words underlined.
+    gloss_hint: "Click an underlined word, or Tab to it, to look it up.",
+    gloss_none: "No uncommon words here.",
+    gloss_unknown: "Which language is this?",
+    gloss_unknown_detail: "WinDict can\u{2019}t tell, so it can\u{2019}t say which words are uncommon. Select a single word or a short phrase to look it up.",
 
     // The card: the search box.
     search_placeholder: "Type a word to look it up",
@@ -341,10 +347,11 @@ strings! {
         "Usage:\n",
         "  wd [define] <word> [options]    Look up a word or a short phrase\n",
         "  wd translate <text> [options]   Translate a word, a phrase or a passage\n",
+        "  wd gloss <text> [options]       Pick out a passage\u{2019}s uncommon words\n",
         "  wd help                         Show this\n",
         "\n",
-        "define and translate can be shortened to d and t. With no text, it\u{2019}s\n",
-        "read from what\u{2019}s piped in, as in: Get-Clipboard | wd t\n",
+        "define, translate and gloss can be shortened to d, t and g. With no text,\n",
+        "it\u{2019}s read from what\u{2019}s piped in, as in: Get-Clipboard | wd t\n",
         "After --, it\u{2019}s all text, even a word like help or -5: wd -- help\n",
         "\n",
         "Looking up:\n",
@@ -358,7 +365,10 @@ strings! {
         "  -f, --from <language>   The language it\u{2019}s in, like en or English\n",
         "  -t, --to <language>     The language to translate it into\n",
         "\n",
-        "Both:\n",
+        "Glossing:\n",
+        "  -l, --lang <language>   The language it\u{2019}s in, like it or Italian\n",
+        "\n",
+        "All:\n",
         "      --online            Use the online dictionaries and translators\n",
         "      --offline           Use only the dictionaries on this PC\n",
         "  -V, --version           Show the version\n",
@@ -379,6 +389,9 @@ strings! {
     cli_no_word: "Give a word to look up.",
     cli_no_text: "Give some text to translate.",
     cli_translate_too_long: "Give a shorter passage to translate.",
+    cli_no_passage: "Give a passage to gloss.",
+    cli_gloss_too_long: "Give a shorter passage to gloss.",
+    cli_gloss_unknown_detail: "Give the language it\u{2019}s in with --lang.",
     cli_translate_offline_detail: "Turn on the online dictionary in Settings, or pass --online.",
     /// `{language}`, as it was given.
     cli_unknown_language: "\u{201C}{language}\u{201D} isn\u{2019}t a language WinDict translates.",

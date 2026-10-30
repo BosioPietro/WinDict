@@ -38,7 +38,7 @@ pub const PT: Strings = Strings {
 
     // The card: messages.
     too_long: "É texto demais",
-    too_long_detail: "Selecione uma só palavra ou uma frase curta.",
+    too_long_detail: "Selecione um trecho mais curto, uma frase ou uma só palavra.",
     nothing_selected: "Nada selecionado",
     nothing_selected_detail: "Selecione uma palavra num app e pressione {hotkey}.",
     not_found: "Nenhuma definição encontrada",
@@ -46,6 +46,12 @@ pub const PT: Strings = Strings {
     not_found_check_spelling: "Esta palavra não está no dicionário. Confira a grafia.",
     lookup_failed: "Não foi possível pesquisar",
     did_you_mean: "Você quis dizer {word}?",
+
+    // The card: a passage, its uncommon words underlined.
+    gloss_hint: "Clique numa palavra sublinhada, ou vá até ela com Tab, para pesquisá-la.",
+    gloss_none: "Não há palavras incomuns aqui.",
+    gloss_unknown: "Que idioma é esse?",
+    gloss_unknown_detail: "O WinDict não conseguiu identificar o idioma, então não sabe dizer quais palavras são incomuns. Selecione uma só palavra ou uma frase curta para pesquisar.",
 
     // The card: the search box.
     search_placeholder: "Digite uma palavra para pesquisar",
@@ -247,10 +253,11 @@ pub const PT: Strings = Strings {
         "Uso:\n",
         "  wd [define] <palavra> [opções]   Pesquisa uma palavra ou uma frase curta\n",
         "  wd translate <texto> [opções]    Traduz uma palavra, uma frase ou um trecho\n",
+        "  wd gloss <texto> [opções]        Destaca as palavras incomuns de um trecho\n",
         "  wd help                          Mostra esta ajuda\n",
         "\n",
-        "define e translate podem ser abreviados como d e t. Sem texto, ele é\n",
-        "lido da entrada padrão, como em: Get-Clipboard | wd t\n",
+        "define, translate e gloss podem ser abreviados como d, t e g. Sem texto,\n",
+        "ele é lido da entrada padrão, como em: Get-Clipboard | wd t\n",
         "Depois de --, tudo é texto, até help ou -5: wd -- help\n",
         "\n",
         "Pesquisa:\n",
@@ -264,7 +271,10 @@ pub const PT: Strings = Strings {
         "  -f, --from <idioma>     O idioma do texto, como en ou English\n",
         "  -t, --to <idioma>       O idioma para o qual traduzir\n",
         "\n",
-        "Ambos:\n",
+        "Destaque:\n",
+        "  -l, --lang <idioma>     O idioma do texto, como it ou Italiano\n",
+        "\n",
+        "Todos:\n",
         "      --online            Usa os dicionários e tradutores online\n",
         "      --offline           Usa só os dicionários deste PC\n",
         "  -V, --version           Mostra a versão\n",
@@ -281,6 +291,9 @@ pub const PT: Strings = Strings {
     cli_no_word: "Informe uma palavra para pesquisar.",
     cli_no_text: "Informe um texto para traduzir.",
     cli_translate_too_long: "Informe um trecho mais curto para traduzir.",
+    cli_no_passage: "Informe um trecho para destacar as palavras incomuns.",
+    cli_gloss_too_long: "Informe um trecho mais curto para destacar as palavras incomuns.",
+    cli_gloss_unknown_detail: "Informe o idioma do texto com --lang.",
     cli_translate_offline_detail: "Ative o dicionário online nas Configurações, ou use --online.",
     cli_unknown_language: "\u{201C}{language}\u{201D} não é um idioma que o WinDict traduz.",
     cli_guessed_direction: "Traduzido de {from} para {to}; use --from ou --to para escolher.",
