@@ -476,130 +476,68 @@ pub fn run(
     i18n::set(config.ui_language);
     ui::set_motion(config.animated());
     autostart::sync();
+    let hwnd = unsafe { create_main_window()? };
+    let tray = Tray::new(hwnd, WM_APP_TRAY);
+    unsafe { accept_messages(hwnd) };
+    let _ = jumplist::set();
+
+    let mut app = App::new(config, hwnd, compositor, tray);
+    app.start(replacing, config_error);
+    APP.with(|a| *a.borrow_mut() = Some(app));
     unsafe {
-        let instance = HINSTANCE(GetModuleHandleW(None)?.0);
-        register_classes(instance)?;
-
-        // A hidden top-level window (not message-only: it must receive the
-        // TaskbarCreated broadcast).
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
-            MAIN_CLASS,
-            w!("WinDict"),
-            WS_POPUP,
-            0,
-            0,
-            0,
-            0,
-            None,
-            None,
-            Some(instance),
-            None,
-        )?;
-        MSG_HWND.set(hwnd);
-
-        let tray = Tray::new(hwnd, WM_APP_TRAY);
-        let taskbar_created = RegisterWindowMessageW(w!("TaskbarCreated"));
-        TASKBAR_CREATED.set(taskbar_created);
-        // Explorer runs without administrator rights: were WinDict running
-        // with them, Windows would keep the broadcast from it.
-        if taskbar_created != 0 {
-            let _ = ChangeWindowMessageFilterEx(hwnd, taskbar_created, MSGFLT_ALLOW, None);
-        }
-        // Nor the Jump List's tasks from a WinDict without UI access.
-        let _ = ChangeWindowMessageFilterEx(hwnd, WM_APP_TASK, MSGFLT_ALLOW, None);
-        let _ = jumplist::set();
-
-        let (tx, inbox) = channel();
-        let events = Events {
-            tx,
-            hwnd: hwnd.0 as isize,
-        };
-        let capture_thread = spawn_capture_thread(events.clone());
-
-        let mut app = App {
-            config,
-            hwnd,
-            compositor,
-            renderer: None,
-            card: Card::default(),
-            pinned: Vec::new(),
-            closing: Vec::new(),
-            scanning: None,
-            menu: None,
-            settings: None,
-            intro: None,
-            menu_closed_at: 0,
-            swallow_tray_release: false,
-            tray,
-            capture_thread,
-            inbox,
-            events,
-            requests: 0,
-            cache: Recent::new(CACHE_SIZE),
-            translations: Recent::new(TRANSLATION_CACHE_SIZE),
-            articles: Recent::new(ARTICLE_CACHE_SIZE),
-            pictures: Recent::new(PICTURE_CACHE_SIZE),
-            voices: None,
-            speaker: Speaker::default(),
-            card_keys: CardKeys::new(),
-            menu_keys: KeySet::new(MENU_KEYS),
-            zoom_wheel: 0,
-            installing: Vec::new(),
-            update: None,
-            updating: false,
-            hotkey_ok: false,
-            mouse_hook: None,
-            focus_hook: None,
-            keyboard_hook: None,
-        };
-        app.register_hotkeys();
-        let dictionary_error = app.load_dictionaries();
-        app.schedule_update_check(updating::FIRST_CHECK_MS);
-        // However the new version came: from the menu, the setup or WinGet.
-        let version = env!("CARGO_PKG_VERSION");
-        let updated = replacing.is_some() || app.config.version != version;
-        if app.config.version != version && config_error.is_none() {
-            app.save_setting(|config| config.version = version.into());
-        }
-        if let Some(replacing) = replacing {
-            std::thread::spawn(move || replacing.remove_old());
-        }
-        if let Some(e) = config_error {
-            app.tray.notify(tr().settings_not_loaded, &e);
-        } else if let Some(e) = dictionary_error {
-            app.tray.notify(tr().dictionary_not_loaded, &e);
-        } else if let Some(on) = app.config.ui_access_asked {
-            app.after_ui_access(on);
-        } else if updated {
-            app.tray.notify(
-                tr().updated,
-                &fill(
-                    tr().updated_detail,
-                    &[("version", &env!("CARGO_PKG_VERSION"))],
-                ),
-            );
-        } else if !app.config.onboarded {
-            app.start_onboarding();
-        }
-        APP.with(|a| *a.borrow_mut() = Some(app));
         if let Some(task) = task {
             let _ = PostMessageW(Some(hwnd), WM_APP_TASK, task_param(task), LPARAM(0));
         }
-
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
-
-        APP.with(|a| {
-            if let Some(mut app) = a.borrow_mut().take() {
-                app.tray.remove();
-            }
-        });
     }
+    APP.with(|a| {
+        if let Some(mut app) = a.borrow_mut().take() {
+            app.tray.remove();
+        }
+    });
     Ok(())
+}
+
+/// Registers the window classes and creates the main window: a hidden
+/// top-level one (not message-only: it must receive the TaskbarCreated
+/// broadcast).
+unsafe fn create_main_window() -> windows::core::Result<HWND> {
+    let instance = HINSTANCE(GetModuleHandleW(None)?.0);
+    register_classes(instance)?;
+    let hwnd = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        MAIN_CLASS,
+        w!("WinDict"),
+        WS_POPUP,
+        0,
+        0,
+        0,
+        0,
+        None,
+        None,
+        Some(instance),
+        None,
+    )?;
+    MSG_HWND.set(hwnd);
+    Ok(hwnd)
+}
+
+/// Lets the main window `hwnd` receive what's posted to it from processes
+/// with fewer rights: Explorer's TaskbarCreated, and the Jump List's tasks.
+unsafe fn accept_messages(hwnd: HWND) {
+    let taskbar_created = RegisterWindowMessageW(w!("TaskbarCreated"));
+    TASKBAR_CREATED.set(taskbar_created);
+    // Explorer runs without administrator rights: were WinDict running
+    // with them, Windows would keep the broadcast from it.
+    if taskbar_created != 0 {
+        let _ = ChangeWindowMessageFilterEx(hwnd, taskbar_created, MSGFLT_ALLOW, None);
+    }
+    // Nor the Jump List's tasks from a WinDict without UI access.
+    let _ = ChangeWindowMessageFilterEx(hwnd, WM_APP_TASK, MSGFLT_ALLOW, None);
 }
 
 /// Registers the window classes of the main, card, menu, settings and
@@ -695,6 +633,85 @@ fn app_busy() -> bool {
 }
 
 impl App {
+    /// The app for the main window `hwnd`, with nothing open yet, and the
+    /// thread that captures selections started.
+    fn new(config: Config, hwnd: HWND, compositor: Compositor, tray: Tray) -> App {
+        let (tx, inbox) = channel();
+        let events = Events {
+            tx,
+            hwnd: hwnd.0 as isize,
+        };
+        let capture_thread = spawn_capture_thread(events.clone());
+        App {
+            config,
+            hwnd,
+            compositor,
+            renderer: None,
+            card: Card::default(),
+            pinned: Vec::new(),
+            closing: Vec::new(),
+            scanning: None,
+            menu: None,
+            settings: None,
+            intro: None,
+            menu_closed_at: 0,
+            swallow_tray_release: false,
+            tray,
+            capture_thread,
+            inbox,
+            events,
+            requests: 0,
+            cache: Recent::new(CACHE_SIZE),
+            translations: Recent::new(TRANSLATION_CACHE_SIZE),
+            articles: Recent::new(ARTICLE_CACHE_SIZE),
+            pictures: Recent::new(PICTURE_CACHE_SIZE),
+            voices: None,
+            speaker: Speaker::default(),
+            card_keys: CardKeys::new(),
+            menu_keys: KeySet::new(MENU_KEYS),
+            zoom_wheel: 0,
+            installing: Vec::new(),
+            update: None,
+            updating: false,
+            hotkey_ok: false,
+            mouse_hook: None,
+            focus_hook: None,
+            keyboard_hook: None,
+        }
+    }
+
+    /// Takes the shortcuts, loads the dictionaries and tells the user what
+    /// they need to know as WinDict starts: that the settings, given as
+    /// `config_error`, or the dictionaries couldn't be read, how turning UI
+    /// access on went, that it was updated, or else the introduction, the
+    /// first time. Removes the version this one is `replacing`, if any.
+    fn start(&mut self, replacing: Option<Replacing>, config_error: Option<String>) {
+        self.register_hotkeys();
+        let dictionary_error = self.load_dictionaries();
+        self.schedule_update_check(updating::FIRST_CHECK_MS);
+        // However the new version came: from the menu, the setup or WinGet.
+        let version = env!("CARGO_PKG_VERSION");
+        let updated = replacing.is_some() || self.config.version != version;
+        if self.config.version != version && config_error.is_none() {
+            self.save_setting(|config| config.version = version.into());
+        }
+        if let Some(replacing) = replacing {
+            std::thread::spawn(move || replacing.remove_old());
+        }
+        if let Some(e) = config_error {
+            self.tray.notify(tr().settings_not_loaded, &e);
+        } else if let Some(e) = dictionary_error {
+            self.tray.notify(tr().dictionary_not_loaded, &e);
+        } else if let Some(on) = self.config.ui_access_asked {
+            self.after_ui_access(on);
+        } else if updated {
+            let detail = fill(tr().updated_detail, &[("version", &version)]);
+            self.tray.notify(tr().updated, &detail);
+        } else if !self.config.onboarded {
+            self.start_onboarding();
+        }
+    }
+
     /// The card, while it's showing.
     fn visible_popup(&self) -> Option<&Popup> {
         self.card.popup.as_ref().filter(|p| p.visible)
