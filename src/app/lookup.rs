@@ -22,7 +22,6 @@ impl App {
             language: query.language.clone(),
         };
         let online = self.cache.get(&online_key);
-        self.card.held = None;
         self.card.reading = None;
         self.ask_wikipedia(&query);
 
@@ -144,7 +143,7 @@ impl App {
             self.card.wiki = Wiki::Answered(found);
             return;
         }
-        self.card.wiki = Wiki::Asking;
+        self.card.wiki = Wiki::Asking(None);
         let (id, events) = (self.card.request, self.events.clone());
         std::thread::spawn(move || {
             let result = wikipedia::find(&titles);
@@ -161,14 +160,18 @@ impl App {
             return self.present(place, word, result);
         }
         match &self.card.wiki {
-            Wiki::Asking => {
+            Wiki::Asking(_) => {
                 let place = if loading {
                     place
                 } else {
                     self.present_body(place, word, None, Body::Loading { status: false });
                     Place::Same(Transition::Replace)
                 };
-                self.card.held = Some((place, word.to_string(), result.clone()));
+                self.card.wiki = Wiki::Asking(Some(Box::new(Held {
+                    place,
+                    word: word.to_string(),
+                    result: result.clone(),
+                })));
             }
             // A page of several articles doesn't stop a phrase being glossed.
             Wiki::Answered(Some(article))
@@ -189,16 +192,19 @@ impl App {
             article
         });
         let visible = self.visible_popup().is_some();
-        if found.id != self.card.request || !matches!(self.card.wiki, Wiki::Asking) {
+        if found.id != self.card.request {
             return;
         }
+        let Wiki::Asking(held) = &mut self.card.wiki else {
+            return;
+        };
+        let held = held.take();
         self.card.wiki = Wiki::Answered(answer.flatten());
         if !visible {
-            self.card.held = None;
             return;
         }
-        if let Some((place, word, result)) = self.card.held.take() {
-            return self.answer(place, &word, &result, true);
+        if let Some(held) = held {
+            return self.answer(held.place, &held.word, &held.result, true);
         }
         // The definition shown gains its button, unless it's been left.
         let shown = self.card.translating.is_none() && self.card.search.is_none();

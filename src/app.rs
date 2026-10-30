@@ -75,9 +75,9 @@ use procs::{
 };
 use recent::Recent;
 use state::{
-    Captured, Card, Corrected, Event, Events, Found, Glossed, Installing, LanguagePair, Languages,
-    Looked, Passage, Place, Query, Reading, Search, Selected, Titles, Translatable, Translated,
-    Translating, TranslationKey, Wiki,
+    Captured, Card, Corrected, Event, Events, Found, Glossed, Held, Installing, LanguagePair,
+    Languages, Looked, Passage, Place, Query, Reading, Search, Selected, Titles, Translatable,
+    Translated, Translating, TranslationKey, Wiki,
 };
 
 const MAIN_CLASS: PCWSTR = w!("WinDict.Main");

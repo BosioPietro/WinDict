@@ -68,13 +68,23 @@ pub(super) struct Found {
 }
 
 /// What Wikipedia has for the word the card shows.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(super) enum Wiki {
     /// It isn't asked: it's turned off, or there's nothing to ask.
     #[default]
     Off,
-    Asking,
+    /// It's being asked, holding the dictionaries' answer, if they had no
+    /// definition, as Wikipedia's goes first.
+    Asking(Option<Box<Held>>),
     Answered(Option<Rc<Article>>),
+}
+
+/// The answer to a word the dictionaries had no definition for, held while
+/// Wikipedia is asked: where it goes, the word, and the answer.
+pub(super) struct Held {
+    pub(super) place: Place,
+    pub(super) word: String,
+    pub(super) result: Lookup,
 }
 
 impl Wiki {
@@ -410,9 +420,6 @@ pub(super) struct Card {
     pub(super) written: Option<String>,
     /// What Wikipedia has for the word.
     pub(super) wiki: Wiki,
-    /// No definition was found: where the answer goes, the word, and the
-    /// answer, held while Wikipedia is asked, as its answer goes first.
-    pub(super) held: Option<(Place, String, Lookup)>,
     /// The definition the card shows, or the one the article it shows was
     /// opened from.
     pub(super) definition: Option<Definition>,
@@ -450,6 +457,9 @@ impl Card {
     pub(super) fn clear_content(&mut self) {
         (self.translatable, self.translating, self.speakable) = (None, None, None);
         self.passage = None;
-        (self.definition, self.reading, self.held) = (None, None, None);
+        (self.definition, self.reading) = (None, None);
+        if let Wiki::Asking(held) = &mut self.wiki {
+            *held = None;
+        }
     }
 }
