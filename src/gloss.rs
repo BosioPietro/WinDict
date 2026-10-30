@@ -323,6 +323,7 @@ impl<'a> List<'a> {
     /// spaces, are in it: the word, or the part of it a Korean particle
     /// isn't, or of one with apostrophes, the parts between them that
     /// aren't common.
+    // `vec![0..n]` is one part's range, not the numbers from 0 to n.
     #[allow(clippy::single_range_in_vec_init)]
     fn uncommon_word(
         &self,

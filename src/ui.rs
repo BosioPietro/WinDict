@@ -352,6 +352,8 @@ impl Morph {
     /// Shows `layout` on `text`, open if it has a caret, with what moves in
     /// it, `moving`, over it: if it's going from shut to open or back, it
     /// turns from the one into the other.
+    // The drawing context (animator, renderer, scale, theme) every builder
+    // in `ui` takes, plus the text and what it shows.
     #[allow(clippy::too_many_arguments)]
     pub fn show(
         &self,

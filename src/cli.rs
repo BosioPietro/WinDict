@@ -1060,6 +1060,7 @@ mod tests {
     }
 
     #[test]
+    // `&[4..14]` is one word's range, not the numbers from 4 to 14.
     #[allow(clippy::single_range_in_vec_init)]
     fn marks_words_and_wraps() {
         let text = "the obsequious clerk l'ornitorinco";
