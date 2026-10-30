@@ -95,14 +95,8 @@ impl App {
             return;
         }
         // The keys and hooks are for a card that closes on its own.
-        self.set_link_keys(false, false);
-        self.scroll_keys.set(self.hwnd, false);
-        self.translate_key.set(self.hwnd, false);
-        self.copy_key.set(self.hwnd, false);
-        self.replace_key.set(self.hwnd, false);
+        self.card_keys.release(self.hwnd);
         self.card.selected = None;
-        self.zoom_keys.set(self.hwnd, false);
-        self.back_keys.set(self.hwnd, false);
         self.remove_dismiss_hooks();
         for timer in [TIMER_AUTOHIDE, TIMER_COVERED] {
             win::kill_timer(self.hwnd, timer);

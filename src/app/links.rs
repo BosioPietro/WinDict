@@ -36,17 +36,14 @@ impl App {
         let replace = popup.is_some() && self.replacement().is_some();
         // Ctrl+plus and Ctrl+minus zoom any card but the search box.
         let zoom = visible && self.card.search.is_none();
-        self.set_link_keys(tab, enter);
-        self.scroll_keys.set(self.hwnd, scroll);
-        self.translate_key.set(self.hwnd, translate);
-        self.copy_key.set(self.hwnd, copy);
-        self.replace_key.set(self.hwnd, replace);
-        self.zoom_keys.set(self.hwnd, zoom);
-    }
-
-    pub(super) fn set_link_keys(&mut self, tab: bool, enter: bool) {
-        self.link_keys.set(self.hwnd, tab);
-        self.open_key.set(self.hwnd, enter);
+        let (keys, hwnd) = (&mut self.card_keys, self.hwnd);
+        keys.link.set(hwnd, tab);
+        keys.open.set(hwnd, enter);
+        keys.scroll.set(hwnd, scroll);
+        keys.translate.set(hwnd, translate);
+        keys.copy.set(hwnd, copy);
+        keys.replace.set(hwnd, replace);
+        keys.zoom.set(hwnd, zoom);
     }
 
     /// Tab or Shift+Tab: rings the next or previous link.

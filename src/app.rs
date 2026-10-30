@@ -187,6 +187,59 @@ impl KeySet {
         }
     }
 }
+
+/// The card's [`KeySet`]s, each registered only while it has a use for
+/// it, and otherwise left to the app underneath.
+struct CardKeys {
+    /// Backspace and Alt+Left.
+    back: KeySet,
+    /// Tab and Shift+Tab.
+    link: KeySet,
+    /// Enter.
+    open: KeySet,
+    /// Up and Down.
+    scroll: KeySet,
+    /// Ctrl+T.
+    translate: KeySet,
+    /// Ctrl+C.
+    copy: KeySet,
+    /// Ctrl+Enter.
+    replace: KeySet,
+    /// Ctrl+plus, Ctrl+minus and Ctrl+0.
+    zoom: KeySet,
+}
+
+impl CardKeys {
+    fn new() -> CardKeys {
+        CardKeys {
+            back: KeySet::new(BACK_KEYS),
+            link: KeySet::new(LINK_KEYS),
+            open: KeySet::new(OPEN_KEY),
+            scroll: KeySet::new(SCROLL_KEYS),
+            translate: KeySet::new(TRANSLATE_KEY),
+            copy: KeySet::new(COPY_KEY),
+            replace: KeySet::new(REPLACE_KEY),
+            zoom: KeySet::new(ZOOM_KEYS),
+        }
+    }
+
+    /// Unregisters them all: the card is gone, or pinned, and reads its
+    /// own keys.
+    fn release(&mut self, hwnd: HWND) {
+        for set in [
+            &mut self.back,
+            &mut self.link,
+            &mut self.open,
+            &mut self.scroll,
+            &mut self.translate,
+            &mut self.copy,
+            &mut self.replace,
+            &mut self.zoom,
+        ] {
+            set.set(hwnd, false);
+        }
+    }
+}
 const BACK_KEYS: Keys = &[
     (HOTKEY_BACK, MOD_NOREPEAT, VK_BACK),
     (
@@ -361,24 +414,9 @@ pub struct App {
     /// The voices installed, once a card has needed them, until it's gone.
     voices: Option<Voices>,
     speaker: Speaker,
-    /// Ctrl+T.
-    translate_key: KeySet,
-    /// Backspace and Alt+Left.
-    back_keys: KeySet,
-    /// Tab and Shift+Tab.
-    link_keys: KeySet,
-    /// Enter.
-    open_key: KeySet,
-    /// Up and Down.
-    scroll_keys: KeySet,
-    /// Ctrl+C.
-    copy_key: KeySet,
-    /// Ctrl+Enter.
-    replace_key: KeySet,
+    card_keys: CardKeys,
     /// The tray menu's arrows, Home, End, Enter and Space.
     menu_keys: KeySet,
-    /// Ctrl+plus, Ctrl+minus and Ctrl+0.
-    zoom_keys: KeySet,
     /// How far the wheel has turned with Ctrl held, towards the next step
     /// of zoom.
     zoom_wheel: i32,
@@ -504,15 +542,8 @@ pub fn run(
             pictures: Recent::new(PICTURE_CACHE_SIZE),
             voices: None,
             speaker: Speaker::default(),
-            translate_key: KeySet::new(TRANSLATE_KEY),
-            back_keys: KeySet::new(BACK_KEYS),
-            link_keys: KeySet::new(LINK_KEYS),
-            open_key: KeySet::new(OPEN_KEY),
-            scroll_keys: KeySet::new(SCROLL_KEYS),
-            copy_key: KeySet::new(COPY_KEY),
-            replace_key: KeySet::new(REPLACE_KEY),
+            card_keys: CardKeys::new(),
             menu_keys: KeySet::new(MENU_KEYS),
-            zoom_keys: KeySet::new(ZOOM_KEYS),
             zoom_wheel: 0,
             installing: Vec::new(),
             update: None,
@@ -834,7 +865,7 @@ impl App {
         self.card.to_translate = shortcut == Shortcut::Translate;
         self.card.selected = None;
         // The capture may press Ctrl+C itself, which is the app's to read.
-        self.copy_key.set(self.hwnd, false);
+        self.card_keys.copy.set(self.hwnd, false);
         self.card.capturing = true;
         unsafe {
             let _ = PostThreadMessageW(
@@ -1040,16 +1071,10 @@ impl App {
         }
         self.card.history.clear();
         self.card.translating = None;
-        // Not synced: a word looked up from a passage, or an article opened
-        // from a definition, still has somewhere to go back to, but the
-        // keys belong to the app underneath once the card is gone.
-        self.back_keys.set(self.hwnd, false);
-        self.set_link_keys(false, false);
-        self.scroll_keys.set(self.hwnd, false);
-        self.translate_key.set(self.hwnd, false);
-        self.copy_key.set(self.hwnd, false);
-        self.replace_key.set(self.hwnd, false);
-        self.zoom_keys.set(self.hwnd, false);
+        // Back included: a word looked up from a passage, or an article
+        // opened from a definition, still has somewhere to go back to, but
+        // the keys belong to the app underneath once the card is gone.
+        self.card_keys.release(self.hwnd);
         self.card.selected = None;
         self.remove_dismiss_hooks();
         self.dismiss_menu();

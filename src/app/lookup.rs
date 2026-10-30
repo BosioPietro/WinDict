@@ -663,6 +663,6 @@ impl App {
             .as_ref()
             .is_some_and(|t| t.pair.picking.is_some());
         let wanted = (self.has_word_behind() || self.has_definition_behind()) && !picking;
-        self.back_keys.set(self.hwnd, wanted);
+        self.card_keys.back.set(self.hwnd, wanted);
     }
 }
