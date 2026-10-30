@@ -172,7 +172,11 @@ impl Renderer {
             true => tr().gloss_none,
             false => tr().gloss_hint,
         };
-        let (_, h) = out.text(self.text(hint, &self.formats.footer, width)?, 0.0, Ink::Tertiary);
+        let (_, h) = out.text(
+            self.text(hint, &self.formats.footer, width)?,
+            0.0,
+            Ink::Tertiary,
+        );
         out.y += h;
         Ok(())
     }

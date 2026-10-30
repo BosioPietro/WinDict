@@ -552,7 +552,11 @@ impl App {
         };
         let language = match &self.card.current {
             Some(current) => current.language.clone(),
-            None => self.card.passage.as_ref().map(|p| p.gloss.lookup_language()),
+            None => self
+                .card
+                .passage
+                .as_ref()
+                .map(|p| p.gloss.lookup_language()),
         };
         let query = Query { word, language };
         if self.card.current.as_ref() == Some(&query) {

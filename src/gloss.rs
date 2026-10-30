@@ -84,7 +84,10 @@ pub fn gloss(
                 .filter(|(code, _)| candidates.contains(code))
                 .filter_map(|(code, packed)| Some((code, unpack(packed, Some(DETECT_BYTES))?)))
                 .collect();
-            let lists: Vec<List> = heads.iter().map(|(code, words)| List::new(code, words)).collect();
+            let lists: Vec<List> = heads
+                .iter()
+                .map(|(code, words)| List::new(code, words))
+                .collect();
             let found = detect(text, &lists, preferred)?.language;
             *candidates.iter().find(|code| **code == found)?
         }
@@ -257,7 +260,11 @@ impl<'a> List<'a> {
     }
 
     /// Where `text`'s uncommon words are.
-    fn uncommon(&self, text: &str, base: &dyn Fn(&str, &str) -> Option<String>) -> Vec<Range<usize>> {
+    fn uncommon(
+        &self,
+        text: &str,
+        base: &dyn Fn(&str, &str) -> Option<String>,
+    ) -> Vec<Range<usize>> {
         let mut found = Vec::new();
         for token in tokens(text) {
             if token.has_digits || self.is_name(text, &token) {
@@ -265,9 +272,11 @@ impl<'a> List<'a> {
             }
             let word = &text[token.range.clone()];
             match (self.language, script(word.chars().next().unwrap_or(' '))) {
-                ("ja" | "zh-CN", Script::Han | Script::Kana) => {
-                    found.extend(self.uncommon_cjk(word).into_iter().map(|r| shift(r, token.range.start)))
-                }
+                ("ja" | "zh-CN", Script::Han | Script::Kana) => found.extend(
+                    self.uncommon_cjk(word)
+                        .into_iter()
+                        .map(|r| shift(r, token.range.start)),
+                ),
                 _ => found.extend(
                     self.uncommon_word(word, base)
                         .into_iter()
@@ -290,7 +299,12 @@ impl<'a> List<'a> {
         if !first.is_uppercase() {
             return false;
         }
-        if word.chars().count() > 1 && word.chars().filter(|c| c.is_alphabetic()).all(char::is_uppercase) {
+        if word.chars().count() > 1
+            && word
+                .chars()
+                .filter(|c| c.is_alphabetic())
+                .all(char::is_uppercase)
+        {
             return true;
         }
         if self.language == "de" {
@@ -309,14 +323,22 @@ impl<'a> List<'a> {
     /// spaces, are in it: the word, or the part of it a Korean particle
     /// isn't, or of one with apostrophes, the parts between them that
     /// aren't common.
-    fn uncommon_word(&self, word: &str, base: &dyn Fn(&str, &str) -> Option<String>) -> Vec<Range<usize>> {
+    #[allow(clippy::single_range_in_vec_init)]
+    fn uncommon_word(
+        &self,
+        word: &str,
+        base: &dyn Fn(&str, &str) -> Option<String>,
+    ) -> Vec<Range<usize>> {
         if word.chars().count() < 2 || self.is_common(word, base) {
             return Vec::new();
         }
         if word.contains(is_apostrophe) {
             let mut parts = Vec::new();
             let mut start = 0;
-            for (i, c) in word.char_indices().chain(std::iter::once((word.len(), '\''))) {
+            for (i, c) in word
+                .char_indices()
+                .chain(std::iter::once((word.len(), '\'')))
+            {
                 if !is_apostrophe(c) {
                     continue;
                 }
@@ -340,15 +362,21 @@ impl<'a> List<'a> {
             return true;
         }
         // "l'homme", "dell'anno": as common as what they're made of.
-        if folded.contains('\'') && folded.split('\'').filter(|p| !p.is_empty()).all(|p| self.has(p)) {
+        if folded.contains('\'')
+            && folded
+                .split('\'')
+                .filter(|p| !p.is_empty())
+                .all(|p| self.has(p))
+        {
             return true;
         }
         // A word and what's added to it, each common: "학교" + "에서".
         if self.language == "ko" && self.splits(&folded) {
             return true;
         }
-        base(self.language, &word.to_lowercase())
-            .is_some_and(|b| b.to_lowercase() != word.to_lowercase() && self.has(&fold(&b, self.language)))
+        base(self.language, &word.to_lowercase()).is_some_and(|b| {
+            b.to_lowercase() != word.to_lowercase() && self.has(&fold(&b, self.language))
+        })
     }
 
     /// Whether `word` is two or three common pieces.
@@ -392,7 +420,10 @@ impl<'a> List<'a> {
         let flush = |pending: &mut Option<usize>, end: usize, found: &mut Vec<Range<usize>>| {
             if let Some(start) = pending.take() {
                 let piece = &run[start..end];
-                if piece.chars().any(|c| script(c) == Script::Han || is_katakana(c)) {
+                if piece
+                    .chars()
+                    .any(|c| script(c) == Script::Han || is_katakana(c))
+                {
                     found.push(start..end);
                 }
             }
@@ -401,7 +432,10 @@ impl<'a> List<'a> {
         while i < chars.len() {
             let c = chars[i].1;
             let len = if is_katakana(c) {
-                let n = chars[i..].iter().take_while(|&&(_, c)| is_katakana(c)).count();
+                let n = chars[i..]
+                    .iter()
+                    .take_while(|&&(_, c)| is_katakana(c))
+                    .count();
                 let word = &run[at(i)..at(i + n)];
                 (self.has(word)).then_some(n).ok_or(n)
             } else {
@@ -411,7 +445,9 @@ impl<'a> List<'a> {
                     .find(|&n| {
                         let word = &run[at(i)..at(i + n)];
                         match self.rank(word) {
-                            Some(rank) if n == 1 && script(c) == Script::Han => rank < MAX_CJK_CHAR_RANK,
+                            Some(rank) if n == 1 && script(c) == Script::Han => {
+                                rank < MAX_CJK_CHAR_RANK
+                            }
                             Some(_) => true,
                             None => false,
                         }
@@ -589,13 +625,16 @@ mod tests {
 
     #[test]
     fn leaves_out_names_and_numbers() {
-        let words = uncommon("Yesterday Ebenezer met NASA engineers in 1969 about the obsequious 3D printer.");
+        let words = uncommon(
+            "Yesterday Ebenezer met NASA engineers in 1969 about the obsequious 3D printer.",
+        );
         assert_eq!(words, ["obsequious"]);
     }
 
     #[test]
     fn checks_names_at_the_start_of_a_sentence() {
-        let words = uncommon("It was a long day at the office. Obsequious people kept on talking to him.");
+        let words =
+            uncommon("It was a long day at the office. Obsequious people kept on talking to him.");
         assert_eq!(words, ["Obsequious"]);
     }
 
@@ -604,7 +643,10 @@ mod tests {
         let text = "Der Ausschuss hat die Unbedenklichkeitsbescheinigung gestern abgelehnt.";
         let words = uncommon(text);
         assert_eq!(glossed(text).language, "de");
-        assert!(words.contains(&"Unbedenklichkeitsbescheinigung".to_string()), "{words:?}");
+        assert!(
+            words.contains(&"Unbedenklichkeitsbescheinigung".to_string()),
+            "{words:?}"
+        );
         assert!(!words.contains(&"Ausschuss".to_string()), "{words:?}");
     }
 
@@ -619,7 +661,11 @@ mod tests {
         let text = "The sanguine reports of yesterday were not believed by everyone in the room.";
         let base = |_: &str, word: &str| (word == "sanguine").then(|| "the".to_string());
         let gloss = gloss(text, None, &[], &base).unwrap();
-        assert!(gloss.words().next().is_none(), "{:?}", gloss.words().collect::<Vec<_>>());
+        assert!(
+            gloss.words().next().is_none(),
+            "{:?}",
+            gloss.words().collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -643,14 +689,26 @@ mod tests {
     #[test]
     fn cuts_japanese_and_chinese_into_words() {
         let ja = glossed("私は東京で生き残った。");
-        assert_eq!(ja.words().count(), 0, "{:?}", ja.words().collect::<Vec<_>>());
+        assert_eq!(
+            ja.words().count(),
+            0,
+            "{:?}",
+            ja.words().collect::<Vec<_>>()
+        );
         let zh = glossed("我们在中国学习。");
-        assert_eq!(zh.words().count(), 0, "{:?}", zh.words().collect::<Vec<_>>());
+        assert_eq!(
+            zh.words().count(),
+            0,
+            "{:?}",
+            zh.words().collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn splits_words_at_hyphens() {
-        let ranges: Vec<&str> = tokens("well-known e-mail").map(|t| &"well-known e-mail"[t.range]).collect();
+        let ranges: Vec<&str> = tokens("well-known e-mail")
+            .map(|t| &"well-known e-mail"[t.range])
+            .collect();
         assert_eq!(ranges, ["well", "known", "e", "mail"]);
     }
 }

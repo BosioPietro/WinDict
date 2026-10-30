@@ -63,7 +63,10 @@ pub fn run() -> ExitCode {
         Err(e) => return usage_error(&e),
     };
     // Said only when they're gone by.
-    let answers = matches!(args.command, Command::Define | Command::Translate | Command::Gloss);
+    let answers = matches!(
+        args.command,
+        Command::Define | Command::Translate | Command::Gloss
+    );
     if let (Some(e), true) = (&config_error, answers) {
         message(tr().settings_not_loaded, e);
     }
@@ -385,7 +388,12 @@ fn gloss_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
         Err(NormalizeError::TooLong) => return failure(tr().too_long, tr().cli_gloss_too_long),
     };
     // Every language WinDict translates has its list of common words.
-    let language = match args.language.as_deref().map(translation_language).transpose() {
+    let language = match args
+        .language
+        .as_deref()
+        .map(translation_language)
+        .transpose()
+    {
         Ok(language) => language,
         Err(e) => return usage_error(&e),
     };
@@ -396,7 +404,10 @@ fn gloss_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
     // Each word once, as it's first written.
     let mut words: Vec<&str> = Vec::new();
     for word in gloss.words() {
-        if !words.iter().any(|w| w.to_lowercase() == word.to_lowercase()) {
+        if !words
+            .iter()
+            .any(|w| w.to_lowercase() == word.to_lowercase())
+        {
             words.push(word);
         }
     }
@@ -968,7 +979,11 @@ fn mark(text: &str, marked: &[Range<usize>], columns: usize, styled: bool) -> St
             let (from, to) = (range.start.max(start), range.end.min(end));
             out.push_str(&text[at..from]);
             match styled {
-                true => out.push_str(&format!("\x1b[{}m{}\x1b[0m", Style::Marked.sgr(), &text[from..to])),
+                true => out.push_str(&format!(
+                    "\x1b[{}m{}\x1b[0m",
+                    Style::Marked.sgr(),
+                    &text[from..to]
+                )),
                 false => out.push_str(&text[from..to]),
             }
             at = to;
@@ -1045,6 +1060,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init)]
     fn marks_words_and_wraps() {
         let text = "the obsequious clerk l'ornitorinco";
         assert_eq!(mark(text, &[4..14], 80, false), text);
@@ -1052,7 +1068,10 @@ mod tests {
             mark(text, &[4..14, 23..34], 80, true),
             "the \x1b[4;36mobsequious\x1b[0m clerk l'\x1b[4;36mornitorinco\x1b[0m"
         );
-        assert_eq!(mark(text, &[], 15, false), "the obsequious\nclerk\nl'ornitorinco");
+        assert_eq!(
+            mark(text, &[], 15, false),
+            "the obsequious\nclerk\nl'ornitorinco"
+        );
     }
 
     #[test]

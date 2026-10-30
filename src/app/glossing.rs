@@ -46,7 +46,9 @@ impl App {
         if glossed.id != self.card.request || (glossed.in_place && !visible) {
             return;
         }
-        let gloss = glossed.gloss.filter(|g| !g.words.is_empty() || glossed.not_found.is_none());
+        let gloss = glossed
+            .gloss
+            .filter(|g| !g.words.is_empty() || glossed.not_found.is_none());
         if let (None, Some((place, phrase))) = (&gloss, glossed.not_found) {
             self.card.selected = None;
             return self.present(place, &phrase, &Lookup::NotFound);
