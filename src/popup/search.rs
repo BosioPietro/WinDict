@@ -97,8 +97,8 @@ impl Popup {
         let first = self.search.room() == 0.0;
         let glide = std::mem::take(&mut self.body_glides);
         let size = v2(content_w * s, layout.height * s);
-        let c = &self.anim.compositor;
-        self.content.show(c, &surface, size, layout.caret, s)?;
+        self.content
+            .show(&self.anim, &surface, size, layout.caret, false, s)?;
         let list = layout.list.as_deref();
         self.content
             .show_list(&self.anim, &self.renderer, &self.theme, list, s)?;
@@ -188,6 +188,7 @@ impl Popup {
     ) -> Result<()> {
         self.set_back(false)?;
         self.set_translate(false)?;
+        self.set_wikipedia(false)?;
         self.set_speak(false)?;
         self.pin.set_shown(&self.anim, false, self.scale)?;
         self.focus_link(None, 0)?;

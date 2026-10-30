@@ -93,6 +93,7 @@ pub const PT: Strings = Strings {
     // The card: translating.
     back_tip: "Voltar (Backspace)",
     translate_tip: "Traduzir (Ctrl+T)",
+    wikipedia_tip: "Ler na Wikipédia",
     speak_tip: "Ouvir",
     pin_tip: "Fixar janela",
     unpin_tip: "Desafixar",

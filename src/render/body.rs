@@ -13,7 +13,7 @@ impl Renderer {
                 detail,
                 suggestion,
             } => self.layout_message(&mut out, title, detail, *suggestion, width)?,
-            Body::Definition(def, wikipedia) => {
+            Body::Definition(def) => {
                 // In several languages, each under a heading of its own.
                 let grouped = !def.others.is_empty();
                 for (i, section) in def.sections().enumerate() {
@@ -22,7 +22,7 @@ impl Renderer {
                     }
                     self.layout_definition(&mut out, section, width)?;
                 }
-                self.layout_sources(&mut out, def, *wikipedia, width)?;
+                self.layout_sources(&mut out, def, width)?;
             }
             Body::Article(card) => self.layout_article(&mut out, card, width)?,
             Body::Translation(card) => self.layout_translation(&mut out, card, width)?,
@@ -1092,36 +1092,13 @@ impl Renderer {
         &self,
         out: &mut Stack,
         def: &Definition,
-        wikipedia: bool,
         width: f32,
     ) -> Result<()> {
         out.y += 8.0;
         let mut x = 0.0;
         let mut line_h: f32 = 0.0;
-        // First: it opens in the card, so it's underlined without the
-        // arrow out.
-        if wikipedia {
-            let label = self.text(tr().wikipedia, &self.formats.footer, width)?;
-            let all = DWRITE_TEXT_RANGE {
-                startPosition: 0,
-                length: u32::MAX,
-            };
-            unsafe {
-                let _ = label.SetUnderline(true, all);
-            }
-            let (w, h) = out.text(label, x, Ink::Accent);
-            out.links.push(Link {
-                x: x - 4.0,
-                y: out.y - 4.0,
-                width: w + 8.0,
-                height: h + 8.0,
-                target: Target::Wikipedia,
-            });
-            x += w;
-            line_h = line_h.max(h);
-        }
         for (i, (source, word)) in def.all_sources().into_iter().enumerate() {
-            if i > 0 || wikipedia {
+            if i > 0 {
                 let dot = self.text(" \u{00B7} ", &self.formats.footer, width)?;
                 let (w, h) = out.text(dot, x, Ink::Tertiary);
                 x += w;

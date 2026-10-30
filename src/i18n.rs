@@ -157,6 +157,7 @@ strings! {
     // The card: translating.
     back_tip: "Back (Backspace)",
     translate_tip: "Translate (Ctrl+T)",
+    wikipedia_tip: "Read on Wikipedia",
     speak_tip: "Listen",
     pin_tip: "Pin window",
     unpin_tip: "Unpin",

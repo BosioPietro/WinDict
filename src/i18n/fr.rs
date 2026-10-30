@@ -92,6 +92,7 @@ pub const FR: Strings = Strings {
     // The card: translating.
     back_tip: "Retour (Retour arrière)",
     translate_tip: "Traduire (Ctrl+T)",
+    wikipedia_tip: "Lire sur Wikipédia",
     speak_tip: "Écouter",
     pin_tip: "Épingler la fenêtre",
     unpin_tip: "Détacher",

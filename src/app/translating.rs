@@ -249,6 +249,7 @@ impl App {
         popup.hold_region(t.pair.picking.is_some());
         let _ = popup.set_back(back);
         let _ = popup.set_translate(false);
+        let _ = popup.set_wikipedia(false);
         let _ = popup.set_speak(false);
         let body = Body::Translation(card);
         let title = translate::heading(&t.about.word);

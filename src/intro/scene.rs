@@ -367,7 +367,7 @@ fn definition_card(r: &Renderer, book: &Book) -> Result<Still> {
         sources: vec![book.source],
         others: Vec::new(),
     };
-    let body = Body::Definition(&definition, false);
+    let body = Body::Definition(&definition);
     popup::still(r, &capitalize(book.word), &body, true, true)
 }
 

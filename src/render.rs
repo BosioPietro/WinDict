@@ -519,6 +519,9 @@ pub enum Face {
     Menu,
     /// Smaller, for the menu's heading.
     Small,
+    /// A serif letter standing for something, centred in its width, for a
+    /// button: Wikipedia's W.
+    Letter,
     /// Symbol glyphs, such as the check mark.
     Icon,
     /// A larger symbol, centred in its width, for a button.
@@ -548,9 +551,7 @@ pub enum Body<'a> {
     Loading {
         status: bool,
     },
-    /// A definition, and whether its footer links to its word's Wikipedia
-    /// article, which [`Target::Wikipedia`] shows in the card.
-    Definition(&'a Definition, bool),
+    Definition(&'a Definition),
     /// A Wikipedia article's opening.
     Article(ArticleCard<'a>),
     /// `suggestion`, if any, is offered after `detail` as a link to its own
@@ -596,6 +597,7 @@ struct Formats {
     external: IDWriteTextFormat,
     button: IDWriteTextFormat,
     large_button: IDWriteTextFormat,
+    letter: IDWriteTextFormat,
     heading: IDWriteTextFormat,
     display: IDWriteTextFormat,
     /// Wrapped text, such as what a step of the introduction says.
@@ -824,6 +826,15 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
     unsafe { button.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)? };
     let large_button = make(&symbols, 17.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
     unsafe { large_button.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)? };
+    // Georgia ships with Windows; Times New Roman is there should it not be.
+    let georgia = HSTRING::from("Georgia");
+    let serif = if font_exists(dwrite, &georgia) {
+        georgia
+    } else {
+        HSTRING::from("Times New Roman")
+    };
+    let letter = make(&serif, 16.0, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
+    unsafe { letter.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER)? };
     let query = make(&text, QUERY_SIZE, DWRITE_FONT_WEIGHT_NORMAL, normal, 0.0)?;
     unsafe { query.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)? };
     let suggestion = make(
@@ -870,6 +881,7 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
         external,
         button,
         large_button,
+        letter,
         heading: make(&display, 20.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?,
         display: make(&display, 24.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, normal, 0.0)?,
         paragraph: make(

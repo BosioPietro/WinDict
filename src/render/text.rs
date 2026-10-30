@@ -308,6 +308,7 @@ impl Renderer {
             Face::Icon => &self.formats.icon,
             Face::Button => &self.formats.button,
             Face::LargeButton => &self.formats.large_button,
+            Face::Letter => &self.formats.letter,
             Face::Title => &self.formats.title,
             Face::Query => &self.formats.query,
             Face::Heading => &self.formats.heading,

@@ -35,7 +35,7 @@ impl App {
                     place,
                     &title,
                     shown.phonetic.as_deref(),
-                    Body::Definition(&shown, false),
+                    Body::Definition(&shown),
                 );
                 if online.is_some() || !self.config.online_lookup {
                     return;
@@ -200,12 +200,12 @@ impl App {
         if let Some((place, word, result)) = self.card.held.take() {
             return self.answer(place, &word, &result, true);
         }
-        // The definition shown gains its link, unless it's been left.
+        // The definition shown gains its button, unless it's been left.
         let shown = self.card.translating.is_none() && self.card.search.is_none();
         if self.card.wiki.article().is_some() && self.card.reading.is_none() && shown {
             if let Some(def) = self.card.definition.clone() {
                 let place = Place::Same(Transition::Refine);
-                let body = Body::Definition(&def, true);
+                let body = Body::Definition(&def);
                 self.present_body(place, &def.word, def.phonetic.as_deref(), body);
             }
         }
@@ -279,7 +279,7 @@ impl App {
             Some(bytes) => Picture::Here(bytes),
             None => Picture::None,
         };
-        self.present_reading(Place::Same(Transition::Refine));
+        self.present_reading(Place::Same(Transition::Reveal));
     }
 
     /// The card's title, pronunciation and body for a lookup of `word`,
@@ -290,11 +290,7 @@ impl App {
         correction: Option<&'a str>,
     ) -> (&'a str, Option<&'a str>, Body<'a>) {
         match result {
-            Lookup::Found(def) => (
-                &def.word,
-                def.phonetic.as_deref(),
-                Body::Definition(def, false),
-            ),
+            Lookup::Found(def) => (&def.word, def.phonetic.as_deref(), Body::Definition(def)),
             Lookup::NotFound => (
                 word,
                 None,
@@ -377,13 +373,8 @@ impl App {
         phonetic: Option<&str>,
         body: Body,
     ) {
-        // A definition links to its word's article, once there's one.
-        let body = match body {
-            Body::Definition(def, _) => Body::Definition(def, self.card.wiki.article().is_some()),
-            body => body,
-        };
         match &body {
-            Body::Definition(def, _) => {
+            Body::Definition(def) => {
                 self.card.definition = Some((*def).clone());
                 self.card.reading = None;
             }
@@ -391,7 +382,7 @@ impl App {
             _ => (self.card.definition, self.card.reading) = (None, None),
         }
         self.card.translatable = match &body {
-            Body::Definition(def, _) => Some(Translatable::of(def)),
+            Body::Definition(def) => Some(Translatable::of(def)),
             Body::Gloss(gloss) => Some(Translatable {
                 word: gloss.text.clone(),
                 senses: vec![(gloss.language.clone(), None)],
@@ -399,9 +390,7 @@ impl App {
             _ => None,
         };
         self.card.speakable = match &body {
-            Body::Definition(def, _) => {
-                self.voice_for(&def.language).map(|v| (def.word.clone(), v))
-            }
+            Body::Definition(def) => self.voice_for(&def.language).map(|v| (def.word.clone(), v)),
             // A passage's title is its language's name, which the button
             // would seem to say.
             _ => None,
@@ -416,12 +405,14 @@ impl App {
             Place::Same(transition) => {
                 let back = self.has_word_behind();
                 let translate = self.can_translate();
+                let wikipedia = self.can_read_wikipedia(&body);
                 let speak = self.card.speakable.is_some();
                 let Some(popup) = self.card.popup.as_mut() else {
                     return;
                 };
                 let _ = popup.set_back(back);
                 let _ = popup.set_translate(translate);
+                let _ = popup.set_wikipedia(wikipedia);
                 let _ = popup.set_speak(speak);
                 if popup
                     .set_content(title, phonetic, body, transition)
@@ -433,6 +424,12 @@ impl App {
                 self.sync_link_keys();
             }
         }
+    }
+
+    /// Whether the Wikipedia button shows over `body`: on a definition
+    /// whose word has an article.
+    fn can_read_wikipedia(&self, body: &Body) -> bool {
+        matches!(body, Body::Definition(_)) && self.card.wiki.article().is_some()
     }
 
     pub(super) fn show_message(
@@ -468,11 +465,13 @@ impl App {
         self.dismiss_menu();
         let theme = self.theme();
         let translate = self.can_translate();
+        let wikipedia = self.can_read_wikipedia(&body);
         let speak = self.card.speakable.is_some();
         let Some(popup) = self.ensure_popup() else {
             return;
         };
         let _ = popup.set_translate(translate);
+        let _ = popup.set_wikipedia(wikipedia);
         let _ = popup.set_speak(speak);
         if let Err(e) = popup.show(anchor, theme, title, phonetic, body) {
             self.tray.notify(tr().draw_window_failed, &e.message());
@@ -595,7 +594,7 @@ impl App {
         {
             if let Some(def) = self.card.definition.clone() {
                 let place = Place::Same(Transition::Replace);
-                let body = Body::Definition(&def, true);
+                let body = Body::Definition(&def);
                 self.present_body(place, &def.word, def.phonetic.as_deref(), body);
                 return self.sync_back_keys();
             }

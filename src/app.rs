@@ -1165,6 +1165,7 @@ impl App {
         match self.card.popup.as_ref().and_then(|p| p.button_at(x, y)) {
             Some(CardButton::Back) => return self.back(),
             Some(CardButton::Translate) => return self.translate(),
+            Some(CardButton::Wikipedia) => return self.open_link(Target::Wikipedia),
             Some(CardButton::Speak) => return self.speak(),
             Some(CardButton::Scan) => return self.scan(),
             Some(CardButton::Pin) | None => {}

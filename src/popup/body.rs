@@ -11,6 +11,9 @@ pub(super) struct Content {
     fade: ScrollFade,
     visual: SpriteVisual,
     brush: CompositionSurfaceBrush,
+    /// What the body showed, fading out over it as it changes.
+    before: SpriteVisual,
+    before_brush: CompositionSurfaceBrush,
     links: Vec<Link>,
     rings: Rings,
     /// The caret in the language box being typed in; inside `visual` too.
@@ -34,6 +37,9 @@ impl Content {
         host.SetClip(&c.CreateInsetClip()?)?;
         let (visual, brush) = text_sprite(c)?;
         host.Children()?.InsertAtTop(&visual)?;
+        let (before, before_brush) = text_sprite(c)?;
+        before.SetOpacity(0.0)?;
+        host.Children()?.InsertAtTop(&before)?;
         let shading = Shading::new(c, &visual)?;
         // Inside `visual`, so they scroll with it, in this order.
         let swap = SwapHighlight::new(c, &visual, hwnd)?;
@@ -51,6 +57,8 @@ impl Content {
             fade,
             visual,
             brush,
+            before,
+            before_brush,
             links: Vec::new(),
             rings,
             caret,
@@ -91,6 +99,7 @@ impl Content {
     /// Lets go of the body's surface while the card is idle.
     pub(super) fn release(&mut self, anim: &Animator) {
         let _ = self.brush.SetSurface(None::<&ICompositionSurface>);
+        let _ = self.before_brush.SetSurface(None::<&ICompositionSurface>);
         let _ = self.list.hide(anim, 0);
     }
 
@@ -184,15 +193,35 @@ impl Content {
     }
 
     /// Shows the body drawn on `surface`, `size` pixels, with the caret at
-    /// `caret` if it has one, everything stopped where it is.
+    /// `caret` if it has one, everything stopped where it is. With
+    /// `crossfade`, what it showed fades out over it, as it fades in with
+    /// [`Content::fade_in`].
     pub(super) fn show(
         &self,
-        c: &Compositor,
+        anim: &Animator,
         surface: &CompositionDrawingSurface,
         size: Vector2,
         caret: Option<Mark>,
+        crossfade: bool,
         s: f32,
     ) -> Result<()> {
+        Animator::stop(&self.before, &["Opacity"]);
+        self.before.SetOpacity(0.0)?;
+        if let (true, Ok(old)) = (crossfade, self.brush.Surface()) {
+            self.before_brush.SetSurface(&old)?;
+            self.before.SetSize(self.visual.Size()?)?;
+            self.before.SetOffset(self.visual.Offset()?)?;
+            self.before.SetOpacity(1.0)?;
+            anim.scalar(
+                &self.before,
+                "Opacity",
+                0.0,
+                CROSSFADE_MS,
+                0,
+                &anim.decelerate,
+            )?;
+        }
+        let c = &anim.compositor;
         self.brush.SetSurface(surface)?;
         self.visual.SetSize(size)?;
         self.show_caret(c, caret, s)?;
@@ -233,6 +262,19 @@ impl Content {
             rest,
             RESIZE_MS,
             80,
+            &anim.decelerate,
+        )
+    }
+
+    /// Fades the body in over what it showed, see [`Content::show`].
+    pub(super) fn fade_in(&self, anim: &Animator) -> Result<()> {
+        self.visual.SetOpacity(0.0)?;
+        anim.scalar(
+            &self.visual,
+            "Opacity",
+            1.0,
+            CROSSFADE_MS,
+            0,
             &anim.decelerate,
         )
     }

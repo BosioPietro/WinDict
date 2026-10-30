@@ -59,16 +59,12 @@ const BACK_SLIDE: f32 = 10.0;
 const BACK_GLYPH: &str = "\u{E72B}";
 /// The pin button's left edge: mirrors the back button's, at the right.
 const PIN_X: f32 = CARD_W - BACK_X - BACK_SIZE;
-/// How much narrower the heading is beside the pin button.
-const PIN_ROOM: f32 = CARD_W - PAD_X - PIN_X + 6.0;
 /// "Pinned" in Segoe Fluent Icons and Segoe MDL2 Assets, and "Pinned fill",
 /// which fills its head in but leaves out the needle.
 const PIN_GLYPH: &str = "\u{E840}";
 const PIN_FILL_GLYPH: &str = "\u{E842}";
-/// The translate button's left edge: left of the pin button.
-const TRANSLATE_X: f32 = PIN_X - BACK_SIZE - 2.0;
-/// How much narrower the heading is beside the translate and pin buttons.
-const TRANSLATE_ROOM: f32 = CARD_W - PAD_X - TRANSLATE_X + 6.0;
+/// How far each button left of the pin button is from the next.
+const BUTTON_STEP: f32 = BACK_SIZE + 2.0;
 /// "Translate" in Segoe Fluent Icons and Segoe MDL2 Assets.
 const TRANSLATE_GLYPH: &str = "\u{E8C1}";
 /// The swap button's tooltip's tool, after the back and translate buttons'.
@@ -79,6 +75,10 @@ const SPEAK_TOOL: usize = 4;
 const PIN_TOOL: usize = 5;
 /// The scan button's tooltip's tool, after the pin button's.
 const SCAN_TOOL: usize = 6;
+/// The Wikipedia button's tooltip's tool, after the scan button's.
+const WIKIPEDIA_TOOL: usize = 7;
+/// Wikipedia's W, in a serif face as on its logo.
+const WIKIPEDIA_GLYPH: &str = "W";
 /// "Text recognition" in Segoe Fluent Icons: an A in a dashed frame.
 const SCAN_GLYPH: &str = "\u{F683}";
 /// "Screen clipping", scissors over a screen, for Segoe MDL2 Assets, which
@@ -117,6 +117,8 @@ pub const SHOW_MS: u64 = 340;
 const SCROLL_MS: u64 = 140;
 /// How long what the card showed takes to fade out as the search box comes in.
 const MAKE_WAY_MS: u64 = 120;
+/// How long a body that changed in place takes to fade over.
+const CROSSFADE_MS: u64 = 240;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Transition {
@@ -126,6 +128,9 @@ pub enum Transition {
     Replace,
     /// The same entry, refined: no fade, scroll position kept.
     Refine,
+    /// The same entry with something added, like a link or a picture
+    /// that came later: it cross-fades in, scroll position kept.
+    Reveal,
     /// The same content, drawn at another size: nothing moves.
     Rescale,
 }
@@ -156,6 +161,9 @@ pub struct Popup {
     scroll_chrome: ScrollChrome,
     back: IconButton,
     translate: IconButton,
+    /// Shows the word's Wikipedia article: between the translate and pin
+    /// buttons, once it's known there's one.
+    wikipedia: IconButton,
     /// Says the word: after its pronunciation, and moving with the heading.
     speak: IconButton,
     /// Keeps the card open, or lets it go again.
@@ -214,6 +222,7 @@ pub struct Popup {
 pub enum CardButton {
     Speak,
     Translate,
+    Wikipedia,
     Pin,
     Scan,
     Back,
@@ -223,9 +232,10 @@ impl CardButton {
     /// Every button, in the order Tab goes through them: the ones by the
     /// word as they read, and the back button last, so Tab doesn't start on
     /// it.
-    const ALL: [CardButton; 5] = [
+    const ALL: [CardButton; 6] = [
         Self::Speak,
         Self::Translate,
+        Self::Wikipedia,
         Self::Pin,
         Self::Scan,
         Self::Back,
@@ -235,12 +245,14 @@ impl CardButton {
     fn target(self) -> &'static Target {
         static SPEAK: Target = Target::Speak;
         static TRANSLATE: Target = Target::Translate;
+        static WIKIPEDIA: Target = Target::Wikipedia;
         static PIN: Target = Target::Pin;
         static SCAN: Target = Target::Scan;
         static BACK: Target = Target::Back;
         match self {
             Self::Speak => &SPEAK,
             Self::Translate => &TRANSLATE,
+            Self::Wikipedia => &WIKIPEDIA,
             Self::Pin => &PIN,
             Self::Scan => &SCAN,
             Self::Back => &BACK,
@@ -324,7 +336,23 @@ impl Popup {
                 ink: Ink::Accent,
                 tip: tr().translate_tip,
                 tool: 2,
-                x: TRANSLATE_X,
+                x: PIN_X - BUTTON_STEP,
+                origin: v2(0.0, 0.0),
+                slide_from: 0.0,
+            },
+        )?;
+        // Leads somewhere too, so it's colored like the links.
+        let wikipedia = IconButton::new(
+            c,
+            &frame.card,
+            hwnd,
+            IconSpec {
+                icon: WIKIPEDIA_GLYPH,
+                face: Face::Letter,
+                ink: Ink::Accent,
+                tip: tr().wikipedia_tip,
+                tool: WIKIPEDIA_TOOL,
+                x: PIN_X - BUTTON_STEP,
                 origin: v2(0.0, 0.0),
                 slide_from: 0.0,
             },
@@ -398,6 +426,7 @@ impl Popup {
             scroll_chrome,
             back,
             translate,
+            wikipedia,
             speak,
             pin,
             scan,
@@ -469,6 +498,7 @@ impl Popup {
         self.content.release(&self.anim);
         self.back.release();
         self.translate.release();
+        self.wikipedia.release();
         self.speak.release();
         self.pin.release();
         self.scan.release();
@@ -504,11 +534,8 @@ impl Popup {
         // The pin button's there whenever the search box isn't.
         self.pin.set_shown(&self.anim, true, self.scale)?;
         self.scan.set_shown(&self.anim, false, self.scale)?;
-        let room = if self.translate.shown() {
-            TRANSLATE_ROOM
-        } else {
-            PIN_ROOM
-        };
+        let [_, _, left] = buttons_x(self.wikipedia.shown(), self.translate.shown());
+        let room = CARD_W - PAD_X - left + 6.0;
         let button = self.speak.shown().then_some(BACK_SIZE);
         let muted = matches!(body, Body::Loading { status: true });
         let heading =
@@ -571,7 +598,9 @@ impl Popup {
         self.body_h = body_h;
         // A refinement keeps the reader's place, and so the focused link.
         let kept = match transition {
-            Transition::Refine | Transition::Rescale => self.focused_link().cloned(),
+            Transition::Refine | Transition::Reveal | Transition::Rescale => {
+                self.focused_link().cloned()
+            }
             Transition::Instant | Transition::Replace => None,
         };
         self.content.set_links(body_layout.links.clone());
@@ -590,12 +619,13 @@ impl Popup {
 
         // Header: on a refinement, cross-fade from the old rendering of the
         // word, should it have changed.
-        let crossfade = transition == Transition::Refine && !header_same;
+        let refined = matches!(transition, Transition::Refine | Transition::Reveal);
+        let crossfade = refined && !header_same;
         let size = v2(content_w * s, heading.height * s);
         self.header
             .show(&self.anim, &header_surface, size, crossfade, s)?;
         // The pronunciation fades in once it's known, whatever else changes.
-        let moving = matches!(transition, Transition::Replace | Transition::Refine);
+        let moving = transition == Transition::Replace || refined;
         match (phonetic, &heading.phonetic) {
             (Some(text), Some(placed)) => {
                 let surface = self.renderer.draw(&placed.layout, s, &self.theme)?;
@@ -632,14 +662,26 @@ impl Popup {
         // The buttons sit level with the word.
         let line = heading.word.first_line_bottom();
         let top = ((PAD_TOP + (line - BACK_SIZE) / 2.0) * s).round();
-        for button in [&mut self.back, &mut self.translate, &mut self.pin] {
+        for button in [&mut self.back, &mut self.pin] {
             button.place(top, s)?;
         }
+        // The translate button moves over to make room for Wikipedia's.
+        let glide = transition != Transition::Instant;
+        let [wikipedia_x, translate_x, _] =
+            buttons_x(self.wikipedia.shown(), self.translate.shown());
+        (self.wikipedia).move_to(&self.anim, wikipedia_x, top, glide, s)?;
+        (self.translate).move_to(&self.anim, translate_x, top, glide, s)?;
 
         let size = v2(content_w * s, body_h);
-        let c = &self.anim.compositor;
-        self.content
-            .show(c, &body_surface, size, body_layout.caret, s)?;
+        let reveal = transition == Transition::Reveal;
+        self.content.show(
+            &self.anim,
+            &body_surface,
+            size,
+            body_layout.caret,
+            reveal,
+            s,
+        )?;
         let list = body_layout.list.as_deref();
         self.content
             .show_list(&self.anim, &self.renderer, &self.theme, list, s)?;
@@ -684,13 +726,16 @@ impl Popup {
                 self.move_content_host(previous_header_h)?;
                 self.resize(card_h, true)?;
             }
-            Transition::Refine => {
+            Transition::Refine | Transition::Reveal => {
                 // Same entry with more detail: keep the reader's place.
                 self.resize(card_h, true)?;
                 self.scroller
                     .stop_at(self.scroller.at.min(self.max_scroll()));
                 self.content.keep_place(self.scroller.at, s)?;
                 self.move_content_host(previous_header_h)?;
+                if transition == Transition::Reveal {
+                    self.content.fade_in(&self.anim)?;
+                }
             }
             Transition::Rescale => {
                 self.resize(card_h, false)?;
@@ -715,6 +760,14 @@ impl Popup {
     /// the next [`Popup::set_content`].
     pub fn set_translate(&mut self, shown: bool) -> Result<()> {
         self.translate.set_shown(&self.anim, shown, self.scale)?;
+        self.sync_tooltip();
+        Ok(())
+    }
+
+    /// Shows or hides the Wikipedia button. The translate button and the
+    /// word make room for it with the next [`Popup::set_content`].
+    pub fn set_wikipedia(&mut self, shown: bool) -> Result<()> {
+        self.wikipedia.set_shown(&self.anim, shown, self.scale)?;
         self.sync_tooltip();
         Ok(())
     }
@@ -946,6 +999,7 @@ impl Popup {
         match button {
             CardButton::Speak => &self.speak,
             CardButton::Translate => &self.translate,
+            CardButton::Wikipedia => &self.wikipedia,
             CardButton::Pin => &self.pin,
             CardButton::Scan => &self.scan,
             CardButton::Back => &self.back,
@@ -957,6 +1011,7 @@ impl Popup {
         let ui = match button {
             CardButton::Speak => &mut self.speak,
             CardButton::Translate => &mut self.translate,
+            CardButton::Wikipedia => &mut self.wikipedia,
             CardButton::Pin => &mut self.pin,
             CardButton::Scan => &mut self.scan,
             CardButton::Back => &mut self.back,
@@ -1035,6 +1090,7 @@ impl Popup {
         // was said before showing it.
         self.back.hide_at_once()?;
         self.translate.reset()?;
+        self.wikipedia.reset()?;
         self.speak.reset()?;
         self.pin.reset()?;
         // Shown, sliding in, with the search box.
@@ -1118,6 +1174,7 @@ impl Popup {
         self.content.apply_theme(c, &t, self.scale)?;
         self.back.apply_theme(&self.renderer, &t, self.scale)?;
         self.translate.apply_theme(&self.renderer, &t, self.scale)?;
+        self.wikipedia.apply_theme(&self.renderer, &t, self.scale)?;
         self.speak.apply_theme(&self.renderer, &t, self.scale)?;
         self.pin.apply_theme(&self.renderer, &t, self.scale)?;
         self.scan.apply_theme(&self.renderer, &t, self.scale)?;
@@ -1191,6 +1248,24 @@ fn contains(r: RECT, x: i32, y: i32) -> bool {
     x >= r.left && x < r.right && y >= r.top && y < r.bottom
 }
 
+/// The left edges of the Wikipedia and translate buttons, in DIPs, with
+/// each shown or not, and the leftmost of those shown and the pin button:
+/// from the pin button leftwards, Wikipedia's then translate's.
+fn buttons_x(wikipedia: bool, translate: bool) -> [f32; 3] {
+    let wikipedia_x = PIN_X - BUTTON_STEP;
+    let translate_x = if wikipedia {
+        wikipedia_x - BUTTON_STEP
+    } else {
+        wikipedia_x
+    };
+    let left = match (wikipedia, translate) {
+        (_, true) => translate_x,
+        (true, false) => wikipedia_x,
+        (false, false) => PIN_X,
+    };
+    [wikipedia_x, translate_x, left]
+}
+
 /// Each layout of a card's content at its place, in DIPs, and the card's
 /// height.
 pub(crate) type Still = (Vec<(render::Layout, f32, f32)>, f32);
@@ -1206,7 +1281,8 @@ pub(crate) fn still(
     translate: bool,
 ) -> Result<Still> {
     let content_w = CARD_W - 2.0 * PAD_X;
-    let room = if translate { TRANSLATE_ROOM } else { PIN_ROOM };
+    let [_, translate_x, left] = buttons_x(false, translate);
+    let room = CARD_W - PAD_X - left + 6.0;
     let button = speak.then_some(BACK_SIZE);
     let heading = renderer.layout_header(word, None, content_w - room, 0.0, button, false)?;
     let glyph = |icon, face, ink| renderer.layout_line(icon, face, ink, BACK_SIZE);
@@ -1219,7 +1295,7 @@ pub(crate) fn still(
             TRANSLATE_GLYPH,
             Face::LargeButton,
             Ink::Accent,
-            TRANSLATE_X,
+            translate_x,
             top,
         ));
     }
