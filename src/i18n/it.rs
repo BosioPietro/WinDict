@@ -44,6 +44,7 @@ pub const IT: Strings = Strings {
     not_found_check_spelling: "Questa parola non è nel dizionario. Controlla l\u{2019}ortografia",
     lookup_failed: "Impossibile cercarla",
     did_you_mean: "Intendevi {word}?",
+    wikipedia_ambiguous: "Wikipedia ha più voci con questo nome.",
     gloss_hint: "Fai clic su una parola sottolineata, o raggiungila con Tab, per cercarla.",
     gloss_none: "Qui non ci sono parole poco comuni.",
     gloss_unknown: "In che lingua è?",
@@ -231,6 +232,7 @@ pub const IT: Strings = Strings {
     lookup: "Ricerca",
     online_dictionary: "Dizionario online",
     online_dictionary_detail: "Offre risultati migliori",
+    wikipedia_detail: "Per persone, luoghi e marchi che i dizionari non hanno",
     read_selection: "Lettura della selezione",
     selection_automatic: "Automatica",
     selection_automatic_detail: "Legge direttamente la selezione e la copia nelle app \

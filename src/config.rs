@@ -74,6 +74,10 @@ pub struct Config {
     use_ui_automation: Option<bool>,
     /// Use the online dictionary for words (and pronunciations) the bundled one lacks.
     pub online_lookup: bool,
+    /// Look words up on Wikipedia too, while the online dictionary is on:
+    /// what the dictionaries skip (people, places, brands) is answered from
+    /// it, and a definition links to the word's article.
+    pub wikipedia: bool,
     /// The languages words are looked up in, as codes in order of preference:
     /// "en" is built in, another is read from
     /// `%LOCALAPPDATA%\WinDict\dicts\<code>.wdict`.
@@ -168,6 +172,7 @@ impl Default for Config {
             selection: SelectionMode::Automatic,
             use_ui_automation: None,
             online_lookup: true,
+            wikipedia: true,
             languages: vec!["en".into()],
             translate_from: "en".into(),
             translate_to: "it".into(),
@@ -355,6 +360,7 @@ mod tests {
         assert_eq!(config.hotkey(Shortcut::Translate), "Alt+T");
         assert_eq!(config.max_synonyms, 6);
         assert!(config.online_lookup);
+        assert!(config.wikipedia);
         assert!(config.check_updates);
         assert!(config.show_examples);
         assert_eq!(config.selection, SelectionMode::Automatic);

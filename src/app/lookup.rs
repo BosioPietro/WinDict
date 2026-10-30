@@ -19,9 +19,12 @@ impl App {
                 Some(def) => def.word.to_lowercase(),
                 None => word.clone(),
             },
-            language: query.language,
+            language: query.language.clone(),
         };
         let online = self.cache.get(&online_key);
+        self.card.held = None;
+        self.card.reading = None;
+        self.ask_wikipedia(&query);
 
         match (&self.card.local, online) {
             (Some(local), online) => {
@@ -32,13 +35,13 @@ impl App {
                     place,
                     &title,
                     shown.phonetic.as_deref(),
-                    Body::Definition(&shown),
+                    Body::Definition(&shown, false),
                 );
                 if online.is_some() || !self.config.online_lookup {
                     return;
                 }
             }
-            (None, Some(online)) => return self.present(place, &word, &online),
+            (None, Some(online)) => return self.answer(place, &word, &online, false),
             (None, None) if !self.config.online_lookup => {
                 return self.present(place, &word, &Lookup::NotFound);
             }
@@ -95,11 +98,188 @@ impl App {
                     self.present(place, &looked.query.word, &Lookup::Found(merged));
                 }
             }
+            // The card shows it's looking.
             None => {
                 let place = Place::Same(Transition::Replace);
-                self.present(place, &looked.query.word, &looked.result);
+                self.answer(place, &looked.query.word, &looked.result, true);
             }
         }
+    }
+
+    /// Asks Wikipedia for `query`, while the online dictionary is used: the
+    /// titles of the definition found, in its languages, or else the word
+    /// in each language it's looked up in. A name keeps the case it was
+    /// selected or typed in.
+    fn ask_wikipedia(&mut self, query: &Query) {
+        self.card.wiki = Wiki::Off;
+        if !self.config.online_lookup || !self.config.wikipedia {
+            return;
+        }
+        let written = self
+            .card
+            .written
+            .clone()
+            .filter(|w| w.to_lowercase() == query.word);
+        let title = |word: &str| match &written {
+            Some(w) if w.to_lowercase() == word.to_lowercase() => w.clone(),
+            _ => word.to_string(),
+        };
+        let titles: Titles = match &self.card.local {
+            Some(def) => def
+                .sections()
+                .map(|s| (s.language.clone(), title(&s.word)))
+                .collect(),
+            None => match &query.language {
+                Some(language) => vec![language.clone()],
+                None => offline::languages(),
+            }
+            .into_iter()
+            .map(|language| (language, title(&query.word)))
+            .collect(),
+        };
+        if titles.is_empty() {
+            return;
+        }
+        if let Some(found) = self.articles.get(&titles) {
+            self.card.wiki = Wiki::Answered(found);
+            return;
+        }
+        self.card.wiki = Wiki::Asking;
+        let (id, events) = (self.card.request, self.events.clone());
+        std::thread::spawn(move || {
+            let result = wikipedia::find(&titles);
+            events.send(Event::Found(Found { id, titles, result }));
+        });
+    }
+
+    /// Shows `result` for `word` at `place`, or Wikipedia's article when
+    /// the dictionaries haven't the word: one that's held until Wikipedia
+    /// answers, on a card that shows it's looking unless it's `loading`
+    /// already.
+    fn answer(&mut self, place: Place, word: &str, result: &Lookup, loading: bool) {
+        if matches!(result, Lookup::Found(_)) {
+            return self.present(place, word, result);
+        }
+        match &self.card.wiki {
+            Wiki::Asking => {
+                let place = if loading {
+                    place
+                } else {
+                    self.present_body(place, word, None, Body::Loading { status: false });
+                    Place::Same(Transition::Replace)
+                };
+                self.card.held = Some((place, word.to_string(), result.clone()));
+            }
+            // A page of several articles doesn't stop a phrase being glossed.
+            Wiki::Answered(Some(article))
+                if !article.ambiguous || self.card.gloss_missing.as_deref() != Some(word) =>
+            {
+                let article = article.clone();
+                self.card.gloss_missing = None;
+                self.show_article(place, article, false);
+            }
+            _ => self.present(place, word, result),
+        }
+    }
+
+    pub(super) fn on_found(&mut self, found: Found) {
+        let answer = found.result.ok().map(|article| {
+            let article = article.map(Rc::new);
+            self.articles.put(found.titles, article.clone());
+            article
+        });
+        let visible = self.visible_popup().is_some();
+        if found.id != self.card.request || !matches!(self.card.wiki, Wiki::Asking) {
+            return;
+        }
+        self.card.wiki = Wiki::Answered(answer.flatten());
+        if !visible {
+            self.card.held = None;
+            return;
+        }
+        if let Some((place, word, result)) = self.card.held.take() {
+            return self.answer(place, &word, &result, true);
+        }
+        // The definition shown gains its link, unless it's been left.
+        let shown = self.card.translating.is_none() && self.card.search.is_none();
+        if self.card.wiki.article().is_some() && self.card.reading.is_none() && shown {
+            if let Some(def) = self.card.definition.clone() {
+                let place = Place::Same(Transition::Refine);
+                let body = Body::Definition(&def, true);
+                self.present_body(place, &def.word, def.phonetic.as_deref(), body);
+            }
+        }
+    }
+
+    /// Turns the card into `article`, its picture coming after the text
+    /// unless it's been fetched before. Back goes to the definition it's
+    /// opened `from_definition`.
+    pub(super) fn show_article(
+        &mut self,
+        place: Place,
+        article: Rc<Article>,
+        from_definition: bool,
+    ) {
+        let picture = match &article.thumbnail {
+            None => Picture::None,
+            Some(thumbnail) => match self.pictures.get(&thumbnail.url) {
+                Some(bytes) => Picture::Here(bytes),
+                None => {
+                    let (id, events) = (self.card.request, self.events.clone());
+                    let thumbnail = thumbnail.clone();
+                    std::thread::spawn(move || {
+                        let bytes = wikipedia::picture(&thumbnail);
+                        events.send(Event::Picture(id, thumbnail.url, bytes));
+                    });
+                    Picture::Coming
+                }
+            },
+        };
+        self.card.reading = Some(Reading {
+            article,
+            picture,
+            from_definition,
+        });
+        self.present_reading(place);
+    }
+
+    fn present_reading(&mut self, place: Place) {
+        let Some(reading) = &self.card.reading else {
+            return;
+        };
+        let (article, picture) = (reading.article.clone(), reading.picture.clone());
+        let card = ArticleCard {
+            article: &article,
+            picture,
+        };
+        self.present_body(place, &article.title, None, Body::Article(card));
+    }
+
+    pub(super) fn on_picture(&mut self, id: u64, url: String, bytes: Option<Vec<u8>>) {
+        let bytes: Option<Rc<[u8]>> = bytes.map(Rc::from);
+        if let Some(bytes) = &bytes {
+            self.pictures.put(url.clone(), bytes.clone());
+        }
+        let visible = self.visible_popup().is_some();
+        if id != self.card.request || !visible {
+            return;
+        }
+        let Some(reading) = self.card.reading.as_mut() else {
+            return;
+        };
+        if reading
+            .article
+            .thumbnail
+            .as_ref()
+            .is_none_or(|t| t.url != url)
+        {
+            return;
+        }
+        reading.picture = match bytes {
+            Some(bytes) => Picture::Here(bytes),
+            None => Picture::None,
+        };
+        self.present_reading(Place::Same(Transition::Refine));
     }
 
     /// The card's title, pronunciation and body for a lookup of `word`,
@@ -110,7 +290,11 @@ impl App {
         correction: Option<&'a str>,
     ) -> (&'a str, Option<&'a str>, Body<'a>) {
         match result {
-            Lookup::Found(def) => (&def.word, def.phonetic.as_deref(), Body::Definition(def)),
+            Lookup::Found(def) => (
+                &def.word,
+                def.phonetic.as_deref(),
+                Body::Definition(def, false),
+            ),
             Lookup::NotFound => (
                 word,
                 None,
@@ -193,8 +377,21 @@ impl App {
         phonetic: Option<&str>,
         body: Body,
     ) {
+        // A definition links to its word's article, once there's one.
+        let body = match body {
+            Body::Definition(def, _) => Body::Definition(def, self.card.wiki.article().is_some()),
+            body => body,
+        };
+        match &body {
+            Body::Definition(def, _) => {
+                self.card.definition = Some((*def).clone());
+                self.card.reading = None;
+            }
+            Body::Article(_) => {}
+            _ => (self.card.definition, self.card.reading) = (None, None),
+        }
         self.card.translatable = match &body {
-            Body::Definition(def) => Some(Translatable::of(def)),
+            Body::Definition(def, _) => Some(Translatable::of(def)),
             Body::Gloss(gloss) => Some(Translatable {
                 word: gloss.text.clone(),
                 senses: vec![(gloss.language.clone(), None)],
@@ -202,7 +399,9 @@ impl App {
             _ => None,
         };
         self.card.speakable = match &body {
-            Body::Definition(def) => self.voice_for(&def.language).map(|v| (def.word.clone(), v)),
+            Body::Definition(def, _) => {
+                self.voice_for(&def.language).map(|v| (def.word.clone(), v))
+            }
             // A passage's title is its language's name, which the button
             // would seem to say.
             _ => None,
@@ -387,6 +586,20 @@ impl App {
         if !self.visible_popup().is_some() {
             return;
         }
+        // From the article, back to the definition it was opened from.
+        if self
+            .card
+            .reading
+            .as_ref()
+            .is_some_and(|r| r.from_definition)
+        {
+            if let Some(def) = self.card.definition.clone() {
+                let place = Place::Same(Transition::Replace);
+                let body = Body::Definition(&def, true);
+                self.present_body(place, &def.word, def.phonetic.as_deref(), body);
+                return self.sync_back_keys();
+            }
+        }
         // From the translation of what was typed, back to the box.
         if let Some(typed) = self.card.translating.as_mut().and_then(|t| t.typed.take()) {
             return self.reopen_search(typed);
@@ -421,10 +634,16 @@ impl App {
     }
 
     /// Whether Back goes from the definition to another: one shown before,
-    /// or the passage it was looked up from.
+    /// or the passage it was looked up from; or from the article to the
+    /// definition it was opened from.
     pub(super) fn has_word_behind(&self) -> bool {
         let from_passage = self.card.current.is_some() && self.card.passage.is_some();
-        !self.card.history.is_empty() || from_passage
+        let from_definition = self
+            .card
+            .reading
+            .as_ref()
+            .is_some_and(|r| r.from_definition);
+        !self.card.history.is_empty() || from_passage || from_definition
     }
 
     /// Backspace and Alt+Left go back, but only while there's somewhere to

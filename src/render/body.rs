@@ -13,7 +13,7 @@ impl Renderer {
                 detail,
                 suggestion,
             } => self.layout_message(&mut out, title, detail, *suggestion, width)?,
-            Body::Definition(def) => {
+            Body::Definition(def, wikipedia) => {
                 // In several languages, each under a heading of its own.
                 let grouped = !def.others.is_empty();
                 for (i, section) in def.sections().enumerate() {
@@ -22,8 +22,9 @@ impl Renderer {
                     }
                     self.layout_definition(&mut out, section, width)?;
                 }
-                self.layout_sources(&mut out, def, width)?;
+                self.layout_sources(&mut out, def, *wikipedia, width)?;
             }
+            Body::Article(card) => self.layout_article(&mut out, card, width)?,
             Body::Translation(card) => self.layout_translation(&mut out, card, width)?,
             Body::Gloss(gloss) => self.layout_gloss(&mut out, gloss, width)?,
         }
@@ -85,6 +86,54 @@ impl Renderer {
             let (_, h) = out.text_with_accents(line, 0.0, Ink::Secondary, vec![range]);
             out.y += h;
         }
+        Ok(())
+    }
+
+    /// What the article is about, its picture, its opening, then a link to
+    /// the whole of it; or, for a title that's several things', that it is.
+    pub(super) fn layout_article(
+        &self,
+        out: &mut Stack,
+        card: &ArticleCard,
+        width: f32,
+    ) -> Result<()> {
+        let article = card.article;
+        if let Some(description) = &article.description {
+            let d = self.text(description, &self.formats.example, width)?;
+            let (_, h) = out.text(d, 0.0, Ink::Secondary);
+            out.y += h + 12.0;
+        }
+        let picture = match &card.picture {
+            Picture::None => None,
+            Picture::Coming => Some(None),
+            Picture::Here(encoded) => Some(Some(encoded.clone())),
+        };
+        if let (Some(t), Some(encoded)) = (&article.thumbnail, picture) {
+            let (w, h) = picture_size(t.width as f32, t.height as f32, width);
+            out.items.push(Item::Picture {
+                encoded,
+                x: 0.0,
+                y: out.y,
+                width: w,
+                height: h,
+            });
+            out.y += h + 12.0;
+        }
+        let (text, ink) = match article.ambiguous {
+            true => (tr().wikipedia_ambiguous, Ink::Secondary),
+            false => (article.extract.as_str(), Ink::Primary),
+        };
+        let (_, h) = out.text(self.text(text, &self.formats.body, width)?, 0.0, ink);
+        out.y += h + 8.0;
+        let (w, h) = self.external_link(out, tr().wikipedia, 0.0, width)?;
+        out.links.push(Link {
+            x: -4.0,
+            y: out.y - 4.0,
+            width: w + 8.0,
+            height: h + 8.0,
+            target: Target::Url(article.url.clone()),
+        });
+        out.y += h;
         Ok(())
     }
 
@@ -1043,13 +1092,36 @@ impl Renderer {
         &self,
         out: &mut Stack,
         def: &Definition,
+        wikipedia: bool,
         width: f32,
     ) -> Result<()> {
         out.y += 8.0;
         let mut x = 0.0;
         let mut line_h: f32 = 0.0;
+        // First: it opens in the card, so it's underlined without the
+        // arrow out.
+        if wikipedia {
+            let label = self.text(tr().wikipedia, &self.formats.footer, width)?;
+            let all = DWRITE_TEXT_RANGE {
+                startPosition: 0,
+                length: u32::MAX,
+            };
+            unsafe {
+                let _ = label.SetUnderline(true, all);
+            }
+            let (w, h) = out.text(label, x, Ink::Accent);
+            out.links.push(Link {
+                x: x - 4.0,
+                y: out.y - 4.0,
+                width: w + 8.0,
+                height: h + 8.0,
+                target: Target::Wikipedia,
+            });
+            x += w;
+            line_h = line_h.max(h);
+        }
         for (i, (source, word)) in def.all_sources().into_iter().enumerate() {
-            if i > 0 {
+            if i > 0 || wikipedia {
                 let dot = self.text(" \u{00B7} ", &self.formats.footer, width)?;
                 let (w, h) = out.text(dot, x, Ink::Tertiary);
                 x += w;
@@ -1079,6 +1151,18 @@ impl Renderer {
         out.y += line_h;
         Ok(())
     }
+}
+
+/// How tall an article's picture is drawn, at most and at least, in DIPs.
+const PICTURE_MAX_H: f32 = 170.0;
+const PICTURE_MIN_H: f32 = 90.0;
+
+/// The size a `w` by `h` picture is drawn at in `width`: as wide as it,
+/// unless that makes it too tall, when it's narrower; a picture too wide
+/// for even the least height is cropped at the sides.
+fn picture_size(w: f32, h: f32, width: f32) -> (f32, f32) {
+    let height = (width * h / w).clamp(PICTURE_MIN_H, PICTURE_MAX_H);
+    ((height * w / h).min(width), height)
 }
 
 /// A list's outline, `width` by `height`, from its top left.

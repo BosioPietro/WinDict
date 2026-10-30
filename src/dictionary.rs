@@ -154,6 +154,12 @@ pub const MAX_LOOKUP_CHARS: usize = 60;
 
 /// Cleans up raw selected text into something worth looking up.
 pub fn normalize(raw: &str) -> Result<String, NormalizeError> {
+    as_written(raw).map(|word| word.to_lowercase())
+}
+
+/// What [`normalize`] makes of `raw`, in the case it's written in: names
+/// keep theirs ("Turin", "NASA"), for Wikipedia.
+pub fn as_written(raw: &str) -> Result<String, NormalizeError> {
     // Web pages and word processors write the apostrophe curly.
     let folded: String = raw
         .chars()
@@ -176,7 +182,7 @@ pub fn normalize(raw: &str) -> Result<String, NormalizeError> {
     if words.len() > MAX_LOOKUP_WORDS || trimmed.chars().count() > MAX_LOOKUP_CHARS {
         return Err(NormalizeError::TooLong);
     }
-    let word = words.join(" ").to_lowercase();
+    let word = words.join(" ");
     Ok(if leading { format!("'{word}") } else { word })
 }
 
@@ -277,6 +283,10 @@ mod tests {
         assert_eq!(normalize("'ndrangheta,").unwrap(), "'ndrangheta");
         assert_eq!(normalize("\u{2018}hello\u{2019}").unwrap(), "hello");
         assert_eq!(normalize(" ... "), Err(NormalizeError::Empty));
+        assert_eq!(
+            as_written(" \u{201C}New  York,\u{201D}").unwrap(),
+            "New York"
+        );
         assert_eq!(
             normalize("this is a much longer sentence than a word"),
             Err(NormalizeError::TooLong)

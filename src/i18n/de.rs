@@ -46,6 +46,7 @@ pub const DE: Strings = Strings {
     not_found_check_spelling: "Dieses Wort steht nicht im Wörterbuch. Stimmt die Schreibweise?",
     lookup_failed: "Nachschlagen fehlgeschlagen",
     did_you_mean: "Meinten Sie {word}?",
+    wikipedia_ambiguous: "Wikipedia hat mehrere Artikel mit diesem Namen.",
 
     // The card: a passage, its uncommon words underlined.
     gloss_hint: "Klicken Sie auf ein unterstrichenes Wort oder wählen Sie es mit der Tab-Taste aus, um es nachzuschlagen.",
@@ -235,6 +236,7 @@ pub const DE: Strings = Strings {
     lookup: "Nachschlagen",
     online_dictionary: "Online-Wörterbuch",
     online_dictionary_detail: "Für Aussprache und Wörter, die offline fehlen",
+    wikipedia_detail: "Für Personen, Orte und Marken, die in Wörterbüchern fehlen",
     read_selection: "Markierung auslesen",
     selection_automatic: "Automatisch",
     selection_automatic_detail: "Liest die Markierung direkt und kopiert sie in Apps, \

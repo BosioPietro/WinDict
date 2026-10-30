@@ -47,6 +47,7 @@ pub const FR: Strings = Strings {
     not_found_check_spelling: "Mot absent du dictionnaire. Vérifiez l\u{2019}orthographe.",
     lookup_failed: "La recherche a échoué",
     did_you_mean: "Vouliez-vous dire {word}\u{A0}?",
+    wikipedia_ambiguous: "Wikipédia a plusieurs articles portant ce nom.",
     gloss_hint: "Pour chercher un mot souligné, cliquez dessus ou accédez-y avec Tab.",
     gloss_none: "Aucun mot peu courant dans ce passage.",
     gloss_unknown: "Quelle est cette langue\u{A0}?",
@@ -236,6 +237,8 @@ pub const FR: Strings = Strings {
     lookup: "Recherche",
     online_dictionary: "Dictionnaire en ligne",
     online_dictionary_detail: "Prononciations et mots absents du dictionnaire intégré",
+    wikipedia: "Wikipédia",
+    wikipedia_detail: "Pour les personnes, lieux et marques absents des dictionnaires",
     read_selection: "Lire la sélection",
     selection_automatic: "Automatique",
     selection_automatic_detail: "Lit la sélection directement, ou la copie dans les \

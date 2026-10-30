@@ -12,6 +12,7 @@ mod select;
 mod text;
 
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 use windows::core::{w, Interface, Result, HSTRING};
 use windows::Foundation::Size;
@@ -37,6 +38,7 @@ use crate::i18n::{fill, tr};
 use crate::lang::LangCode;
 use crate::theme::{to_d2d, Theme};
 use crate::translate::{self, Translation};
+use crate::wikipedia::Article;
 use flags::Flag;
 pub use page::{Font, Line, Patch};
 pub use select::TextPoint;
@@ -95,6 +97,15 @@ enum Item {
     /// A language's flag.
     Flag {
         flag: Flag,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+    },
+    /// A picture, as it's encoded (a JPEG or PNG), filling a rounded
+    /// rectangle; until it's there, a placeholder.
+    Picture {
+        encoded: Option<Rc<[u8]>>,
         x: f32,
         y: f32,
         width: f32,
@@ -242,6 +253,7 @@ impl Layout {
                 | Item::Key { .. }
                 | Item::Logo { .. }
                 | Item::Flag { .. }
+                | Item::Picture { .. }
                 | Item::Shape { .. } => None,
             })
             .unwrap_or(0.0)
@@ -287,6 +299,8 @@ pub enum Target {
     Word(String),
     /// The card's translate button: turns it into the word's translation.
     Translate,
+    /// Turns the card into its word's Wikipedia article.
+    Wikipedia,
     /// The card's speak button: says the word out loud.
     Speak,
     /// The card's back button.
@@ -306,6 +320,23 @@ pub enum Target {
     Pick(LangCode),
     /// Translates the way the card offers.
     Confirm,
+}
+
+/// The card turned into a Wikipedia article.
+pub struct ArticleCard<'a> {
+    pub article: &'a Article,
+    pub picture: Picture,
+}
+
+/// The article's picture, as far as it's got.
+#[derive(Clone)]
+pub enum Picture {
+    /// It has none, or it couldn't be fetched.
+    None,
+    /// On its way: there's room kept for it.
+    Coming,
+    /// As it's encoded.
+    Here(Rc<[u8]>),
 }
 
 /// Either language of a translation.
@@ -517,7 +548,11 @@ pub enum Body<'a> {
     Loading {
         status: bool,
     },
-    Definition(&'a Definition),
+    /// A definition, and whether its footer links to its word's Wikipedia
+    /// article, which [`Target::Wikipedia`] shows in the card.
+    Definition(&'a Definition, bool),
+    /// A Wikipedia article's opening.
+    Article(ArticleCard<'a>),
     /// `suggestion`, if any, is offered after `detail` as a link to its own
     /// definition: "Did you mean embody?"
     Message {

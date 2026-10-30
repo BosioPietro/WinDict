@@ -27,6 +27,7 @@ use crate::i18n::{self, fill, tr};
 use crate::lang::LangCode;
 use crate::render::capitalize;
 use crate::translate::{self, Direction, Translation};
+use crate::wikipedia::{self, Article};
 use crate::{dicts, gloss, offline, online};
 
 /// Exit codes, besides success.
@@ -202,8 +203,10 @@ fn parse(given: Vec<String>) -> Result<Args, String> {
 }
 
 /// Looks the word up, offline and then online, as the card does, and
-/// prints its definition, or what the word was likely a typo of.
+/// prints its definition, or else its Wikipedia article, or what the word
+/// was likely a typo of.
 fn define(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
+    let written = dictionary::as_written(&text(&args.text)).ok();
     let word = match dictionary::normalize(&text(&args.text)) {
         Ok(word) => word,
         Err(NormalizeError::Empty) => return usage_error(tr().cli_no_word),
@@ -236,7 +239,8 @@ fn define(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
         None => Some(def),
     };
     let local = offline::lookup(&word, detail).and_then(within);
-    let online = args.online.unwrap_or(config.online_lookup).then(|| {
+    let use_online = args.online.unwrap_or(config.online_lookup);
+    let online = use_online.then(|| {
         // The word the offline entry is of, when it's a form of another.
         let key = match &local {
             Some(def) => def.word.to_lowercase(),
@@ -266,6 +270,23 @@ fn define(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
         Lookup::NotFound => (tr().not_found, None),
         Lookup::Failed(error) => (tr().lookup_failed, Some(error.as_str())),
     };
+    // People, places and brands, which the dictionaries skip.
+    if use_online && config.wikipedia {
+        let languages = match &language {
+            Some(language) => vec![language.clone()],
+            None => offline::languages(),
+        };
+        let title = written.unwrap_or_else(|| word.clone());
+        let titles: Vec<_> = languages.into_iter().map(|l| (l, title.clone())).collect();
+        let found = {
+            let _waiting = Waiting::show(tr().looking_up);
+            wikipedia::find(&titles)
+        };
+        if let Ok(Some(article)) = found {
+            out.article(&article);
+            return ExitCode::SUCCESS;
+        }
+    }
     let words = offline::Words::load();
     let correction = words.correct(&word);
     let detail = detail.unwrap_or(match correction {
@@ -821,6 +842,23 @@ impl Printer {
             }
             self.line(2, (Style::Strong, word), indent, &spans);
         }
+    }
+
+    /// The article's title and what it's about, its first sentences, and
+    /// its page.
+    fn article(&mut self, article: &Article) {
+        let mut title = vec![(Style::Strong, article.title.as_str())];
+        if let Some(description) = &article.description {
+            title.push((Style::Faint, description));
+        }
+        self.text(&title);
+        self.blank();
+        match article.ambiguous {
+            true => self.text(&[(Style::Faint, tr().wikipedia_ambiguous)]),
+            false => self.text(&[(Style::Plain, &article.extract)]),
+        }
+        self.blank();
+        self.source(tr().wikipedia, Some(&article.url));
     }
 
     /// Where the answer comes from, and its page there, if it has one.

@@ -134,6 +134,31 @@ impl Renderer {
                     };
                     self.draw_flag_item(dc, *flag, rect, scale, &flag_edge)?;
                 }
+                Item::Picture {
+                    encoded,
+                    x,
+                    y,
+                    width,
+                    height,
+                } => {
+                    let shape = D2D1_ROUNDED_RECT {
+                        rect: D2D_RECT_F {
+                            left: *x,
+                            top: *y,
+                            right: x + width,
+                            bottom: y + height,
+                        },
+                        radiusX: PICTURE_RADIUS,
+                        radiusY: PICTURE_RADIUS,
+                    };
+                    // One that can't be read stays a placeholder.
+                    let drawn = encoded
+                        .as_ref()
+                        .is_some_and(|encoded| self.fill_picture(dc, encoded, &shape).is_ok());
+                    if !drawn {
+                        dc.FillRoundedRectangle(&shape, &brush(to_d2d(theme.sunken()))?);
+                    }
+                }
                 Item::Shape {
                     x,
                     y,
@@ -423,33 +448,8 @@ impl Renderer {
         h: f32,
         scene: Option<(&Scene, &Theme)>,
     ) -> Result<()> {
-        let wic: IWICImagingFactory =
-            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
-        let stream = wic.CreateStream()?;
-        stream.InitializeFromMemory(encoded)?;
-        let decoder =
-            wic.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)?;
-        let frame = decoder.GetFrame(0)?;
-        let converter = wic.CreateFormatConverter()?;
-        converter.Initialize(
-            &frame,
-            &GUID_WICPixelFormat32bppPBGRA,
-            WICBitmapDitherTypeNone,
-            None,
-            0.0,
-            WICBitmapPaletteTypeMedianCut,
-        )?;
-        let bitmap = dc.CreateBitmapFromWicBitmap(&converter, None)?;
-        let size = bitmap.GetPixelSize();
-        let (pw, ph) = (size.width as f32, size.height as f32);
-        let k = (w / pw).max(h / ph);
-        let (cw, ch) = (w / k, h / k);
-        let source = D2D_RECT_F {
-            left: (pw - cw) / 2.0,
-            top: (ph - ch) / 2.0,
-            right: (pw + cw) / 2.0,
-            bottom: (ph + ch) / 2.0,
-        };
+        let bitmap = decode(dc, encoded)?;
+        let (k, source) = fill(&bitmap, w, h);
         let dest = D2D_RECT_F {
             left: 0.0,
             top: 0.0,
@@ -619,6 +619,29 @@ impl Renderer {
         }
     }
 
+    /// The picture `encoded` filling `shape`, cropped as
+    /// [`Renderer::draw_picture`] crops it.
+    unsafe fn fill_picture(
+        &self,
+        dc: &ID2D1DeviceContext,
+        encoded: &[u8],
+        shape: &D2D1_ROUNDED_RECT,
+    ) -> Result<()> {
+        let bitmap = decode(dc, encoded)?;
+        let r = shape.rect;
+        let (k, source) = fill(&bitmap, r.right - r.left, r.bottom - r.top);
+        let brush = dc.CreateBitmapBrush(&bitmap, None, None)?;
+        brush.SetInterpolationMode(D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+        // From the bitmap's pixels to the shape.
+        brush.SetTransform(
+            &(Matrix3x2::translation(-source.left, -source.top)
+                * Matrix3x2::scale(k, k)
+                * Matrix3x2::translation(r.left, r.top)),
+        );
+        dc.FillRoundedRectangle(shape, &brush);
+        Ok(())
+    }
+
     /// A drawing failed, however far it got: if it's because the GPU went
     /// away, the app is told to draw everything again.
     fn note_if_lost(&self) {
@@ -626,6 +649,47 @@ impl Renderer {
             super::DEVICE_LOST.set(true);
         }
     }
+}
+
+/// The corners of a picture in the card.
+const PICTURE_RADIUS: f32 = 6.0;
+
+/// The picture `encoded` (a PNG or JPEG), for `dc` to draw.
+unsafe fn decode(dc: &ID2D1DeviceContext, encoded: &[u8]) -> Result<ID2D1Bitmap1> {
+    let wic: IWICImagingFactory =
+        CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+    let stream = wic.CreateStream()?;
+    stream.InitializeFromMemory(encoded)?;
+    let decoder =
+        wic.CreateDecoderFromStream(&stream, std::ptr::null(), WICDecodeMetadataCacheOnDemand)?;
+    let frame = decoder.GetFrame(0)?;
+    let converter = wic.CreateFormatConverter()?;
+    converter.Initialize(
+        &frame,
+        &GUID_WICPixelFormat32bppPBGRA,
+        WICBitmapDitherTypeNone,
+        None,
+        0.0,
+        WICBitmapPaletteTypeMedianCut,
+    )?;
+    dc.CreateBitmapFromWicBitmap(&converter, None)
+}
+
+/// How `bitmap` fills `w` by `h`: the scale from its pixels, and the part
+/// of it that's shown, cropped evenly from both sides of whichever way
+/// it's too long.
+unsafe fn fill(bitmap: &ID2D1Bitmap, w: f32, h: f32) -> (f32, D2D_RECT_F) {
+    let size = bitmap.GetPixelSize();
+    let (pw, ph) = (size.width as f32, size.height as f32);
+    let k = (w / pw).max(h / ph);
+    let (cw, ch) = (w / k, h / k);
+    let source = D2D_RECT_F {
+        left: (pw - cw) / 2.0,
+        top: (ph - ch) / 2.0,
+        right: (pw + cw) / 2.0,
+        bottom: (ph + ch) / 2.0,
+    };
+    (k, source)
 }
 
 fn rounded_rect_distance(x: f32, y: f32, lo: f32, hi: f32, r: f32) -> f32 {

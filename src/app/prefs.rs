@@ -195,6 +195,7 @@ impl App {
             Change::MaxDefinitions(n) => self.config.max_definitions = n,
             Change::MaxSynonyms(n) => self.config.max_synonyms = n,
             Change::ShowExamples(on) => self.config.show_examples = on,
+            Change::Wikipedia(on) => self.config.wikipedia = on,
             Change::OnlineLookup(on) => {
                 self.config.online_lookup = on;
                 // The translate button needs the internet, like the answers.

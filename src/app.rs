@@ -53,7 +53,9 @@ use crate::menu::{Command, Menu};
 use crate::offline;
 use crate::online;
 use crate::popup::{self, CardButton, Popup, Transition};
-use crate::render::{self, Body, Renderer, Side, Target, TranslationCard, PICKER_ROWS};
+use crate::render::{
+    self, ArticleCard, Body, Picture, Renderer, Side, Target, TranslationCard, PICKER_ROWS,
+};
 use crate::searchbox::MAX_SUGGESTIONS;
 use crate::selection::{self, Capturer};
 use crate::settings::{Change, Settings, Values};
@@ -63,6 +65,7 @@ use crate::translate::{self, Translation};
 use crate::tray::{self, Tray};
 use crate::ui;
 use crate::update::{self, Release, Replacing};
+use crate::wikipedia::{self, Article};
 use crate::win::{self, Window};
 use edit::{Input, LineEdit, Motion};
 use picking::Picking;
@@ -72,8 +75,9 @@ use procs::{
 };
 use recent::Recent;
 use state::{
-    Captured, Card, Corrected, Event, Events, Glossed, Installing, LanguagePair, Languages, Looked,
-    Passage, Place, Query, Search, Selected, Translatable, Translated, Translating, TranslationKey,
+    Captured, Card, Corrected, Event, Events, Found, Glossed, Installing, LanguagePair, Languages,
+    Looked, Passage, Place, Query, Reading, Search, Selected, Titles, Translatable, Translated,
+    Translating, TranslationKey, Wiki,
 };
 
 const MAIN_CLASS: PCWSTR = w!("WinDict.Main");
@@ -283,6 +287,8 @@ const SETTLE_MS: u32 = ui::RESIZE_MS as u32 + 60;
 const TRANSLATING_WAIT_MS: u32 = 400;
 const CACHE_SIZE: usize = 64;
 const TRANSLATION_CACHE_SIZE: usize = 32;
+const ARTICLE_CACHE_SIZE: usize = 64;
+const PICTURE_CACHE_SIZE: usize = 16;
 /// How many words "back" remembers.
 const HISTORY_SIZE: usize = 50;
 /// Suggestions start with this many letters typed: fewer match too much.
@@ -348,6 +354,10 @@ pub struct App {
     /// Online answers: definitions, and definite "not found"s.
     cache: Recent<Query, Lookup>,
     translations: Recent<TranslationKey, Translation>,
+    /// What Wikipedia had for titles, nothing included.
+    articles: Recent<Titles, Option<Rc<Article>>>,
+    /// Articles' pictures, by their address.
+    pictures: Recent<String, Rc<[u8]>>,
     /// The voices installed, once a card has needed them, until it's gone.
     voices: Option<Voices>,
     speaker: Speaker,
@@ -490,6 +500,8 @@ pub fn run(
             requests: 0,
             cache: Recent::new(CACHE_SIZE),
             translations: Recent::new(TRANSLATION_CACHE_SIZE),
+            articles: Recent::new(ARTICLE_CACHE_SIZE),
+            pictures: Recent::new(PICTURE_CACHE_SIZE),
             voices: None,
             speaker: Speaker::default(),
             translate_key: KeySet::new(TRANSLATE_KEY),
@@ -844,6 +856,10 @@ impl App {
                 // The card waiting on it may be pinned.
                 Event::Looked(looked) => self.with_request(looked.id, |app| app.on_result(looked)),
                 Event::Corrected(c) => self.with_request(c.id, |app| app.on_corrected(c)),
+                Event::Found(found) => self.with_request(found.id, |app| app.on_found(found)),
+                Event::Picture(id, url, bytes) => {
+                    self.with_request(id, |app| app.on_picture(id, url, bytes))
+                }
                 Event::Glossed(glossed) => self.on_glossed(glossed),
                 Event::Words(id, words) => self.on_words(id, words),
                 Event::Scanned(id, result) => self.on_scanned(id, result),
@@ -919,6 +935,7 @@ impl App {
             Err(NormalizeError::Empty) => return self.open_search(Shortcut::Lookup, anchor),
         };
         self.card.gloss_missing = word.contains(' ').then(|| word.clone());
+        self.card.written = dictionary::as_written(&text).ok();
         let query = Query {
             word,
             language: None,
@@ -1181,6 +1198,7 @@ impl App {
                     Err(e) => return self.tray.notify(tr().settings_not_reloaded, &e),
                 }
                 self.cache.clear();
+                self.articles.clear();
                 self.apply_zoom();
                 i18n::set(self.config.ui_language);
                 let _ = jumplist::set();

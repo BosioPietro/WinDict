@@ -46,6 +46,7 @@ pub const PT: Strings = Strings {
     not_found_check_spelling: "Esta palavra não está no dicionário. Confira a grafia.",
     lookup_failed: "Não foi possível pesquisar",
     did_you_mean: "Você quis dizer {word}?",
+    wikipedia_ambiguous: "A Wikipédia tem vários artigos com este nome.",
 
     // The card: a passage, its uncommon words underlined.
     gloss_hint: "Clique numa palavra sublinhada, ou vá até ela com Tab, para pesquisá-la.",
@@ -234,6 +235,8 @@ pub const PT: Strings = Strings {
     lookup: "Pesquisa",
     online_dictionary: "Dicionário online",
     online_dictionary_detail: "Para pronúncias e palavras que faltam no incluído",
+    wikipedia: "Wikipédia",
+    wikipedia_detail: "Para pessoas, lugares e marcas que faltam nos dicionários",
     read_selection: "Ler a seleção",
     selection_automatic: "Automático",
     selection_automatic_detail: "Lê a seleção diretamente e a copia nos apps onde isso \

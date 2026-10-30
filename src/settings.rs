@@ -1065,6 +1065,10 @@ impl Settings {
                         v.config.online_lookup = on;
                         Change::OnlineLookup(on)
                     }
+                    Switch::Wikipedia => {
+                        v.config.wikipedia = on;
+                        Change::Wikipedia(on)
+                    }
                     Switch::Examples => {
                         v.config.show_examples = on;
                         Change::ShowExamples(on)

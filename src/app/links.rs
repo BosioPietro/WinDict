@@ -66,7 +66,8 @@ impl App {
     }
 
     /// What Ctrl+C copies: the text selected, or else the word Tab is on,
-    /// or the translation the card shows, or the word it defines.
+    /// or the translation the card shows, or the word it defines, or the
+    /// article's title.
     fn copyable(&self) -> Option<String> {
         let popup = self.visible_popup()?;
         if let Some(text) = popup.selected_text() {
@@ -81,7 +82,10 @@ impl App {
                 Some(Ok(translation)) => Some(translation.text.clone()),
                 _ => None,
             },
-            None => self.card.translatable.as_ref().map(|t| t.word.clone()),
+            None => match &self.card.reading {
+                Some(reading) => Some(reading.article.title.clone()),
+                None => self.card.translatable.as_ref().map(|t| t.word.clone()),
+            },
         }
     }
 
@@ -135,6 +139,12 @@ impl App {
             Target::Translate => self.translate(),
             Target::Speak => self.speak(),
             Target::Back => self.back(),
+            Target::Wikipedia => {
+                if let Some(article) = self.card.wiki.article().cloned() {
+                    self.show_article(Place::Same(Transition::Replace), article, true);
+                    self.sync_back_keys();
+                }
+            }
             Target::Scan => self.scan(),
             // Pinning moves the card out from where it's handled, so it's
             // done once this is.

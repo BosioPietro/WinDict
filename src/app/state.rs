@@ -20,10 +20,11 @@ use crate::lang::LangCode;
 use crate::ocr;
 use crate::offline;
 use crate::popup::{Popup, Transition};
-use crate::render::{self, Side, Target};
+use crate::render::{self, Picture, Side, Target};
 use crate::selection::Selection;
 use crate::translate::Translation;
 use crate::update::Release;
+use crate::wikipedia::Article;
 
 pub(super) struct Captured {
     pub(super) id: u64,
@@ -52,6 +53,47 @@ impl Query {
             None => Some(def),
         }
     }
+}
+
+/// The titles a word is looked for under on Wikipedia, each in the
+/// language whose Wikipedia it's looked for in, by preference.
+pub(super) type Titles = Vec<(LangCode, String)>;
+
+/// What Wikipedia had for the titles, for the request they were asked
+/// with, or why it couldn't be asked.
+pub(super) struct Found {
+    pub(super) id: u64,
+    pub(super) titles: Titles,
+    pub(super) result: Result<Option<Article>, String>,
+}
+
+/// What Wikipedia has for the word the card shows.
+#[derive(Clone, Default)]
+pub(super) enum Wiki {
+    /// It isn't asked: it's turned off, or there's nothing to ask.
+    #[default]
+    Off,
+    Asking,
+    Answered(Option<Rc<Article>>),
+}
+
+impl Wiki {
+    /// The article, unless the title is several things'.
+    pub(super) fn article(&self) -> Option<&Rc<Article>> {
+        match self {
+            Wiki::Answered(Some(article)) if !article.ambiguous => Some(article),
+            _ => None,
+        }
+    }
+}
+
+/// The card turned into a Wikipedia article.
+pub(super) struct Reading {
+    pub(super) article: Rc<Article>,
+    pub(super) picture: Picture,
+    /// Opened from the definition, which Back goes back to; otherwise
+    /// it's the answer, the dictionaries having none.
+    pub(super) from_definition: bool,
 }
 
 /// A result that wasn't found, or couldn't be looked up, and the word it
@@ -182,6 +224,11 @@ pub(super) enum Event {
     Installing(&'static str, u32),
     Installed(&'static str, Result<(), String>),
     Translated(Translated),
+    /// What Wikipedia had for the word.
+    Found(Found),
+    /// An article's picture, for the request it was fetched for, by its
+    /// address: nothing when it couldn't be fetched.
+    Picture(u64, String, Option<Vec<u8>>),
     /// The latest release, if it's newer, or why it couldn't be looked up.
     UpdateChecked(Result<Option<Release>, String>),
     /// The update was started, or why it couldn't be.
@@ -358,6 +405,19 @@ pub(super) struct Card {
     /// The phrase selected, of several words, glossed instead if the
     /// dictionary hasn't it.
     pub(super) gloss_missing: Option<String>,
+    /// What was selected or typed, cleaned up but in the case it was
+    /// written in, which names keep on Wikipedia.
+    pub(super) written: Option<String>,
+    /// What Wikipedia has for the word.
+    pub(super) wiki: Wiki,
+    /// No definition was found: where the answer goes, the word, and the
+    /// answer, held while Wikipedia is asked, as its answer goes first.
+    pub(super) held: Option<(Place, String, Lookup)>,
+    /// The definition the card shows, or the one the article it shows was
+    /// opened from.
+    pub(super) definition: Option<Definition>,
+    /// The Wikipedia article the card shows, if it does.
+    pub(super) reading: Option<Reading>,
     /// The definition the card shows, if it does.
     pub(super) translatable: Option<Translatable>,
     /// The translation the card turned into, if it did.
@@ -390,5 +450,6 @@ impl Card {
     pub(super) fn clear_content(&mut self) {
         (self.translatable, self.translating, self.speakable) = (None, None, None);
         self.passage = None;
+        (self.definition, self.reading, self.held) = (None, None, None);
     }
 }

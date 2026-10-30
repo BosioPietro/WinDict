@@ -14,7 +14,8 @@
 //!   WordNet) and `online` (Free Dictionary API, Wiktionary, and each
 //!   language's own Wiktionary, through `kaikki` and `wikizionario`, over
 //!   `http`) fill them; `translate` translates the word (Google Translate,
-//!   else MyMemory).
+//!   else MyMemory); `wikipedia` answers for names the dictionaries skip,
+//!   and has the articles definitions link to.
 //! - `popup` (the card, with `searchbox`), `menu`, `settings` and `intro`:
 //!   the windows, each a composition visual tree built from `ui`, drawn by
 //!   `render` in the colors of `theme`.
@@ -68,6 +69,7 @@ mod translate;
 mod tray;
 mod ui;
 mod update;
+mod wikipedia;
 mod wikizionario;
 mod win;
 

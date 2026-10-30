@@ -35,6 +35,7 @@ pub enum Change {
     /// How large the card is drawn, in percent.
     Zoom(u32),
     OnlineLookup(bool),
+    Wikipedia(bool),
     Selection(SelectionMode),
     Animations(bool),
     Autostart(bool),
@@ -56,15 +57,17 @@ pub(super) enum Switch {
     /// Only in the installed copy.
     UiAccess,
     Online,
+    Wikipedia,
     Examples,
     Animations,
     Updates,
 }
 
-pub(super) const SWITCHES: [Switch; 6] = [
+pub(super) const SWITCHES: [Switch; 7] = [
     Switch::Autostart,
     Switch::UiAccess,
     Switch::Online,
+    Switch::Wikipedia,
     Switch::Examples,
     Switch::Animations,
     Switch::Updates,
@@ -505,6 +508,12 @@ pub(super) const SECTIONS: &[(Label, &[Row])] = &[
                 |s| s.online_dictionary,
                 |s| s.online_dictionary_detail,
                 Control::Switch(Switch::Online),
+            ),
+            row(
+                "\u{E12B}",
+                |s| s.wikipedia,
+                |s| s.wikipedia_detail,
+                Control::Switch(Switch::Wikipedia),
             ),
             // Its description is what the chosen way does.
             row("\u{E77F}", |s| s.read_selection, |_| "", Control::Selection),

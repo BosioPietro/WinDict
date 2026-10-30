@@ -282,9 +282,11 @@ impl App {
         let text = picked.map_or(search.edit.text(), |s| s.word.as_str());
         let multilingual = search.words.as_ref().is_some_and(|w| w.multilingual());
         let language = picked.filter(|_| multilingual).map(|s| s.language.clone());
+        let written = dictionary::as_written(text).ok();
         let complaint = match dictionary::normalize(text) {
             Ok(word) => {
                 self.card.search = None;
+                self.card.written = written;
                 // The heading grows out of the word that was picked.
                 if let Some(popup) = self.card.popup.as_mut() {
                     let _ = popup.pick_suggestion(picked_row);

@@ -100,6 +100,7 @@ strings! {
     lookup_failed: "Couldn\u{2019}t look that up",
     /// `{word}`, which is the link.
     did_you_mean: "Did you mean {word}?",
+    wikipedia_ambiguous: "Wikipedia has several articles by this name.",
 
     // The card: a passage, its uncommon words underlined.
     gloss_hint: "Click an underlined word, or Tab to it, to look it up.",
@@ -326,6 +327,8 @@ strings! {
     lookup: "Lookup",
     online_dictionary: "Online dictionary",
     online_dictionary_detail: "For pronunciations, and words the built-in one lacks",
+    wikipedia: "Wikipedia",
+    wikipedia_detail: "For people, places and brands the dictionaries skip",
     read_selection: "Read selections",
     // Its options, each explained under them once chosen.
     selection_automatic: "Automatic",
@@ -677,13 +680,13 @@ mod tests {
         // `..EN` lets a forgotten string through in English; these are the
         // ones that read the same in the language too.
         const SAME: &[(Language, &[&str])] = &[
-            (Language::Italian, &["intro_size", "off"]),
-            (Language::Spanish, &["intro_size", "general"]),
+            (Language::Italian, &["intro_size", "off", "wikipedia"]),
+            (Language::Spanish, &["intro_size", "general", "wikipedia"]),
             (
                 Language::French,
                 &["pos_interjection", "pos_article", "animations"],
             ),
-            (Language::German, &["theme_system"]),
+            (Language::German, &["theme_system", "wikipedia"]),
             (Language::Portuguese, &["intro_size"]),
         ];
         assert_eq!(
