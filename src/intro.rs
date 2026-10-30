@@ -157,12 +157,12 @@ impl Step {
             Step::Dictionaries => (tr().intro_dictionaries_detail, Vec::new()),
             Step::Lookup => (
                 tr().intro_lookup_detail,
-                vec![("hotkey", key_names(&shortcuts.lookup))],
+                vec![("hotkey", hotkey::key_names(&shortcuts.lookup))],
             ),
             Step::Translate => (
                 tr().intro_translate_detail,
                 vec![
-                    ("hotkey", key_names(&shortcuts.translate)),
+                    ("hotkey", hotkey::key_names(&shortcuts.translate)),
                     ("card_hotkey", vec!["Ctrl".into(), "T".into()]),
                 ],
             ),
@@ -206,14 +206,6 @@ impl Step {
             (_, false) => include_bytes!("../assets/intro/tray-light.jpg"),
             (_, true) => include_bytes!("../assets/intro/tray-dark.jpg"),
         }
-    }
-}
-
-/// The keys of the shortcut `text`, as written when it can't be read.
-fn key_names(text: &str) -> Vec<String> {
-    match hotkey::parse(text) {
-        Ok(hotkey) => hotkey.names(),
-        Err(_) => vec![text.to_owned()],
     }
 }
 

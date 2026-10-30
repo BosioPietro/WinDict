@@ -38,7 +38,7 @@ use crate::app::edit::{Input, LineEdit, Motion};
 use crate::app::picking::Picking;
 use crate::config::{self, Config, SelectionMode, Shortcut, ThemeMode, SHORTCUTS, ZOOMS};
 use crate::dicts;
-use crate::hotkey::{self, held_modifiers, is_modifier, Hotkey};
+use crate::hotkey::{self, held_modifiers, is_modifier, key_names, Hotkey};
 use crate::i18n::{self, tr, Language, Strings};
 use crate::lang::LangCode;
 use crate::render::{
@@ -64,17 +64,6 @@ pub use model::{Change, Values};
 fn zoomed(work: RECT, scale: f32, zoom: f32) -> f32 {
     let room = (work.right - work.left) as f32 / (CARD_W + 2.0 * SCREEN_GAP);
     (scale * zoom).min(room.max(scale))
-}
-
-/// The keys of the shortcut `text`, as written when it can't be read.
-fn key_names(text: &str) -> Vec<String> {
-    hotkey::parse(text).map(|h| h.names()).unwrap_or_else(|_| {
-        text.split('+')
-            .map(str::trim)
-            .filter(|k| !k.is_empty())
-            .map(String::from)
-            .collect()
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1345,12 +1334,6 @@ mod tests {
             let room = GROUP_W - ROW_PAD - TEXT_X - row.control.width() - CONTROL_GAP;
             assert!(room >= 120.0, "{}", row.title());
         }
-    }
-
-    #[test]
-    fn reads_shortcuts_it_cannot_parse() {
-        assert_eq!(key_names("ctrl+alt+d"), ["Ctrl", "Alt", "D"]);
-        assert_eq!(key_names("Ctrl+Foo"), ["Ctrl", "Foo"]);
     }
 
     #[test]

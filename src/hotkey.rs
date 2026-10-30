@@ -90,6 +90,18 @@ impl Hotkey {
     }
 }
 
+/// The keys of the shortcut `text`, as written, one by one, when it can't
+/// be read.
+pub fn key_names(text: &str) -> Vec<String> {
+    parse(text).map(|h| h.names()).unwrap_or_else(|_| {
+        text.split('+')
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+            .map(String::from)
+            .collect()
+    })
+}
+
 impl std::fmt::Display for Hotkey {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(&self.names().join("+"))
@@ -194,6 +206,12 @@ pub fn is_modifier(vk: VIRTUAL_KEY) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_keys_of_shortcuts_it_cannot_parse() {
+        assert_eq!(key_names("ctrl+alt+d"), ["Ctrl", "Alt", "D"]);
+        assert_eq!(key_names("Ctrl+Foo"), ["Ctrl", "Foo"]);
+    }
 
     #[test]
     fn parses_hotkeys() {
