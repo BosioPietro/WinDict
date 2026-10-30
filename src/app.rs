@@ -1040,7 +1040,10 @@ impl App {
         }
         self.card.history.clear();
         self.card.translating = None;
-        self.sync_back_keys();
+        // Not synced: a word looked up from a passage, or an article opened
+        // from a definition, still has somewhere to go back to, but the
+        // keys belong to the app underneath once the card is gone.
+        self.back_keys.set(self.hwnd, false);
         self.set_link_keys(false, false);
         self.scroll_keys.set(self.hwnd, false);
         self.translate_key.set(self.hwnd, false);
