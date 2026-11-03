@@ -177,11 +177,9 @@ impl Popup {
     /// `reveal` ms from now. With a delay, the rings that are showing go at
     /// once, as another is gliding over the card to take their place.
     pub(super) fn focus_link(&mut self, start: Option<usize>, reveal: u64) -> Result<()> {
-        self.speak.set_focused(false)?;
-        self.translate.set_focused(false)?;
-        self.back.set_focused(false)?;
-        self.pin.set_focused(false)?;
-        self.scan.set_focused(false)?;
+        for button in CardButton::ALL {
+            self.button_mut(button).0.set_focused(false)?;
+        }
         self.content
             .focus(&self.anim, &self.renderer, start, reveal, self.scale)
     }
