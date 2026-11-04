@@ -195,11 +195,11 @@ pub const PT: Strings = Strings {
 
     // Settings: recording a shortcut.
     shortcut_detail: "Para pesquisar palavras",
-    recording_detail: "Pressione o novo atalho ou Esc para cancelar",
+    recording_detail: "Pressione Esc para cancelar",
     recording_hint: "Pressione as teclas",
     needs_modifier: "Segure Ctrl, Alt ou Win com a tecla",
     unusable_key: "Essa tecla não serve para atalhos",
-    shortcut_taken: "Já usado pelo Windows ou por outro app",
+    shortcut_taken: "Já usado pelo Windows ou um app",
     shortcut_clash: "Já usado pelo outro atalho do WinDict",
 
     // Settings: sections and rows, each with its description under it.

@@ -195,10 +195,10 @@ pub const ES: Strings = Strings {
 
     // Settings: recording a shortcut.
     shortcut_detail: "Para buscar palabras",
-    recording_detail: "Pulsa el nuevo atajo o Esc para cancelar",
+    recording_detail: "Pulsa Esc para cancelar",
     recording_hint: "Pulsa las teclas",
     needs_modifier: "Combina la tecla con Ctrl, Alt o Win",
-    unusable_key: "Esa tecla no puede usarse en un atajo",
+    unusable_key: "Esa tecla no sirve para atajos",
     shortcut_taken: "Ya lo usa Windows u otra aplicación",
     shortcut_clash: "Ya lo usa el otro atajo de WinDict",
 

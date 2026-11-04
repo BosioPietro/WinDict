@@ -196,11 +196,11 @@ pub const DE: Strings = Strings {
 
     // Settings: recording a shortcut.
     shortcut_detail: "Zum Nachschlagen von Wörtern",
-    recording_detail: "Neue Tastenkombination drücken, Esc zum Abbrechen",
+    recording_detail: "Esc zum Abbrechen",
     recording_hint: "Tasten drücken",
-    needs_modifier: "Zusammen mit Strg, Alt oder Win drücken",
-    unusable_key: "Diese Taste kann nicht verwendet werden",
-    shortcut_taken: "Bereits von Windows oder einer anderen App belegt",
+    needs_modifier: "Mit Strg, Alt oder Win drücken",
+    unusable_key: "Diese Taste ist nicht nutzbar",
+    shortcut_taken: "Bereits anderweitig belegt",
     shortcut_clash: "Bereits von der anderen Tastenkombination belegt",
 
     // Settings: sections and rows, each with its description under it.

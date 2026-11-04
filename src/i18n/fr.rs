@@ -197,11 +197,11 @@ pub const FR: Strings = Strings {
 
     // Settings: recording a shortcut.
     shortcut_detail: "Pour chercher des mots",
-    recording_detail: "Appuyez sur le nouveau raccourci, ou Échap pour annuler",
+    recording_detail: "Échap pour annuler",
     recording_hint: "Appuyez",
     needs_modifier: "Ajoutez Ctrl, Alt ou Win à la touche",
     unusable_key: "Cette touche n\u{2019}est pas utilisable",
-    shortcut_taken: "Déjà utilisé par Windows ou une autre application",
+    shortcut_taken: "Déjà pris par Windows ou une app",
     shortcut_clash: "Déjà utilisé par l\u{2019}autre raccourci de WinDict",
 
     // Settings: sections and rows, each with its description under it.

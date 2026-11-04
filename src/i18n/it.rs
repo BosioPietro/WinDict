@@ -192,11 +192,11 @@ pub const IT: Strings = Strings {
 
     // Settings: recording a shortcut.
     shortcut_detail: "Per cercare definizioni",
-    recording_detail: "Premi la nuova scorciatoia, o Esc per annullare",
+    recording_detail: "Premi Esc per annullare",
     recording_hint: "Premi i tasti",
-    needs_modifier: "Tieni premuto Ctrl, Alt o Win insieme al tasto",
-    unusable_key: "Questo tasto non può far parte di una scorciatoia",
-    shortcut_taken: "Già usata da Windows o da un\u{2019}altra app",
+    needs_modifier: "Aggiungi Ctrl, Alt o Win al tasto",
+    unusable_key: "Questo tasto non si può usare",
+    shortcut_taken: "Già usata da Windows o altre app",
     shortcut_clash: "Già usata dall\u{2019}altra scorciatoia di WinDict",
 
     // Settings: sections and rows, each with its description under it.

@@ -285,11 +285,11 @@ strings! {
 
     // Settings: recording a shortcut.
     shortcut_detail: "To look up words",
-    recording_detail: "Press the new shortcut, or Esc to cancel",
+    recording_detail: "Press Esc to cancel",
     recording_hint: "Press keys",
     needs_modifier: "Hold Ctrl, Alt or Win with the key",
     unusable_key: "That key can\u{2019}t be part of a shortcut",
-    shortcut_taken: "Already used by Windows or another app",
+    shortcut_taken: "Taken by Windows or another app",
     shortcut_clash: "Already used by WinDict\u{2019}s other shortcut",
 
     // Settings: sections and rows, each with its description under it.
