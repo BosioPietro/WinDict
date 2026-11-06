@@ -1,9 +1,10 @@
-//! User settings, stored as JSON in `%APPDATA%\WinDict\config.json`.
+//! User settings, stored as JSON in `%APPDATA%\WinDict\config.json`, or in
+//! a config.json beside the executable when there's one (see [`dir`]).
 
 use std::fs::File;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
@@ -186,11 +187,32 @@ impl Default for Config {
     }
 }
 
-fn dir() -> PathBuf {
+/// Where the settings are kept: beside the executable, when a config.json
+/// is there already (a portable copy, on a USB stick, say, whose settings
+/// go with it), else `%APPDATA%\WinDict`.
+pub fn dir() -> PathBuf {
+    if let Some(dir) = portable_dir() {
+        return dir.to_path_buf();
+    }
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
     base.join("WinDict")
+}
+
+/// The executable's folder, if a config.json is in it: that makes the copy
+/// portable, and its dictionaries go beside it too. Decided once, so that
+/// a file made or removed while WinDict runs doesn't move the settings
+/// midway.
+pub fn portable_dir() -> Option<&'static Path> {
+    static PORTABLE: OnceLock<Option<PathBuf>> = OnceLock::new();
+    PORTABLE
+        .get_or_init(|| {
+            let exe = std::env::current_exe().ok()?;
+            let dir = exe.parent()?;
+            dir.join("config.json").is_file().then(|| dir.to_path_buf())
+        })
+        .as_deref()
 }
 
 /// What went wrong with the file, said with its name.
@@ -219,8 +241,9 @@ pub fn load() -> Result<(Config, bool), String> {
 fn load_from(path: &Path) -> Result<(Config, bool), String> {
     match read_from(path)? {
         Some(config) => Ok((config, false)),
-        // Only a missing file is a first run: one that can't be read right
-        // now (locked, no access) mustn't be overwritten with the defaults.
+        // Only a missing or empty file is a first run: one that can't be read
+        // right now (locked, no access) mustn't be overwritten with the
+        // defaults.
         None => {
             let config = Config::default();
             let _ = save_to(path, &config);
@@ -235,13 +258,22 @@ pub fn read() -> Result<Config, String> {
     Ok(read_from(&path())?.unwrap_or_default())
 }
 
-/// The settings in the file at `path`, or nothing if there's no file.
+/// The settings in the file at `path`, or nothing if there's no file, or
+/// nothing in it: an empty one, made by hand to make the copy portable,
+/// is as good as none.
 fn read_from(path: &Path) -> Result<Option<Config>, String> {
     match std::fs::read(path) {
+        Ok(bytes) if blank(&bytes) => Ok(None),
         Ok(bytes) => parse(&bytes).map(Some),
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
         Err(e) => Err(err(e)),
     }
+}
+
+/// Whether the file has nothing in it but whitespace, or a byte order mark.
+fn blank(bytes: &[u8]) -> bool {
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    bytes.iter().all(u8::is_ascii_whitespace)
 }
 
 /// Writes the settings where [`load`] reads them, unless the file there
@@ -503,6 +535,14 @@ mod tests {
         assert_eq!(config.hotkey, "Alt+D");
         assert!(path.exists());
         assert!(!load_from(&path).unwrap().1);
+        // An empty file, made by hand, is a first run too, and gets the
+        // defaults written into it.
+        std::fs::write(&path, " \r\n").unwrap();
+        let (config, first_run) = load_from(&path).unwrap();
+        assert!(first_run);
+        assert_eq!(config.hotkey, "Alt+D");
+        assert!(std::fs::read(&path).unwrap().len() > 2);
+        assert!(blank(b"") && blank(b"\xEF\xBB\xBF\n") && !blank(b"{}"));
         // Saved whole, and nothing left beside it.
         let config = Config {
             hotkey: "Ctrl+Alt+D".into(),

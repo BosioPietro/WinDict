@@ -216,6 +216,11 @@ Use `-Disable -Restart` instead to turn UI access off.
 Download `WinDict-<version>.exe` instead and run it from anywhere: it's the
 whole app in a single executable.
 
+To carry it on a USB stick, create an empty `config.json` in the same
+folder before starting it: the settings are kept there, and the
+dictionaries in a `dicts` folder beside it, rather than in the user's
+profile. `wd.exe`, from the setup's folder, goes by the same file.
+
 > [!NOTE]
 > The app isn't commercially signed, so the first time Windows SmartScreen may
 > ask for confirmation: choose **More info**, then **Run anyway**.

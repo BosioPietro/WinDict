@@ -1,7 +1,8 @@
 //! The offline dictionaries, in the format `tools/build_dict.py` describes.
 //!
 //! English (Open English WordNet) is embedded in the executable; other
-//! languages are read from `%LOCALAPPDATA%\WinDict\dicts\<language>.wdict`.
+//! languages are read from `%LOCALAPPDATA%\WinDict\dicts\<language>.wdict`,
+//! or from a `dicts` folder beside a portable copy (see [`dicts_dir`]).
 //! Either way the file is read in place: Windows only pages in the parts a
 //! lookup touches (the block index plus a few small compressed blocks), so
 //! it costs no memory while the app sits idle.
@@ -19,6 +20,7 @@ use windows::Win32::System::Memory::{
     PAGE_READONLY,
 };
 
+use crate::config;
 use crate::dictionary::{self, percent_encode, Definition, Detail};
 use crate::i18n::{fill, tr};
 use crate::lang::LangCode;
@@ -144,8 +146,12 @@ fn english() -> Arc<Dictionary> {
         .clone()
 }
 
-/// Where the dictionaries other than English are kept.
+/// Where the dictionaries other than English are kept: beside a portable
+/// copy, else under `%LOCALAPPDATA%\WinDict`.
 pub fn dicts_dir() -> PathBuf {
+    if let Some(dir) = config::portable_dir() {
+        return dir.join("dicts");
+    }
     let base = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
