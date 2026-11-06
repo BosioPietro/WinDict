@@ -98,7 +98,6 @@ pub(super) const CHEVRON_W: f32 = 16.0;
 pub(super) const SHORTCUT_W: f32 = 150.0;
 pub(super) const EDIT_W: f32 = 16.0;
 pub(super) const CAPS_GAP: f32 = 8.0;
-pub(super) const FOCUS_OUTSET: f32 = 3.0;
 /// The ring round the shortcut while it's being recorded.
 pub(super) const RECORD_INSET: f32 = 3.0;
 pub(super) const RECORD_RADIUS: f32 = 6.0;
@@ -147,7 +146,7 @@ pub(super) const EDIT_GLYPH: &str = "\u{E70F}";
 pub(super) const MINUS_GLYPH: &str = "\u{E738}";
 pub(super) const PLUS_GLYPH: &str = "\u{E710}";
 pub(super) const CHEVRON_GLYPH: &str = "\u{E70D}";
-pub(super) const CHECK_GLYPH: &str = "\u{E73E}";
+pub(super) const CHECK_GLYPH: &str = crate::ui::CHECK_GLYPH;
 pub(super) const INFO_GLYPH: &str = "\u{E946}";
 
 pub(super) const EMAIL_PLACEHOLDER: &str = "name@example.com";

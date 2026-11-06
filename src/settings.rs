@@ -48,7 +48,7 @@ use crate::selection;
 use crate::theme::Theme;
 use crate::ui::{
     self, scale, ts, v2, v3, Animator, Frame, List, Morph, Push, Rect, ScrollFade, Scrollbar,
-    Scroller, Text, Track, MARGIN,
+    Scroller, Text, Track, FOCUS_OUTSET, MARGIN,
 };
 use crate::win::{self, Window};
 
@@ -364,7 +364,6 @@ pub struct Settings {
     /// Whether the window is the active one, for the caret to show.
     active: bool,
     scroller: Scroller,
-    /// The scroll last started, which may still be running.
     /// Windows is asking whether UI access may change, and how many steps
     /// the dots after saying so have taken.
     waiting: bool,
@@ -390,7 +389,7 @@ impl Settings {
         let root = compositor.CreateContainerVisual()?;
         target.SetRoot(&root)?;
         let frame = Frame::new(&compositor, &root, &theme)?;
-        let notes = NOTES.map(|note| (note.usual(&values), false));
+        let notes = Note::all_usual(&values);
         let email = LineEdit::new(&values.config.mymemory_email, MAX_EMAIL_CHARS);
         let list = List::new(&compositor)?;
         Ok(Settings {
@@ -443,7 +442,7 @@ impl Settings {
         (self.hovered, self.pressed, self.focus) = (None, None, None);
         (self.ring, self.recording) = (false, None);
         self.scroller.stop_at(0.0);
-        self.notes = NOTES.map(|note| (note.usual(&self.values), false));
+        self.notes = Note::all_usual(&self.values);
         self.retitle();
         (self.open, self.picking) = ([false; FOLDS.len()], None);
         self.downloads.fill(None);
@@ -683,7 +682,7 @@ impl Settings {
             (VK_LEFT | VK_RIGHT, Some(Stop::Choice(choice))) => {
                 let at = self.chosen(choice);
                 let next = if key == VK_RIGHT {
-                    (at + 1).min(choice.names().len() - 1)
+                    (at + 1).min(choice.count() - 1)
                 } else {
                     at.saturating_sub(1)
                 };
@@ -829,7 +828,7 @@ impl Settings {
     }
 
     /// The card has shrunk with the list: the window does too.
-    pub fn settle(&mut self) -> Result<()> {
+    pub fn settle(&self) -> Result<()> {
         win::kill_timer(self.hwnd, TIMER_SETTLE);
         let Some(view) = &self.view else {
             return Ok(());
@@ -864,7 +863,7 @@ impl Settings {
 
     /// Shows the window in the language now current, cross-fading to it.
     pub fn relanguage(&mut self) -> Result<()> {
-        self.notes = NOTES.map(|note| (note.usual(&self.values), false));
+        self.notes = Note::all_usual(&self.values);
         self.retitle();
         self.replace_view(true)
     }
@@ -908,7 +907,7 @@ impl Settings {
         if self.email.text().trim() != self.values.config.mymemory_email {
             self.email = LineEdit::new(&self.values.config.mymemory_email, MAX_EMAIL_CHARS);
         }
-        self.notes = NOTES.map(|note| (note.usual(&self.values), false));
+        self.notes = Note::all_usual(&self.values);
         self.retitle();
         self.theme = theme;
         let (anim, renderer, s) = (&self.anim, &self.renderer, self.scale);
@@ -919,10 +918,7 @@ impl Settings {
     /// The window moved to a monitor with another `dpi`. `suggested` is
     /// where Windows would put it, in screen pixels.
     pub fn rescale(&mut self, dpi: u32, suggested: RECT) -> Result<()> {
-        let centre = POINT {
-            x: (suggested.left + suggested.right) / 2,
-            y: (suggested.top + suggested.bottom) / 2,
-        };
+        let centre = win::centre(suggested);
         let work = ui::monitor_at(centre).0;
         let s = zoomed(work, dpi as f32 / 96.0, self.values.config.zoom_factor());
         if (s - self.scale).abs() < 0.01 {
@@ -942,10 +938,7 @@ impl Settings {
         self.values.config.zoom = zoom;
         let mut r = RECT::default();
         unsafe { GetWindowRect(self.hwnd, &mut r)? };
-        let centre = POINT {
-            x: (r.left + r.right) / 2,
-            y: (r.top + r.bottom) / 2,
-        };
+        let centre = win::centre(r);
         let (work, dpi_scale) = ui::monitor_at(centre);
         let s = zoomed(work, dpi_scale, self.values.config.zoom_factor());
         if (s - self.scale).abs() < 0.01 {

@@ -16,7 +16,7 @@ pub struct Values {
 }
 
 /// Something done in the window, for the app to carry out.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Change {
     /// Recording a new shortcut started: the current one should stop
     /// working meanwhile.
@@ -151,6 +151,14 @@ pub(super) enum Choice {
 pub(super) const CHOICES: [Choice; 2] = [Choice::Theme, Choice::Selection];
 
 impl Choice {
+    /// How many options there are.
+    pub(super) fn count(self) -> usize {
+        match self {
+            Choice::Theme => THEMES.len(),
+            Choice::Selection => SELECTIONS.len(),
+        }
+    }
+
     pub(super) fn names(self) -> Vec<&'static str> {
         match self {
             Choice::Theme => THEMES.iter().map(|(_, name)| name(tr())).collect(),
@@ -246,6 +254,11 @@ impl Note {
             Shortcut::Lookup => Note::Shortcut,
             Shortcut::Translate => Note::TranslateShortcut,
         }
+    }
+
+    /// Each note saying what it usually says, with nothing to point out.
+    pub(super) fn all_usual(values: &Values) -> [(String, bool); NOTES.len()] {
+        NOTES.map(|note| (note.usual(values), false))
     }
 
     pub(super) fn usual(self, values: &Values) -> String {
@@ -375,7 +388,7 @@ impl Control {
         match self {
             Control::Shortcut(_) => SHORTCUT_W,
             Control::Switch(_) => SWITCH_W,
-            Control::Choice(choice) => choice.names().len() as f32 * choice.segment_w(),
+            Control::Choice(choice) => choice.count() as f32 * choice.segment_w(),
             Control::Counter(counter) => counter.width(),
             Control::Fold(_) => CHEVRON_W,
             Control::Interface => INTERFACE_W,

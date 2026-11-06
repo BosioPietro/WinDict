@@ -210,9 +210,11 @@ pub fn blink(c: &Compositor, caret: &SpriteVisual) -> Result<()> {
     caret.StartAnimation(&HSTRING::from("Opacity"), &a)
 }
 
-/// A line of text and the brush that shows it.
 /// How long each step of [`waiting`]'s dots shows, in ms.
 pub const DOTS_MS: u32 = 400;
+
+/// The check mark of Segoe's icon fonts.
+pub const CHECK_GLYPH: &str = "\u{E73E}";
 
 /// `text` with `dots` dots after it, from one to three, as what's waiting
 /// shows: they come one by one, step after step.
@@ -220,6 +222,7 @@ pub fn waiting(text: &str, dots: usize) -> String {
     format!("{text}{}", ".".repeat(dots % 3 + 1))
 }
 
+/// A line of text and the brush that shows it.
 pub struct Text {
     pub visual: SpriteVisual,
     pub brush: CompositionSurfaceBrush,
@@ -331,10 +334,9 @@ impl Part {
         Ok(())
     }
 
-    fn hide(&self) -> Result<()> {
+    fn hide(&self) {
         self.now.clear();
         self.was.clear();
-        Ok(())
     }
 }
 
@@ -383,8 +385,9 @@ impl Morph {
         }
         text.show(r, layout, s, theme)?;
         let Some(moving) = moving else {
-            self.name.hide()?;
-            return self.chevron.hide();
+            self.name.hide();
+            self.chevron.hide();
+            return Ok(());
         };
         let turn = |degrees| turning.then_some(degrees);
         self.name.show(anim, r, &moving.name, s, theme, turn(0.0))?;

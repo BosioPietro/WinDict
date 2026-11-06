@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::ops::Range;
 
-use crate::dictionary::Detail;
+use crate::dictionary::{same_word, Detail};
 use crate::lang::LangCode;
 use crate::{offline, translate};
 
@@ -36,7 +36,7 @@ const MAX_PARTICLE: usize = 3;
 const MAX_PARTICLE_RANK: u32 = 300;
 
 /// A passage, and its uncommon words.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Gloss {
     pub text: String,
     pub language: LangCode,
@@ -109,14 +109,9 @@ pub fn with_dictionaries(
     preferred: &[LangCode],
 ) -> Option<Gloss> {
     let dictionaries = offline::active();
-    let brief = Detail {
-        senses: 1,
-        synonyms: 0,
-        examples: false,
-    };
     let base = |language: &str, word: &str| {
         let dictionary = dictionaries.iter().find(|d| *d.language() == language)?;
-        Some(dictionary.lookup(word, brief)?.word)
+        Some(dictionary.lookup(word, Detail::BRIEF)?.word)
     };
     gloss(text, language, preferred, &base)
 }
@@ -271,18 +266,11 @@ impl<'a> List<'a> {
                 continue;
             }
             let word = &text[token.range.clone()];
-            match (self.language, script(word.chars().next().unwrap_or(' '))) {
-                ("ja" | "zh-CN", Script::Han | Script::Kana) => found.extend(
-                    self.uncommon_cjk(word)
-                        .into_iter()
-                        .map(|r| shift(r, token.range.start)),
-                ),
-                _ => found.extend(
-                    self.uncommon_word(word, base)
-                        .into_iter()
-                        .map(|r| shift(r, token.range.start)),
-                ),
-            }
+            let ranges = match (self.language, script(word.chars().next().unwrap_or(' '))) {
+                ("ja" | "zh-CN", Script::Han | Script::Kana) => self.uncommon_cjk(word),
+                _ => self.uncommon_word(word, base),
+            };
+            found.extend(ranges.into_iter().map(|r| shift(r, token.range.start)));
         }
         found
     }
@@ -375,15 +363,13 @@ impl<'a> List<'a> {
         if self.language == "ko" && self.splits(&folded) {
             return true;
         }
-        base(self.language, &word.to_lowercase()).is_some_and(|b| {
-            b.to_lowercase() != word.to_lowercase() && self.has(&fold(&b, self.language))
-        })
+        base(self.language, &word.to_lowercase())
+            .is_some_and(|b| !same_word(&b, word) && self.has(&fold(&b, self.language)))
     }
 
     /// Whether `word` is two or three common pieces.
     fn splits(&self, word: &str) -> bool {
-        let ends: Vec<usize> = word.char_indices().map(|(i, _)| i).skip(1).collect();
-        ends.iter().any(|&i| {
+        word.char_indices().map(|(i, _)| i).skip(1).any(|i| {
             let (head, tail) = word.split_at(i);
             self.has(head)
                 && (self.has(tail)

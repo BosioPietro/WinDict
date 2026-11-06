@@ -4,7 +4,7 @@
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::ScreenToClient;
-use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::Accessibility::HWINEVENTHOOK;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
@@ -63,20 +63,9 @@ fn snip(wparam: WPARAM) -> bool {
 
 /// Whether Print Screen opens Snipping Tool, as it does unless turned off.
 fn print_screen_snips() -> bool {
-    let mut value = 1u32;
-    let mut size = std::mem::size_of::<u32>() as u32;
-    unsafe {
-        let _ = RegGetValueW(
-            HKEY_CURRENT_USER,
-            w!("Control Panel\\Keyboard"),
-            w!("PrintScreenKeyForSnippingEnabled"),
-            RRF_RT_REG_DWORD,
-            None,
-            Some(&mut value as *mut u32 as *mut _),
-            Some(&mut size),
-        );
-    }
-    value != 0
+    let key = w!("Control Panel\\Keyboard");
+    let name = w!("PrintScreenKeyForSnippingEnabled");
+    win::reg_dword(HKEY_CURRENT_USER, key, name).unwrap_or(1) != 0
 }
 
 /// Where `vk` is kept in a set of keys like [`SWALLOWED`]: which word, and
@@ -492,15 +481,10 @@ pub(super) unsafe extern "system" fn settings_proc(
         WM_MOUSEWHEEL => {
             let delta = (wparam.0 >> 16) as u16 as i16 as i32;
             if wparam.0 as u32 & MK_CONTROL != 0 {
-                // MK_CONTROL
                 with_app(|app| app.zoom_settings_by_wheel(delta));
             } else {
                 // The pointer's in screen coordinates here.
-                let mut pt = POINT { x, y };
-                unsafe {
-                    let _ = ScreenToClient(hwnd, &mut pt);
-                }
-                let at = (pt.x, pt.y);
+                let at = win::client_point(hwnd, x, y);
                 with_app(|app| app.in_settings(|s| s.wheel(delta, at).map(|_| None)));
             }
             LRESULT(0)
@@ -621,11 +605,7 @@ pub(super) unsafe extern "system" fn intro_proc(
         WM_MOUSEWHEEL => {
             let delta = (wparam.0 >> 16) as u16 as i16 as i32;
             // The pointer's in screen coordinates here.
-            let mut pt = POINT { x, y };
-            unsafe {
-                let _ = ScreenToClient(hwnd, &mut pt);
-            }
-            let at = (pt.x, pt.y);
+            let at = win::client_point(hwnd, x, y);
             with_app(|app| app.in_intro(|i| i.wheel(delta, at).map(|_| None)));
             LRESULT(0)
         }

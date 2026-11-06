@@ -13,7 +13,7 @@ impl Popup {
     /// left, if it's on the part of it in view.
     pub(super) fn body_point(&self, x: i32, y: i32) -> Option<(f32, f32)> {
         let s = self.scale;
-        let (x, y) = (x as f32 - MARGIN * s, y as f32 - self.frame_y());
+        let (x, y) = self.card_point(x, y);
         if y < self.header_h || y >= self.card_h || x < 0.0 || x >= CARD_W * s {
             return None;
         }
@@ -126,7 +126,7 @@ impl Popup {
     }
 
     /// Glides a ring over the card from `from` to `to`, then takes it away.
-    pub(super) fn glide_ring(&mut self, from: Stop, from_scroll: f32, to: Stop) -> Result<()> {
+    pub(super) fn glide_ring(&self, from: Stop, from_scroll: f32, to: Stop) -> Result<()> {
         let (Some((from_at, from_size, _)), Some((to_at, to_size, radius))) = (
             self.ring_rect(from, from_scroll),
             self.ring_rect(to, self.scroller.at),
@@ -150,15 +150,23 @@ impl Popup {
         anim.scalar(glide, "Opacity", 0.0, 1, FOCUS_MS, &anim.decelerate)
     }
 
-    /// Moves the keyboard focus to the link going to `target`, if the card
-    /// has one.
-    pub fn focus_target(&mut self, target: &Target) -> Result<()> {
-        let links = self.content.links();
-        if let Some(start) = links.iter().position(|l| &l.target == target) {
-            self.focus_link(Some(start), 0)?;
-            self.scroll_into_view(start)?;
+    /// Moves the keyboard focus to the link, or button, going to `target`,
+    /// if the card has one: whether it does.
+    pub fn focus_target(&mut self, target: &Target) -> Result<bool> {
+        let button = CardButton::ALL
+            .into_iter()
+            .find(|&b| b.target() == target && self.button(b).shown());
+        if let Some(button) = button {
+            self.focus_button(button, 0)?;
+            return Ok(true);
         }
-        Ok(())
+        let links = self.content.links();
+        let Some(start) = links.iter().position(|l| &l.target == target) else {
+            return Ok(false);
+        };
+        self.focus_link(Some(start), 0)?;
+        self.scroll_into_view(start)?;
+        Ok(true)
     }
 
     /// Takes the ring off whatever Tab moved to.

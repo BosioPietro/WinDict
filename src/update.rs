@@ -34,7 +34,7 @@ const MAX_SIZE: u64 = 64 * 1024 * 1024;
 const EXIT_WAIT_MS: u32 = 30_000;
 
 /// A newer version than this one, and its executable.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Release {
     /// Like "v0.21.0".
     pub tag: String,
@@ -218,13 +218,10 @@ impl Replacing {
         let Ok(current) = std::env::current_exe() else {
             return;
         };
-        let name = self
-            .old
-            .file_name()
-            .map(|n| n.to_string_lossy().to_lowercase())
-            .unwrap_or_default();
-        let exe = name.starts_with("windict") && name.ends_with(".exe");
-        if !exe || self.old == current || self.old.parent() != current.parent() {
+        if !installed::is_windict_exe(&self.old)
+            || self.old == current
+            || self.old.parent() != current.parent()
+        {
             return;
         }
         for _ in 0..20 {

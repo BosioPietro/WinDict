@@ -482,12 +482,7 @@ impl ScrollFade {
         let mask = c.CreateLinearGradientBrush()?;
         mask.SetStartPoint(v2(0.0, 0.0))?;
         mask.SetEndPoint(v2(0.0, 1.0))?;
-        let opaque = windows::UI::Color {
-            A: 255,
-            R: 255,
-            G: 255,
-            B: 255,
-        };
+        let opaque = crate::theme::argb(255, 255, 255, 255);
         let stops = mask.ColorStops()?;
         let stop = |at: f32| -> Result<CompositionColorGradientStop> {
             let stop = c.CreateColorGradientStopWithOffsetAndColor(at, opaque)?;
@@ -580,12 +575,7 @@ impl ScrollFade {
             (&self.top, alpha(scroll)),
             (&self.bottom, alpha(max - scroll)),
         ] {
-            let to = windows::UI::Color {
-                A: a,
-                R: 255,
-                G: 255,
-                B: 255,
-            };
+            let to = crate::theme::argb(a, 255, 255, 255);
             if !animate {
                 Animator::stop(stop, &["Color"]);
                 stop.SetColor(to)?;
@@ -872,7 +862,7 @@ mod tests {
         assert!(g.at_ms(0.0).abs() < 0.1);
         // It goes past the end, and doesn't stop there before coming back.
         let path: Vec<f32> = (0..=g.duration()).map(|t| g.at_ms(t as f32)).collect();
-        let furthest = path.iter().cloned().fold(0.0, f32::max);
+        let furthest = path.iter().copied().fold(0.0, f32::max);
         assert!(furthest > 105.0 && furthest < 110.0);
         let held = path.iter().filter(|&&at| at > furthest - 0.5).count();
         assert!(held < 40);

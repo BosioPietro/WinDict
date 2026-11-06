@@ -30,7 +30,7 @@ impl App {
                 .show(win::cursor_pos(), theme, steps, start, shortcuts, options)
                 .is_ok()
         });
-        let languages = self.settings_values().config.languages;
+        let languages = self.chosen_languages();
         match self.intro.as_mut().filter(|_| shown) {
             Some(intro) => {
                 let _ = intro.show_languages(&languages);
@@ -42,7 +42,10 @@ impl App {
                 if self.hotkey_ok {
                     self.tray.notify(
                         tr().running,
-                        &fill(tr().running_detail, &[("hotkey", &self.config.hotkey)]),
+                        &fill(
+                            tr().running_detail,
+                            &[("hotkey", &self.config.hotkey(Shortcut::Lookup))],
+                        ),
                     );
                 }
                 self.finish_onboarding();
@@ -54,7 +57,7 @@ impl App {
     /// Once the introduction is done or closed: it isn't shown again.
     pub(super) fn finish_onboarding(&mut self) {
         self.save_setting(|config| config.onboarded = true);
-        if let Some(intro) = self.intro.as_mut().filter(|i| i.visible) {
+        if let Some(intro) = self.visible_intro_mut() {
             let _ = intro.begin_hide();
             win::set_timer(self.hwnd, TIMER_INTRO_HIDE, HIDE_DONE_MS);
         }
@@ -80,7 +83,7 @@ impl App {
     /// the settings, or the tray menu.
     pub(super) fn refresh_intro(&mut self) {
         let (shortcuts, options) = self.intro_state();
-        if let Some(intro) = self.intro.as_mut().filter(|i| i.visible) {
+        if let Some(intro) = self.visible_intro_mut() {
             let _ = intro.update(shortcuts, options);
         }
     }
@@ -122,10 +125,11 @@ impl App {
     /// besides English, downloading those that aren't there, and no longer
     /// in the others.
     fn choose_dictionaries(&mut self, chosen: &[&str]) {
+        let languages = self.chosen_languages();
         for download in dicts::DOWNLOADS {
             let language = download.language;
             let on = chosen.contains(&language);
-            let used = (self.settings_values().config.languages.iter()).any(|l| l == language);
+            let used = languages.iter().any(|l| l == language);
             if on != used {
                 self.tick_language(language.into(), on);
             }
@@ -171,13 +175,8 @@ impl App {
     /// Translates `passage` as the translating shortcut would, but the
     /// way given: into WinDict's language, whatever the settings say.
     fn translate_example(&mut self, passage: &str, direction: (LangCode, LangCode), anchor: RECT) {
-        if !self.config.online_lookup {
-            return self.show_message(
-                Some(anchor),
-                tr().translate_offline,
-                tr().translate_offline_detail,
-                true,
-            );
+        if self.refuse_translation_offline(Some(anchor)) {
+            return;
         }
         self.show_body(
             anchor,
@@ -186,13 +185,7 @@ impl App {
             Body::Loading { status: true },
             false,
         );
-        (self.card.current, self.card.speakable) = (None, None);
-        let about = Translatable {
-            word: passage.into(),
-            senses: Vec::new(),
-        };
-        self.card.translatable = Some(about.clone());
-        self.begin_translation(about, direction, false, None);
+        self.translate_passage(passage.into(), direction, None);
     }
 
     /// Turns UI access on or off, which restarts WinDict, on a thread of its
@@ -219,10 +212,10 @@ impl App {
             UiAccessError::Failed(e) => fill(tr().intro_ui_access_failed, &[("error", &e)]),
         };
         let on = installed::ui_access_on();
-        if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
+        if let Some(settings) = self.visible_settings_mut() {
             let _ = settings.settle_ui_access(on, &note, true);
         }
-        if let Some(intro) = self.intro.as_mut().filter(|i| i.visible) {
+        if let Some(intro) = self.visible_intro_mut() {
             let _ = intro.settle_ui_access(on, Some((note, true)));
         }
     }
@@ -249,7 +242,7 @@ impl App {
             }
         } else {
             self.open_settings();
-            if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
+            if let Some(settings) = self.visible_settings_mut() {
                 let _ = settings.settle_ui_access(ui_access, detail, failed);
                 return;
             }

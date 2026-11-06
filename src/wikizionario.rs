@@ -173,16 +173,8 @@ fn parse_page(
         }
     }
     flush(&mut meanings, &current, &mut senses);
-    let synonyms = related(
-        synonyms.iter().map(String::as_str).collect(),
-        title,
-        max_synonyms,
-    );
-    let antonyms = related(
-        antonyms.iter().map(String::as_str).collect(),
-        title,
-        MAX_ANTONYMS,
-    );
+    let synonyms = related(synonyms.iter().map(String::as_str), title, max_synonyms);
+    let antonyms = related(antonyms.iter().map(String::as_str), title, MAX_ANTONYMS);
     definition(
         kaikki::edition("it")?,
         title.to_string(),

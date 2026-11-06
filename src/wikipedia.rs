@@ -6,7 +6,7 @@ use std::thread;
 
 use serde::Deserialize;
 
-use crate::dictionary::percent_encode;
+use crate::dictionary::{capitalize, wiki_title};
 use crate::http;
 use crate::lang::LangCode;
 
@@ -33,7 +33,7 @@ pub struct Article {
 }
 
 /// The page's picture, made small.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Thumbnail {
     pub url: String,
     pub width: u32,
@@ -71,10 +71,7 @@ pub fn find(candidates: &[(LangCode, String)]) -> Result<Option<Article>, String
 fn summary(language: &str, title: &str) -> Result<Option<Article>, String> {
     let host = format!("{}.wikipedia.org", edition(language));
     for title in variants(title) {
-        let path = format!(
-            "/api/rest_v1/page/summary/{}",
-            percent_encode(&title.replace(' ', "_"))
-        );
+        let path = format!("/api/rest_v1/page/summary/{}", wiki_title(&title));
         match http::get(&host, &path)? {
             (200, body) => return Ok(parse(&body)),
             (404, _) => continue,
@@ -95,14 +92,8 @@ fn edition(language: &str) -> String {
 fn variants(title: &str) -> Vec<String> {
     let capitalized = title
         .split(' ')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                Some(first) => first.to_uppercase().chain(chars).collect(),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<String>>()
+        .map(capitalize)
+        .collect::<Vec<_>>()
         .join(" ");
     let mut out = vec![title.to_string()];
     // Only past the first word: Wikipedia capitalizes that one.
@@ -117,13 +108,10 @@ struct Summary {
     #[serde(rename = "type")]
     kind: String,
     title: String,
-    #[serde(default)]
     titles: Option<Titles>,
-    #[serde(default)]
     description: Option<String>,
     #[serde(default)]
     extract: String,
-    #[serde(default)]
     thumbnail: Option<Picture>,
     content_urls: Urls,
 }

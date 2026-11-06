@@ -120,7 +120,7 @@ impl App {
             .clone()
             .filter(|w| w.to_lowercase() == query.word);
         let title = |word: &str| match &written {
-            Some(w) if w.to_lowercase() == word.to_lowercase() => w.clone(),
+            Some(w) if dictionary::same_word(w, word) => w.clone(),
             _ => word.to_string(),
         };
         let titles: Titles = match &self.card.local {
@@ -410,21 +410,24 @@ impl App {
             Place::New(anchor) => self.show_body(anchor, title, phonetic, body, false),
             Place::Same(transition) => {
                 let back = self.has_word_behind();
-                let translate = self.can_translate();
-                let wikipedia = self.can_read_wikipedia(&body);
-                let speak = self.card.speakable.is_some();
+                let buttons = self.buttons_for(&body);
                 let Some(popup) = self.card.popup.as_mut() else {
                     return;
                 };
-                let _ = popup.set_back(back);
-                let _ = popup.set_translate(translate);
-                let _ = popup.set_wikipedia(wikipedia);
-                let _ = popup.set_speak(speak);
+                let _ = popup.set_button(CardButton::Back, back);
+                let _ = popup.set_buttons(&buttons);
                 if popup
                     .set_content(title, phonetic, body, transition)
                     .is_err()
                 {
                     return;
+                }
+                // On the way back, the focus goes where it was, once
+                // what had it is there again.
+                if let Some(target) = &self.card.refocus {
+                    if popup.focus_target(target).unwrap_or(false) {
+                        self.card.refocus = None;
+                    }
                 }
                 self.on_resized();
                 self.sync_link_keys();
@@ -434,6 +437,16 @@ impl App {
 
     /// Whether the Wikipedia button shows over `body`: on a definition
     /// whose word has an article.
+    /// Which of the card's buttons go with `body`: translating the word,
+    /// reading about it on Wikipedia, and saying it.
+    fn buttons_for(&self, body: &Body) -> [(CardButton, bool); 3] {
+        [
+            (CardButton::Translate, self.can_translate()),
+            (CardButton::Wikipedia, self.can_read_wikipedia(body)),
+            (CardButton::Speak, self.card.speakable.is_some()),
+        ]
+    }
+
     fn can_read_wikipedia(&self, body: &Body) -> bool {
         matches!(body, Body::Definition(_)) && self.card.wiki.article().is_some()
     }
@@ -470,15 +483,11 @@ impl App {
     ) {
         self.dismiss_menu();
         let theme = self.theme();
-        let translate = self.can_translate();
-        let wikipedia = self.can_read_wikipedia(&body);
-        let speak = self.card.speakable.is_some();
+        let buttons = self.buttons_for(&body);
         let Some(popup) = self.ensure_popup() else {
             return;
         };
-        let _ = popup.set_translate(translate);
-        let _ = popup.set_wikipedia(wikipedia);
-        let _ = popup.set_speak(speak);
+        let _ = popup.set_buttons(&buttons);
         if let Err(e) = popup.show(anchor, theme, title, phonetic, body) {
             self.tray.notify(tr().draw_window_failed, &e.message());
             return;
@@ -504,7 +513,7 @@ impl App {
 
     /// The card changed size: clicks outside it now are those outside the
     /// new size, and its clickable area shrinks once the resize has played.
-    pub(super) fn on_resized(&mut self) {
+    pub(super) fn on_resized(&self) {
         let Some(popup) = self.card.popup.as_ref() else {
             return;
         };
@@ -530,7 +539,7 @@ impl App {
     }
 
     /// Safety net: if Start/Search still covers the card, close it.
-    pub(super) fn uncover(&mut self) {
+    pub(super) fn uncover(&self) {
         if selection::has_ui_access() {
             return;
         }
@@ -538,10 +547,7 @@ impl App {
             return;
         };
         let r = popup.card_rect();
-        let center = POINT {
-            x: (r.left + r.right) / 2,
-            y: (r.top + r.bottom) / 2,
-        };
+        let center = win::centre(r);
         let top = unsafe { GetAncestor(WindowFromPoint(center), GA_ROOT) };
         if top != popup.hwnd && selection::is_shell_flyout(top) {
             SHOWN_AT.set(win::now_ms());
@@ -568,16 +574,16 @@ impl App {
         if self.card.current.as_ref() == Some(&query) {
             return;
         }
+        // What's left keeps where the focus was, for Back.
+        let focus = self.focus_to_return_to();
         match self.card.current.take() {
             Some(current) => {
-                self.card.history.push(current);
+                self.card.history.push((current, focus));
                 if self.card.history.len() > HISTORY_SIZE {
                     self.card.history.remove(0);
                 }
             }
-            // From the passage, which keeps where the focus was.
             None => {
-                let focus = self.visible_popup().and_then(|p| p.focused_link()).cloned();
                 if let Some(passage) = self.card.passage.as_mut() {
                     passage.focus = focus;
                 }
@@ -592,7 +598,7 @@ impl App {
     /// Goes back to the word shown before the last synonym was followed, or
     /// from a translation to the definition it was of.
     pub(super) fn back(&mut self) {
-        if !self.visible_popup().is_some() {
+        if self.visible_popup().is_none() {
             return;
         }
         // From the article, back to the definition it was opened from.
@@ -603,6 +609,7 @@ impl App {
             .is_some_and(|r| r.from_definition)
         {
             if let Some(def) = self.card.definition.clone() {
+                self.card.refocus = self.card.focus_behind.take();
                 let place = Place::Same(Transition::Replace);
                 let body = Body::Definition(&def);
                 self.present_body(place, &def.word, def.phonetic.as_deref(), body);
@@ -616,19 +623,48 @@ impl App {
         // A passage translated straight away has no definition to go to,
         // but one glossed goes back to its gloss.
         if self.card.translating.is_some() && self.card.current.is_none() {
+            let focus = self.card.focus_behind.take();
+            if let Some(passage) = self.card.passage.as_mut() {
+                passage.focus = focus;
+            }
             return self.back_to_passage();
         }
-        let query = match self.card.translating.take() {
-            Some(_) => self.card.current.clone(),
-            None => self.card.history.pop(),
+        let (query, focus) = match self.card.translating.take() {
+            Some(_) => (
+                self.card.current.clone(),
+                Some(self.card.focus_behind.take()),
+            ),
+            None => self.card.history.pop().unzip(),
         };
         // The first word looked up from a passage goes back to it.
         let Some(query) = query else {
             return self.back_to_passage();
         };
         self.new_request();
+        self.card.refocus = focus.flatten();
         self.lookup(query, Place::Same(Transition::Replace));
         self.sync_back_keys();
+    }
+
+    /// What had the focus on the card Back comes to from the next one: the
+    /// definition or passage shown, or the one the translation or article
+    /// shown was opened from.
+    pub(super) fn focus_to_return_to(&self) -> Option<Target> {
+        let from_definition = self
+            .card
+            .reading
+            .as_ref()
+            .is_some_and(|r| r.from_definition);
+        if self.card.translating.is_some() || from_definition {
+            return self.card.focus_behind.clone();
+        }
+        self.visible_popup().and_then(|p| p.focused_link()).cloned()
+    }
+
+    /// Remembers what has the focus on the card, which is turning into a
+    /// translation or an article, for Back to put it there again.
+    pub(super) fn keep_focus_behind(&mut self) {
+        self.card.focus_behind = self.visible_popup().and_then(|p| p.focused_link()).cloned();
     }
 
     /// Whether the card shows a translation of a definition, of a passage

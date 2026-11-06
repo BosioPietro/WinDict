@@ -20,7 +20,6 @@ use std::sync::mpsc::{channel, Receiver, Sender};
 
 use windows::core::{w, Interface, Result, HSTRING, PCWSTR};
 use windows::Win32::Foundation::*;
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -190,7 +189,7 @@ pub fn run(compositor: Compositor, installer: &'static [u8]) -> Result<()> {
     i18n::set(language);
     ui::set_motion(ui::system_motion());
     unsafe {
-        let instance = HINSTANCE(GetModuleHandleW(None)?.0);
+        let instance = win::instance();
         RegisterClassW(&WNDCLASSW {
             lpfnWndProc: Some(setup_proc),
             hInstance: instance,
@@ -533,10 +532,7 @@ impl Setup {
     /// The window moved to a monitor with another `dpi`. `suggested` is
     /// where Windows would put it, in screen pixels.
     fn rescale(&mut self, dpi: u32, suggested: RECT) -> Result<()> {
-        let centre = POINT {
-            x: (suggested.left + suggested.right) / 2,
-            y: (suggested.top + suggested.bottom) / 2,
-        };
+        let centre = win::centre(suggested);
         let s = fitted(ui::monitor_at(centre).0, dpi as f32 / 96.0);
         if (s - self.scale).abs() < 0.01 {
             return Ok(());
@@ -757,12 +753,12 @@ impl Setup {
                 fill(tr().setup_update_detail, &[("version", version)]),
             ),
             (Stage::Done, false) => (
-                "\u{E73E}",
+                crate::ui::CHECK_GLYPH,
                 tr().setup_installed,
                 tr().setup_installed_detail.to_owned(),
             ),
             (Stage::Done, true) => (
-                "\u{E73E}",
+                crate::ui::CHECK_GLYPH,
                 tr().setup_updated,
                 fill(tr().setup_updated_detail, &[("version", version)]),
             ),

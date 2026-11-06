@@ -16,6 +16,7 @@ impl App {
         self.card.capturing = false;
         self.card.copying = false;
         self.card.to_translate = false;
+        self.card.refocus = None;
     }
 
     /// The card shown in `hwnd`, if it's one of ours.
@@ -27,7 +28,7 @@ impl App {
 
     /// Whether `hwnd` is a pinned card's window.
     pub(super) fn is_pinned(&self, hwnd: HWND) -> bool {
-        self.pinned.iter().any(|c| c.hwnd() == Some(hwnd))
+        self.pinned_index(hwnd).is_some()
     }
 
     fn pinned_index(&self, hwnd: HWND) -> Option<usize> {
@@ -120,7 +121,7 @@ impl App {
         if let Some(popup) = card.popup.as_mut() {
             let _ = popup.set_pinned(true);
             if typed.is_some() && card.current.is_none() {
-                let _ = popup.set_back(false);
+                let _ = popup.set_button(CardButton::Back, false);
             }
         }
         self.pinned.push(card);

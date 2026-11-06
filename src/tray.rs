@@ -3,16 +3,20 @@
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::LibraryLoader::*;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-pub const ICON_ID: u32 = 1;
+use crate::win;
+
+/// The icon's number among the executable's resources, and as the name
+/// it's loaded by.
+const ICON_ID: u32 = 1;
+const ICON: PCWSTR = PCWSTR(ICON_ID as usize as *const u16);
 
 /// WinDict's icon, from the resources of the executable `instance` is, as
 /// windows show it in the taskbar; none if it isn't there.
 pub fn window_icon(instance: HINSTANCE) -> HICON {
-    unsafe { LoadIconW(Some(instance), PCWSTR(ICON_ID as usize as *const u16)) }.unwrap_or_default()
+    unsafe { LoadIconW(Some(instance), ICON) }.unwrap_or_default()
 }
 
 pub struct Tray {
@@ -48,10 +52,9 @@ fn copy_into(dst: &mut [u16], text: &str) {
 impl Tray {
     pub fn new(hwnd: HWND, callback: u32) -> Tray {
         let load = |cx, cy| unsafe {
-            let module = GetModuleHandleW(None).unwrap_or_default();
             LoadImageW(
-                Some(HINSTANCE(module.0)),
-                PCWSTR(ICON_ID as usize as *const u16),
+                Some(win::instance()),
+                ICON,
                 IMAGE_ICON,
                 GetSystemMetrics(cx),
                 GetSystemMetrics(cy),

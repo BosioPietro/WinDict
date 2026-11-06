@@ -226,15 +226,7 @@ impl Renderer {
             radiusY: 2.0,
         };
         let mask = self.d2d.CreateRoundedRectangleGeometry(&outline)?;
-        let mut layer = D2D1_LAYER_PARAMETERS1 {
-            contentBounds: outline.rect,
-            geometricMask: std::mem::ManuallyDrop::new(Some(mask.cast()?)),
-            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-            maskTransform: Matrix3x2::identity(),
-            opacity: 1.0,
-            opacityBrush: std::mem::ManuallyDrop::new(None),
-            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
-        };
+        let mut layer = layer_params(outline.rect, Some(mask.cast()?), 1.0);
         dc.PushLayer(&layer, None);
         let mut outer = Matrix3x2::default();
         dc.GetTransform(&mut outer);
@@ -354,15 +346,7 @@ impl Renderer {
                 &sink.cast::<ID2D1SimplifiedGeometrySink>()?,
             )?;
             sink.Close()?;
-            let brush = dc.CreateSolidColorBrush(
-                &D2D1_COLOR_F {
-                    r: color.R as f32 / 255.0,
-                    g: color.G as f32 / 255.0,
-                    b: color.B as f32 / 255.0,
-                    a: color.A as f32 / 255.0,
-                },
-                None,
-            )?;
+            let brush = dc.CreateSolidColorBrush(&to_d2d(color), None)?;
             dc.FillGeometry(&line, &brush, None::<&ID2D1Brush>);
             Ok(())
         })?;
@@ -513,15 +497,7 @@ impl Renderer {
                 right: f32::MAX,
                 bottom: f32::MAX,
             };
-            let layer = D2D1_LAYER_PARAMETERS1 {
-                contentBounds: over.clip.unwrap_or(everywhere),
-                geometricMask: std::mem::ManuallyDrop::new(None),
-                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                maskTransform: Matrix3x2::identity(),
-                opacity: over.opacity,
-                opacityBrush: std::mem::ManuallyDrop::new(None),
-                layerOptions: D2D1_LAYER_OPTIONS1_NONE,
-            };
+            let layer = layer_params(over.clip.unwrap_or(everywhere), None, over.opacity);
             dc.PushLayer(&layer, None);
             let drawn = match &blurred {
                 Some(image) => {
@@ -550,15 +526,7 @@ impl Renderer {
             // The card, as it was, over what's under it.
             dc.SetTransform(&own);
             let mask = self.d2d.CreateRoundedRectangleGeometry(&card)?;
-            let mut layer = D2D1_LAYER_PARAMETERS1 {
-                contentBounds: card.rect,
-                geometricMask: std::mem::ManuallyDrop::new(Some(mask.cast()?)),
-                maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
-                maskTransform: Matrix3x2::identity(),
-                opacity: 1.0,
-                opacityBrush: std::mem::ManuallyDrop::new(None),
-                layerOptions: D2D1_LAYER_OPTIONS1_NONE,
-            };
+            let mut layer = layer_params(card.rect, Some(mask.cast()?), 1.0);
             dc.PushLayer(&layer, None);
             dc.SetTransform(&outer);
             picture();
@@ -720,9 +688,27 @@ fn erfc(x: f32) -> f32 {
 }
 
 /// 0xRRGGBB, as Direct2D has colors.
-fn hex(c: u32) -> D2D1_COLOR_F {
+pub(super) fn hex(c: u32) -> D2D1_COLOR_F {
     let [_, r, g, b] = c.to_be_bytes();
     to_d2d(crate::theme::rgb(r, g, b))
+}
+
+/// A layer that clips to `bounds`, and to `mask` if there's one, drawn
+/// with `opacity`. The mask is the caller's to drop.
+fn layer_params(
+    bounds: D2D_RECT_F,
+    mask: Option<ID2D1Geometry>,
+    opacity: f32,
+) -> D2D1_LAYER_PARAMETERS1 {
+    D2D1_LAYER_PARAMETERS1 {
+        contentBounds: bounds,
+        geometricMask: std::mem::ManuallyDrop::new(mask),
+        maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+        maskTransform: Matrix3x2::identity(),
+        opacity,
+        opacityBrush: std::mem::ManuallyDrop::new(None),
+        layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+    }
 }
 
 #[cfg(test)]

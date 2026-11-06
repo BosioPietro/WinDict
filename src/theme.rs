@@ -1,10 +1,10 @@
 //! Colors that follow the Windows light/dark setting and accent color,
 //! or the colors of a contrast theme while one is on.
 
-use windows::core::w;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::Registry::*;
+use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use windows::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 use windows::Win32::UI::WindowsAndMessaging::{
     SystemParametersInfoW, SPI_GETHIGHCONTRAST, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
@@ -13,6 +13,7 @@ use windows::UI::Color;
 use windows::UI::ViewManagement::{UIColorType, UISettings};
 
 use crate::config::ThemeMode;
+use crate::win;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Theme {
@@ -81,9 +82,9 @@ impl Theme {
         let dark = match mode {
             ThemeMode::Dark => true,
             ThemeMode::Light => false,
-            ThemeMode::System => read_personalize_dword("AppsUseLightTheme") == Some(0),
+            ThemeMode::System => read_personalize_dword(w!("AppsUseLightTheme")) == Some(0),
         };
-        let transparency = read_personalize_dword("EnableTransparency") != Some(0);
+        let transparency = read_personalize_dword(w!("EnableTransparency")) != Some(0);
         let fallback = if dark {
             rgb(0x99, 0xEB, 0xFF)
         } else {
@@ -461,22 +462,8 @@ pub fn to_d2d(c: Color) -> D2D1_COLOR_F {
     }
 }
 
-fn read_personalize_dword(name: &str) -> Option<u32> {
-    let name = windows::core::HSTRING::from(name);
-    let mut value = 0u32;
-    let mut size = std::mem::size_of::<u32>() as u32;
-    unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
-            &name,
-            RRF_RT_REG_DWORD,
-            None,
-            Some(&mut value as *mut u32 as *mut _),
-            Some(&mut size),
-        )
-        .ok()
-        .ok()?;
-    }
-    Some(value)
+/// The number `name` is set to in the Personalize key, if it's set.
+fn read_personalize_dword(name: PCWSTR) -> Option<u32> {
+    let key = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
+    win::reg_dword(HKEY_CURRENT_USER, key, name)
 }

@@ -236,6 +236,7 @@ pub const ES: Strings = Strings {
     lookup: "Búsqueda",
     online_dictionary: "Diccionario en línea",
     online_dictionary_detail: "Pronunciación y palabras que no incluye el integrado",
+    wikipedia: "Wikipedia",
     wikipedia_detail: "Para personas, lugares y marcas que faltan en los diccionarios",
     read_selection: "Leer la selección",
     selection_automatic: "Automática",

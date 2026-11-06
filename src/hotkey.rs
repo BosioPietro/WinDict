@@ -125,7 +125,7 @@ pub fn is_usable(modifiers: HOT_KEY_MODIFIERS, vk: u32) -> bool {
 }
 
 /// F1 to F24, which make shortcuts on their own.
-pub fn is_function_key(vk: u32) -> bool {
+fn is_function_key(vk: u32) -> bool {
     (VK_F1.0 as u32..=VK_F24.0 as u32).contains(&vk)
 }
 

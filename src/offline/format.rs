@@ -1,7 +1,7 @@
 //! Reading a dictionary file: its header, the compressed blocks of entries
 //! and of synsets they point to, and the definitions built from them.
 
-use crate::dictionary::{Definition, Detail, Meaning, Sense, MAX_ANTONYMS};
+use crate::dictionary::{same_word, Definition, Detail, Meaning, Sense, MAX_ANTONYMS};
 use crate::i18n::{fill, tr};
 
 use super::sentence;
@@ -138,10 +138,16 @@ impl<'a> Dict<'a> {
         if !entry.senses.is_empty() {
             return None;
         }
+        self.base(&entry).map(|(base, _)| base.to_string())
+    }
+
+    /// The first word `entry` is a form of that's defined, with its entry:
+    /// "geese" → "goose".
+    fn base<'e>(&self, entry: &'e Entry) -> Option<(&'e str, Entry)> {
         entry
             .redirects
-            .into_iter()
-            .find(|base| self.defined(base).is_some())
+            .iter()
+            .find_map(|base| Some((base.as_str(), self.defined(base)?)))
     }
 }
 
@@ -233,14 +239,9 @@ impl Dict<'_> {
                 return build(&candidate, &entry, note);
             }
             // An inflected form ("ran", "walked"): show its base.
-            for base in &entry.redirects {
-                if let Some(base_entry) = self.defined(base) {
-                    return build(
-                        base,
-                        &base_entry,
-                        Some(fill(tr().base_form_of, &[("word", &word)])),
-                    );
-                }
+            if let Some((base, base_entry)) = self.base(&entry) {
+                let note = fill(tr().base_form_of, &[("word", &word)]);
+                return build(base, &base_entry, Some(note));
             }
             // Typed without its accents ("arleng"): show it as it's written.
             for spelling in &entry.spellings {
@@ -327,16 +328,12 @@ impl Dict<'_> {
     }
 }
 
-/// Whether `a` and `b` are the same word but for case, in any alphabet.
-fn same_word(a: &str, b: &str) -> bool {
-    a.chars()
-        .flat_map(char::to_lowercase)
-        .eq(b.chars().flat_map(char::to_lowercase))
-}
-
 /// The word as selected, plus common spelling variants of compounds.
 fn spellings(word: &str) -> Vec<String> {
     let mut out = vec![word.to_string()];
+    if !word.contains([' ', '-']) {
+        return out;
+    }
     for v in [
         word.replace('-', " "),
         word.replace(' ', "-"),

@@ -16,10 +16,9 @@ use windows::Win32::Globalization::{MultiByteToWideChar, MULTI_BYTE_TO_WIDE_CHAR
 use windows::Win32::System::Console::GetConsoleCP;
 
 use crate::config::{self, Config};
-use crate::dictionary::{self, Definition, Detail, Lookup, NormalizeError};
+use crate::dictionary::{self, capitalize, same_word, Definition, Detail, Lookup, NormalizeError};
 use crate::i18n::{self, fill, tr};
 use crate::lang::LangCode;
-use crate::render::capitalize;
 use crate::translate::{self, Direction, Translation};
 use crate::wikipedia::{self, Article};
 use crate::{dicts, gloss, offline, online};
@@ -180,14 +179,13 @@ fn parse(given: Vec<String>) -> Result<Args, String> {
             (Command::Help, _) => {}
             (_, "--online") => args.online = Some(true),
             (_, "--offline") => args.online = Some(false),
-            (Command::Define, "-l" | "--lang") => args.language = Some(value()?),
+            (Command::Define | Command::Gloss, "-l" | "--lang") => args.language = Some(value()?),
             (Command::Define, "-n" | "--senses") => args.senses = Some(number(value()?)?),
             (Command::Define, "-s" | "--synonyms") => args.synonyms = Some(number(value()?)?),
             (Command::Define, "--examples") => args.examples = Some(true),
             (Command::Define, "--no-examples") => args.examples = Some(false),
             (Command::Translate, "-f" | "--from") => args.from = Some(value()?),
             (Command::Translate, "-t" | "--to") => args.to = Some(value()?),
-            (Command::Gloss, "-l" | "--lang") => args.language = Some(value()?),
             _ => return Err(fill(tr().cli_unknown_option, &[("option", &name)])),
         }
     }
@@ -198,12 +196,13 @@ fn parse(given: Vec<String>) -> Result<Args, String> {
 /// prints its definition, or else its Wikipedia article, or what the word
 /// was likely a typo of.
 fn define(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
-    let written = dictionary::as_written(&text(&args.text)).ok();
-    let word = match dictionary::normalize(&text(&args.text)) {
+    // Read once: piped in, the text is gone once it's been.
+    let written = match dictionary::as_written(&text(&args.text)) {
         Ok(word) => word,
         Err(NormalizeError::Empty) => return usage_error(tr().cli_no_word),
         Err(NormalizeError::TooLong) => return failure(tr().too_long, tr().search_too_long),
     };
+    let word = written.to_lowercase();
     let detail = Detail {
         senses: args.senses.unwrap_or(config.max_definitions).max(1),
         synonyms: args.synonyms.unwrap_or(config.max_synonyms),
@@ -231,16 +230,16 @@ fn define(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
         None => Some(def),
     };
     let local = offline::lookup(&word, detail).and_then(within);
+    let languages = match &language {
+        Some(language) => vec![language.clone()],
+        None => offline::languages(),
+    };
     let use_online = args.online.unwrap_or(config.online_lookup);
     let online = use_online.then(|| {
         // The word the offline entry is of, when it's a form of another.
         let key = match &local {
             Some(def) => def.word.to_lowercase(),
             None => word.clone(),
-        };
-        let languages = match &language {
-            Some(language) => vec![language.clone()],
-            None => offline::languages(),
         };
         let _waiting = Waiting::show(tr().looking_up);
         online::lookup(&key, detail, &languages)
@@ -264,12 +263,10 @@ fn define(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
     };
     // People, places and brands, which the dictionaries skip.
     if use_online && config.wikipedia {
-        let languages = match &language {
-            Some(language) => vec![language.clone()],
-            None => offline::languages(),
-        };
-        let title = written.unwrap_or_else(|| word.clone());
-        let titles: Vec<_> = languages.into_iter().map(|l| (l, title.clone())).collect();
+        let titles: Vec<_> = languages
+            .into_iter()
+            .map(|l| (l, written.clone()))
+            .collect();
         let found = {
             let _waiting = Waiting::show(tr().looking_up);
             wikipedia::find(&titles)
@@ -319,14 +316,9 @@ fn translate_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
     load_dictionaries(config);
     // A word the dictionary has: which languages it's in tells which way
     // it goes, and its first sense in the one it's from, what it means.
-    let brief = Detail {
-        senses: 1,
-        synonyms: 0,
-        examples: false,
-    };
     let def = dictionary::normalize(&text)
         .ok()
-        .and_then(|word| offline::lookup(&word, brief));
+        .and_then(|word| offline::lookup(&word, Detail::BRIEF));
     let direction = direction(&text, def.as_ref(), from, to, config);
     if !direction.sure {
         let word = translate::heading(&text);
@@ -393,22 +385,14 @@ fn gloss_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
     // Each word once, as it's first written.
     let mut words: Vec<&str> = Vec::new();
     for word in gloss.words() {
-        if !words
-            .iter()
-            .any(|w| w.to_lowercase() == word.to_lowercase())
-        {
+        if !words.iter().any(|w| same_word(w, word)) {
             words.push(word);
         }
     }
-    let brief = Detail {
-        senses: 1,
-        synonyms: 0,
-        examples: false,
-    };
     let language = gloss.lookup_language();
     let local = |word: &str| {
         let word = dictionary::normalize(word).ok()?;
-        offline::lookup(&word, brief)?.only(&language)
+        offline::lookup(&word, Detail::BRIEF)?.only(&language)
     };
     let mut found: Vec<Option<Definition>> = words.iter().map(|w| local(w)).collect();
     if args.online.unwrap_or(config.online_lookup) && found.iter().any(Option::is_none) {
@@ -418,7 +402,7 @@ fn gloss_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
             let lookups: Vec<_> = (words.iter().zip(&found))
                 .map(|(word, def)| {
                     let word = dictionary::normalize(word).ok().filter(|_| def.is_none())?;
-                    Some(scope.spawn(move || online::lookup(&word, brief, languages)))
+                    Some(scope.spawn(move || online::lookup(&word, Detail::BRIEF, languages)))
                 })
                 .collect();
             for (def, lookup) in found.iter_mut().zip(lookups) {

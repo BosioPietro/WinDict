@@ -15,7 +15,7 @@ pub struct Voices(Vec<(String, HSTRING)>);
 
 impl Voices {
     /// The voices installed now, the default one first, so that it's the
-    /// one picked for its language. None, if they can't be listed.
+    /// one picked for its language. Empty, if they can't be listed.
     pub fn load() -> Voices {
         let list = || -> Result<Vec<(String, HSTRING)>> {
             let default = SpeechSynthesizer::DefaultVoice().and_then(|v| v.Id()).ok();

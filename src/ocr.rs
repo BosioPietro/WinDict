@@ -147,25 +147,25 @@ fn recognize(engine: &OcrEngine, bitmap: &SoftwareBitmap) -> Option<String> {
         .map(|text| tidy(&text.to_string()))
         .filter(|text| !text.is_empty())
         .collect();
-    Some(join_lines(&lines))
+    Some(join(lines.iter().map(String::as_str), true))
 }
 
-/// Lines run together as one: by a space, unless one ends and the next
-/// starts in writing without spaces between words, or a word was broken
-/// over them with a hyphen.
-fn join_lines(lines: &[String]) -> String {
+/// `parts`, lines or words, run together as one: by a space, unless one
+/// ends and the next starts in writing without spaces between words, or,
+/// across `lines`, a word was broken over them with a hyphen.
+fn join<'a>(parts: impl IntoIterator<Item = &'a str>, lines: bool) -> String {
     let mut text = String::new();
-    for line in lines {
-        let (Some(last), Some(next)) = (text.chars().last(), line.chars().next()) else {
-            text.push_str(line);
+    for part in parts {
+        let (Some(last), Some(next)) = (text.chars().last(), part.chars().next()) else {
+            text.push_str(part);
             continue;
         };
-        if last == '-' && next.is_lowercase() {
+        if lines && last == '-' && next.is_lowercase() {
             text.pop();
         } else if !(unspaced(last) && unspaced(next)) {
             text.push(' ');
         }
-        text.push_str(line);
+        text.push_str(part);
     }
     text
 }
@@ -174,25 +174,7 @@ fn join_lines(lines: &[String]) -> String {
 /// that doesn't space its words (Chinese, Japanese), and with no more than
 /// one space anywhere else.
 fn tidy(line: &str) -> String {
-    let chars: Vec<char> = line
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .collect();
-    let mut out = String::with_capacity(line.len());
-    for (i, &c) in chars.iter().enumerate() {
-        let between = |before: usize| {
-            let prev = chars.get(before).copied();
-            let next = chars.get(i + 1).copied();
-            prev.is_some_and(unspaced) && next.is_some_and(unspaced)
-        };
-        if c == ' ' && i > 0 && between(i - 1) {
-            continue;
-        }
-        out.push(c);
-    }
-    out
+    join(line.split_whitespace(), false)
 }
 
 /// Whether `c` is written without spaces around words: Han and kana.
@@ -226,7 +208,7 @@ fn script(c: char) -> Option<Script> {
 /// The language `text` is likeliest in, among those it can be translated
 /// from: told by its writing, when that's one language's, else by the
 /// dictionaries in use and what Windows makes of it.
-pub fn detect(text: &str) -> Option<LangCode> {
+fn detect(text: &str) -> Option<LangCode> {
     if let Some(language) = by_script(text) {
         return Some(language.into());
     }
@@ -319,7 +301,6 @@ fn by_windows(text: &str) -> Option<LangCode> {
 fn supported_code(tag: &str) -> Option<&'static str> {
     let code = match primary(tag).as_str() {
         "zh" => "zh-CN",
-        "nb" | "nn" => "no",
         other => {
             return translate::LANGUAGES
                 .iter()
@@ -366,7 +347,7 @@ mod tests {
 
     #[test]
     fn runs_lines_together() {
-        let lines = |l: &[&str]| join_lines(&l.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let lines = |l: &[&str]| join(l.iter().copied(), true);
         assert_eq!(lines(&["Hello", "world"]), "Hello world");
         assert_eq!(
             lines(&["a long hy-", "phenated word"]),

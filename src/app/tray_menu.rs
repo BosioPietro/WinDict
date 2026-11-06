@@ -33,7 +33,10 @@ impl App {
         self.dismiss();
         // Everything's drawn afresh: with another GPU, if it went away.
         self.recover_device();
-        let (theme, hotkey) = (self.theme(), self.config.hotkey.clone());
+        let (theme, hotkey) = (
+            self.theme(),
+            self.config.hotkey(Shortcut::Lookup).to_owned(),
+        );
         let update = self.update.is_some().then_some(if self.updating {
             tr().menu_updating
         } else {
@@ -57,7 +60,7 @@ impl App {
 
     /// Starts closing the tray menu, if it's open.
     pub(super) fn dismiss_menu(&mut self) {
-        let Some(menu) = self.menu.as_mut().filter(|m| m.visible) else {
+        let Some(menu) = self.visible_menu_mut() else {
             return;
         };
         let _ = menu.begin_hide();
@@ -67,7 +70,7 @@ impl App {
     }
 
     pub(super) fn menu_hover(&mut self, point: Option<(i32, i32)>) {
-        if let Some(menu) = self.menu.as_mut().filter(|m| m.visible) {
+        if let Some(menu) = self.visible_menu_mut() {
             let _ = menu.hover(point);
         }
     }
@@ -84,7 +87,7 @@ impl App {
     }
 
     pub(super) fn menu_key(&mut self, key: VIRTUAL_KEY) {
-        let Some(menu) = self.menu.as_mut().filter(|m| m.visible) else {
+        let Some(menu) = self.visible_menu_mut() else {
             return;
         };
         let _ = match key {

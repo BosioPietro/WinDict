@@ -10,12 +10,12 @@ use windows::Win32::Graphics::Direct2D::Common::D2D_RECT_F;
 use windows::Win32::Graphics::Direct2D::D2D1_ROUNDED_RECT;
 use windows::UI::Composition::CompositionDrawingSurface;
 
-use crate::dictionary::{self, Definition, Meaning, Sense};
+use crate::dictionary::{self, capitalize, Definition, Meaning, Sense};
 use crate::i18n::Language;
 use crate::lang::LangCode;
 use crate::popup::{self, Still};
 use crate::render::{
-    capitalize, Body, Font, Layout, Line, Over, Patch, Renderer, Scene, Translated, TranslationCard,
+    Body, Font, Layout, Line, Over, Patch, Renderer, Scene, Translated, TranslationCard,
 };
 use crate::theme::Theme;
 use crate::translate::{self, Translation};
@@ -48,7 +48,7 @@ const BLUR: f32 = 0.5;
 const CARD_H: f32 = (1258.0 - 341.0) / SHOT;
 
 /// The pictures drawn here.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Shot {
     /// A book, a word in it looked up.
     Lookup,
@@ -930,7 +930,7 @@ mod tests {
     /// Each picture, in each language, light and dark, as raw BGRA for
     /// looking at: `WINDICT_SCENES=dir cargo test scenes -- --ignored`.
     #[test]
-    #[ignore]
+    #[ignore = "writes pictures to WINDICT_SCENES, run on purpose"]
     fn scenes() {
         let dir = std::env::var("WINDICT_SCENES").unwrap();
         let r = renderer();

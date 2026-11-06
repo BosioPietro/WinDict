@@ -7,6 +7,7 @@ use windows::core::{w, Result, HSTRING, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, ScreenToClient, SetWindowRgn};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Registry::{RegGetValueW, HKEY, RRF_RT_REG_DWORD, RRF_RT_REG_SZ};
 use windows::Win32::System::SystemInformation::{GetSystemWindowsDirectoryW, GetTickCount64};
 use windows::Win32::UI::Accessibility::{
     SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK, WINEVENTPROC,
@@ -65,12 +66,20 @@ impl Window {
         ex_style: WINDOW_EX_STYLE,
         style: WINDOW_STYLE,
     ) -> Result<Window> {
-        let instance = unsafe { GetModuleHandleW(None) }
-            .ok()
-            .map(|m| HINSTANCE(m.0));
         let hwnd = unsafe {
             CreateWindowExW(
-                ex_style, class, title, style, 0, 0, 0, 0, parent, None, instance, None,
+                ex_style,
+                class,
+                title,
+                style,
+                0,
+                0,
+                0,
+                0,
+                parent,
+                None,
+                Some(instance()),
+                None,
             )
         }?;
         Ok(Window(hwnd))
@@ -152,6 +161,77 @@ pub fn set_timer(hwnd: HWND, id: usize, ms: u32) {
     }
 }
 
+/// This executable, which its icon, its window classes and its other
+/// resources are looked up in.
+pub fn instance() -> HINSTANCE {
+    let module = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
+    HINSTANCE(module.0)
+}
+
+/// The number `name` holds under `key` in `hive`, if it's there and is one.
+pub fn reg_dword(hive: HKEY, key: PCWSTR, name: PCWSTR) -> Option<u32> {
+    let mut value = 0u32;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    unsafe {
+        RegGetValueW(
+            hive,
+            key,
+            name,
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&mut value as *mut u32).cast()),
+            Some(&mut size),
+        )
+        .ok()
+        .ok()?;
+    }
+    Some(value)
+}
+
+/// The string `name` holds under `key` in `hive`, if it's there and is one.
+pub fn reg_string(hive: HKEY, key: PCWSTR, name: PCWSTR) -> Option<String> {
+    unsafe {
+        let mut size = 0u32;
+        RegGetValueW(hive, key, name, RRF_RT_REG_SZ, None, None, Some(&mut size))
+            .ok()
+            .ok()?;
+        let mut buf = vec![0u16; (size as usize).div_ceil(2)];
+        RegGetValueW(
+            hive,
+            key,
+            name,
+            RRF_RT_REG_SZ,
+            None,
+            Some(buf.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+        .ok()
+        .ok()?;
+        buf.truncate(size as usize / 2);
+        while buf.last() == Some(&0) {
+            buf.pop();
+        }
+        Some(String::from_utf16_lossy(&buf))
+    }
+}
+
+/// The middle of `r`.
+pub fn centre(r: RECT) -> POINT {
+    POINT {
+        x: (r.left + r.right) / 2,
+        y: (r.top + r.bottom) / 2,
+    }
+}
+
+/// The screen point (`x`, `y`) in `hwnd`'s client coordinates.
+pub fn client_point(hwnd: HWND, x: i32, y: i32) -> (i32, i32) {
+    let mut pt = POINT { x, y };
+    unsafe {
+        let _ = ScreenToClient(hwnd, &mut pt);
+    }
+    (pt.x, pt.y)
+}
+
 /// Stops `hwnd`'s timer `id`, if it's running.
 pub fn kill_timer(hwnd: HWND, id: usize) {
     unsafe {
@@ -202,15 +282,12 @@ pub fn create_tooltip(owner: HWND, text: &str, tool: usize) -> Option<HWND> {
         )
         .ok()?;
         // The tooltip keeps its own copy.
-        let mut wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+        let mut wide = wide(text);
         let info = TTTOOLINFOW {
-            cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
             // Watches the owner's mouse messages itself.
             uFlags: TTF_SUBCLASS,
-            hwnd: owner,
-            uId: tool,
             lpszText: PWSTR(wide.as_mut_ptr()),
-            ..Default::default()
+            ..tool_info(owner, tool)
         };
         SendMessageW(
             tooltip,
@@ -222,15 +299,27 @@ pub fn create_tooltip(owner: HWND, text: &str, tool: usize) -> Option<HWND> {
     }
 }
 
+/// What names `owner`'s `tool` to its tooltip, for the rest to be filled in.
+fn tool_info(owner: HWND, tool: usize) -> TTTOOLINFOW {
+    TTTOOLINFOW {
+        cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
+        hwnd: owner,
+        uId: tool,
+        ..Default::default()
+    }
+}
+
+/// `text` as Windows takes it: UTF-16, ending in a NUL.
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(Some(0)).collect()
+}
+
 /// Moves the area of `owner` that `tooltip`'s `tool` shows over to `rect`,
 /// in client pixels. An empty one hides it.
 pub fn set_tooltip_rect(tooltip: HWND, owner: HWND, tool: usize, rect: RECT) {
     let info = TTTOOLINFOW {
-        cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
-        hwnd: owner,
-        uId: tool,
         rect,
-        ..Default::default()
+        ..tool_info(owner, tool)
     };
     unsafe {
         SendMessageW(
@@ -248,13 +337,10 @@ pub fn set_tooltip_rect(tooltip: HWND, owner: HWND, tool: usize, rect: RECT) {
 /// Changes what `tooltip` says over `owner`'s `tool`.
 pub fn set_tooltip_text(tooltip: HWND, owner: HWND, tool: usize, text: &str) {
     // The tooltip keeps its own copy.
-    let mut wide: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+    let mut wide = wide(text);
     let info = TTTOOLINFOW {
-        cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
-        hwnd: owner,
-        uId: tool,
         lpszText: PWSTR(wide.as_mut_ptr()),
-        ..Default::default()
+        ..tool_info(owner, tool)
     };
     unsafe {
         SendMessageW(

@@ -46,10 +46,7 @@ pub fn from_args() -> Option<Shortcut> {
 pub fn set() -> Result<()> {
     // The installed copy's tasks start WinDict.exe, which hands over to the
     // UI access build when it's on.
-    let exe = installed::dir()
-        .map(|dir| dir.join(installed::LAUNCHER))
-        .or_else(|| std::env::current_exe().ok());
-    let Some(exe) = exe else {
+    let Some(exe) = installed::launcher() else {
         return Ok(());
     };
     let exe = HSTRING::from(exe.as_os_str());

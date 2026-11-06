@@ -77,7 +77,7 @@ impl App {
 
     /// Over the tray icon: the shortcut, and the update if there's one.
     pub(super) fn sync_tip(&mut self) {
-        let mut tip = format!("WinDict - {}", self.config.hotkey);
+        let mut tip = format!("WinDict - {}", self.config.hotkey(Shortcut::Lookup));
         if let Some(release) = &self.update {
             tip.push('\n');
             tip += &fill(tr().update_available, &[("version", &release.tag)]);

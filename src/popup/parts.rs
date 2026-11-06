@@ -139,8 +139,22 @@ impl Header {
             self.back.SetOffset(v3(PAD_X * s, PAD_TOP * s))?;
             self.back.SetOpacity(1.0)?;
             self.visual.SetOpacity(0.0)?;
-            anim.scalar(&self.back, "Opacity", 0.0, 240, 0, &anim.decelerate)?;
-            anim.scalar(&self.visual, "Opacity", 1.0, 240, 0, &anim.decelerate)?;
+            anim.scalar(
+                &self.back,
+                "Opacity",
+                0.0,
+                CROSSFADE_MS,
+                0,
+                &anim.decelerate,
+            )?;
+            anim.scalar(
+                &self.visual,
+                "Opacity",
+                1.0,
+                CROSSFADE_MS,
+                0,
+                &anim.decelerate,
+            )?;
         } else {
             self.visual.SetOpacity(1.0)?;
         }
@@ -385,6 +399,9 @@ impl IconButton {
         self.placed = false;
         let away = v3(self.slide_from * s, 0.0);
         if shown {
+            // Where it was last put while it was hidden.
+            Animator::stop(&self.visual, &["Offset"]);
+            self.visual.SetOffset(self.offset(s))?;
             // Slides in alongside the word making room for it.
             Animator::stop(&self.slide, &["Offset"]);
             self.slide.SetOffset(away)?;
@@ -419,11 +436,10 @@ impl IconButton {
     /// Rings the button `delay` ms from now.
     pub(super) fn reveal(&mut self, anim: &Animator, delay: u64) -> Result<()> {
         self.focused = true;
+        Animator::stop(&self.ring, &["Opacity"]);
         if delay == 0 {
-            Animator::stop(&self.ring, &["Opacity"]);
             return self.ring.SetOpacity(1.0);
         }
-        Animator::stop(&self.ring, &["Opacity"]);
         self.ring.SetOpacity(0.0)?;
         anim.scalar(&self.ring, "Opacity", 1.0, 1, delay, &anim.decelerate)
     }
@@ -458,6 +474,10 @@ impl IconButton {
     /// Puts it `top` pixels down the card, level with the word.
     pub(super) fn place(&mut self, top: f32, s: f32) -> Result<()> {
         self.top = top;
+        // One fading out fades where it was; it's put there when shown.
+        if !self.shown {
+            return Ok(());
+        }
         self.visual.SetOffset(self.offset(s))
     }
 
@@ -472,6 +492,11 @@ impl IconButton {
         s: f32,
     ) -> Result<()> {
         (self.x, self.top) = (x, top);
+        // One fading out fades where it was, not over the button taking
+        // its place; it's put there when shown.
+        if !self.shown {
+            return Ok(());
+        }
         let at = self.offset(s);
         if glide && std::mem::replace(&mut self.placed, true) {
             return anim.vector3(&self.visual, "Offset", at, RESIZE_MS, 0, &anim.decelerate);

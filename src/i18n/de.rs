@@ -237,6 +237,7 @@ pub const DE: Strings = Strings {
     lookup: "Nachschlagen",
     online_dictionary: "Online-Wörterbuch",
     online_dictionary_detail: "Für Aussprache und Wörter, die offline fehlen",
+    wikipedia: "Wikipedia",
     wikipedia_detail: "Für Personen, Orte und Marken, die in Wörterbüchern fehlen",
     read_selection: "Markierung auslesen",
     selection_automatic: "Automatisch",

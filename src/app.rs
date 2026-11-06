@@ -32,7 +32,6 @@ use std::sync::mpsc::{channel, Receiver};
 
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::*;
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentThreadId, SetProcessWorkingSetSize,
 };
@@ -506,7 +505,7 @@ pub fn run(
 /// top-level one (not message-only: it must receive the TaskbarCreated
 /// broadcast).
 unsafe fn create_main_window() -> windows::core::Result<HWND> {
-    let instance = HINSTANCE(GetModuleHandleW(None)?.0);
+    let instance = win::instance();
     register_classes(instance)?;
     let hwnd = CreateWindowExW(
         WINDOW_EX_STYLE::default(),
@@ -721,6 +720,21 @@ impl App {
         self.card.popup.as_mut().filter(|p| p.visible)
     }
 
+    /// The settings window, while it's showing.
+    fn visible_settings_mut(&mut self) -> Option<&mut Settings> {
+        self.settings.as_mut().filter(|s| s.visible)
+    }
+
+    /// The introduction, while it's showing.
+    fn visible_intro_mut(&mut self) -> Option<&mut crate::intro::Intro> {
+        self.intro.as_mut().filter(|i| i.visible)
+    }
+
+    /// The tray menu, while it's showing.
+    fn visible_menu_mut(&mut self) -> Option<&mut Menu> {
+        self.menu.as_mut().filter(|m| m.visible)
+    }
+
     /// Registers the shortcuts, saying in a notification if one can't be.
     fn register_hotkeys(&mut self) {
         for shortcut in SHORTCUTS {
@@ -761,7 +775,7 @@ impl App {
 
     /// Lets go of every shortcut, as one is recorded, so that none fires
     /// as it's pressed.
-    fn unregister_hotkeys(&mut self) {
+    fn unregister_hotkeys(&self) {
         for shortcut in SHORTCUTS {
             win::unregister_hotkey(self.hwnd, hotkey_id(shortcut));
         }
@@ -862,11 +876,7 @@ impl App {
         // read, so open a fresh search box, or close the one that's open
         // for the same shortcut.
         let foreground = unsafe { GetForegroundWindow() };
-        let focused = self
-            .card
-            .popup
-            .as_ref()
-            .is_some_and(|p| p.visible && foreground == p.hwnd);
+        let focused = self.visible_popup().is_some_and(|p| p.hwnd == foreground);
         if focused {
             let purpose = self.card.search.as_ref().map(|s| s.purpose);
             return if purpose == Some(shortcut) {
@@ -930,10 +940,7 @@ impl App {
         if id != self.card.request {
             return;
         }
-        self.card.current = None;
-        self.card.search = None;
-        self.card.history.clear();
-        self.card.clear_content();
+        self.card.start_over();
         self.sync_back_keys();
         let status = match self.card.to_translate {
             true => tr().translating,
@@ -1099,11 +1106,7 @@ impl App {
         // Hand the keyboard back to the app the search box took it from,
         // unless the user has moved on to another one already.
         if let Some(previous) = self.card.return_focus.take() {
-            let focused = self
-                .card
-                .popup
-                .as_ref()
-                .is_some_and(|p| unsafe { GetForegroundWindow() } == p.hwnd);
+            let focused = self.card.hwnd() == Some(unsafe { GetForegroundWindow() });
             if focused {
                 unsafe {
                     let _ = SetForegroundWindow(previous);
@@ -1199,15 +1202,16 @@ impl App {
         if button == Some(CardButton::Pin) {
             return self.toggle_pin(hwnd);
         }
-        self.with_card(hwnd, |app| app.click(x, y));
+        self.with_card(hwnd, |app| app.click(x, y, button));
     }
 
-    fn click(&mut self, x: i32, y: i32) {
+    /// A click at (`x`, `y`) on the card, on `button` if it's on one.
+    fn click(&mut self, x: i32, y: i32, button: Option<CardButton>) {
         let suggestion = self.card.popup.as_ref().and_then(|p| p.suggestion_at(x, y));
         if self.card.search.is_some() && suggestion.is_some() {
             return self.submit_search(suggestion);
         }
-        match self.card.popup.as_ref().and_then(|p| p.button_at(x, y)) {
+        match button {
             Some(CardButton::Back) => return self.back(),
             Some(CardButton::Translate) => return self.translate(),
             Some(CardButton::Wikipedia) => return self.open_link(Target::Wikipedia),
@@ -1260,7 +1264,7 @@ impl App {
                         tr().settings_reloaded,
                         &fill(
                             tr().settings_reloaded_detail,
-                            &[("hotkey", &self.config.hotkey)],
+                            &[("hotkey", &self.config.hotkey(Shortcut::Lookup))],
                         ),
                     );
                 }
@@ -1321,10 +1325,7 @@ fn anchor_or_centre(anchor: Option<RECT>, window: HWND, zoom: f32) -> RECT {
     usable_anchor(anchor).unwrap_or_else(|| {
         let mut r = RECT::default();
         let near = if unsafe { GetWindowRect(window, &mut r) }.is_ok() {
-            POINT {
-                x: (r.left + r.right) / 2,
-                y: (r.top + r.bottom) / 2,
-            }
+            win::centre(r)
         } else {
             win::cursor_pos()
         };

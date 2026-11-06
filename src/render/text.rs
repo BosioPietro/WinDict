@@ -125,14 +125,7 @@ impl Renderer {
         };
         let mut out = Stack::default();
         out.text(line, 0.0, Ink::Primary);
-        let layout = Layout {
-            items: out.items,
-            width: width.max(w + 4.0),
-            height,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        };
+        let layout = Layout::new(out.items, width.max(w + 4.0), height);
         Ok((layout, w, caret, span))
     }
 
@@ -151,14 +144,7 @@ impl Renderer {
         };
         let mut out = Stack::default();
         out.text(line, 0.0, ink);
-        let layout = Layout {
-            items: out.items,
-            width: w + 4.0,
-            height,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        };
+        let layout = Layout::new(out.items, w + 4.0, height);
         Ok((layout, w, caret))
     }
 
@@ -187,7 +173,7 @@ impl Renderer {
         let mut out = Stack::default();
         let mut x = 0.0;
         if let Some(code) = badge {
-            let line_h = metrics(&self.text("Ag", &self.formats.suggestion, width)?.layout).1;
+            let line_h = self.line_height(&self.formats.suggestion, width)?;
             x = self.badge(&mut out, code, 0.0, 0.0, line_h)? + 8.0;
         }
         let width = (width - x).max(1.0);
@@ -207,14 +193,7 @@ impl Renderer {
                 self.text(&format!("\u{2192} {base}"), &self.formats.suggestion, width)?;
             out.text(form_of, x + w + 8.0, Ink::Tertiary);
         }
-        Ok(Layout {
-            items: out.items,
-            width: x + width,
-            height,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        })
+        Ok(Layout::new(out.items, x + width, height))
     }
 
     /// Keys and what they do, on one line: "[Enter] Look up  [Esc] Close".
@@ -245,14 +224,7 @@ impl Renderer {
             x += w;
             height = height.max(cap_h);
         }
-        Ok(Layout {
-            items: out.items,
-            width: x.max(1.0),
-            height,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        })
+        Ok(Layout::new(out.items, x.max(1.0), height))
     }
 
     /// A glyph in the accent color and a word of menu text beside it, as
@@ -271,28 +243,18 @@ impl Renderer {
         out.text(glyph, 0.0, Ink::Accent);
         out.y = (height - label_h) / 2.0;
         out.text(label, glyph_w + gap, Ink::Primary);
-        Ok(Layout {
-            items: out.items,
-            width: (glyph_w + gap + label_w).ceil(),
+        Ok(Layout::new(
+            out.items,
+            (glyph_w + gap + label_w).ceil(),
             height,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        })
+        ))
     }
 
     /// One unwrapped line of menu text.
     pub fn layout_line(&self, text: &str, face: Face, ink: Ink, width: f32) -> Result<Layout> {
         let mut out = Stack::default();
         let (_, height) = out.text(self.text(text, self.face(face), width)?, 0.0, ink);
-        Ok(Layout {
-            items: out.items,
-            width,
-            height,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        })
+        Ok(Layout::new(out.items, width, height))
     }
 
     /// How wide `text` is in `face`, on one line, in DIPs.
@@ -345,14 +307,7 @@ impl Renderer {
         let mut out = Stack::default();
         let line = self.text(text, &self.formats.footer, width)?;
         let (w, height) = out.text(line, 0.0, Ink::Primary);
-        Ok(Layout {
-            items: out.items,
-            width: w.ceil().min(width),
-            height,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        })
+        Ok(Layout::new(out.items, w.ceil().min(width), height))
     }
 
     /// `text` wrapped at `width`, in the paragraph face, with each
@@ -434,28 +389,14 @@ impl Renderer {
             }
         }
         let (_, height) = out.text(line, 0.0, ink);
-        Ok(Layout {
-            items: out.items,
-            width,
-            height,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        })
+        Ok(Layout::new(out.items, width, height))
     }
 
     /// A small heading in spaced capitals, like a part of speech.
     pub fn layout_label(&self, text: &str, ink: Ink, width: f32) -> Result<Layout> {
         let mut out = Stack::default();
         let (_, height) = out.text(self.spaced_caps(text, width)?, 0.0, ink);
-        Ok(Layout {
-            items: out.items,
-            width,
-            height,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        })
+        Ok(Layout::new(out.items, width, height))
     }
 
     /// The keys of a shortcut, each on its own cap: "[Ctrl] [Alt] [D]".
@@ -499,28 +440,14 @@ impl Renderer {
             x += cap_w;
             height = height.max(cap_h);
         }
-        Ok(Layout {
-            items: out.items,
-            width: x.max(1.0),
-            height,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        })
+        Ok(Layout::new(out.items, x.max(1.0), height))
     }
 
     /// A link that opens outside WinDict, as in the card's footer.
     pub fn layout_link(&self, text: &str) -> Result<Layout> {
         let mut out = Stack::default();
         let (width, height) = self.external_link(&mut out, text, 0.0, 400.0)?;
-        Ok(Layout {
-            items: out.items,
-            width: width.ceil() + 1.0,
-            height,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        })
+        Ok(Layout::new(out.items, width.ceil() + 1.0, height))
     }
 
     /// `text` in the accent color, underlined, then the icon for links that
@@ -544,14 +471,7 @@ impl Renderer {
         let gap = 3.0;
         let icon = self.text(EXTERNAL_ICON, &self.formats.external, width)?;
         let (icon_w, icon_h, _) = metrics(&icon);
-        out.items.push(Item::Text {
-            layout: icon,
-            x: x + w + gap,
-            y: out.y + (h - icon_h) / 2.0,
-            ink: Ink::Accent,
-            accents: Vec::new(),
-            selectable: false,
-        });
+        out.glyph(icon, x + w + gap, out.y + (h - icon_h) / 2.0, Ink::Accent);
         Ok((w + gap + icon_w, h))
     }
 
@@ -619,14 +539,12 @@ impl Renderer {
             width: cap_w,
             height: cap_h,
         });
-        out.items.push(Item::Text {
-            layout: name,
-            x: x + ((cap_w - w) / 2.0).round(),
-            y: cap_y + pad_y,
-            ink: Ink::Secondary,
-            accents: Vec::new(),
-            selectable: false,
-        });
+        out.glyph(
+            name,
+            x + ((cap_w - w) / 2.0).round(),
+            cap_y + pad_y,
+            Ink::Secondary,
+        );
         Ok(cap_w)
     }
 }

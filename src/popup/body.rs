@@ -369,6 +369,7 @@ impl Content {
         over: bool,
         s: f32,
     ) -> Result<()> {
+        // Found here, not by `swap_link`, so the button can be borrowed too.
         let link = self.links.iter().find(|l| l.target == Target::Swap);
         self.swap.sync(anim, owner, link, rect, over, s)
     }

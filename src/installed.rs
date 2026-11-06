@@ -7,7 +7,7 @@
 //! installer/uiaccess.ps1 has signed it, which also sets `UIAccess` under
 //! `HKLM\Software\WinDict`; WinDict.exe then hands over to it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use windows::core::{w, Owned, HSTRING, PCWSTR};
 use windows::Win32::Foundation::ERROR_CANCELLED;
@@ -17,6 +17,8 @@ use windows::Win32::UI::Shell::{
     ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_SHOWNORMAL};
+
+use crate::win;
 
 /// Written by the installer, and only administrators can change it.
 const KEY: PCWSTR = w!("Software\\WinDict");
@@ -29,10 +31,34 @@ pub fn dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     let parent = exe.parent()?;
     let installed = read_string(w!("InstallDir"))?;
-    let here = parent.to_string_lossy();
-    here.trim_end_matches('\\')
-        .eq_ignore_ascii_case(installed.trim_end_matches('\\'))
-        .then(|| parent.to_path_buf())
+    same_path(parent, Path::new(&installed)).then(|| parent.to_path_buf())
+}
+
+/// What starts this copy. The installed copy starts through WinDict.exe,
+/// even when it's the UI access build running: that one may not start
+/// once UI access is off. One from a download starts itself.
+pub fn launcher() -> Option<PathBuf> {
+    match dir() {
+        Some(dir) => Some(dir.join(LAUNCHER)),
+        None => std::env::current_exe().ok(),
+    }
+}
+
+/// Whether `a` and `b` name the same place, as Windows reads them: case
+/// aside, and a trailing backslash too.
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    let (a, b) = (a.to_string_lossy(), b.to_string_lossy());
+    a.trim_end_matches('\\').to_lowercase() == b.trim_end_matches('\\').to_lowercase()
+}
+
+/// Whether `path` names a WinDict executable: this one, or another version
+/// of it, as the release files are named.
+pub fn is_windict_exe(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    name.starts_with("windict") && name.ends_with(".exe")
 }
 
 /// Where the setup installed WinDict, whichever copy this is.
@@ -119,7 +145,7 @@ pub fn set_ui_access(on: bool) -> Result<(), UiAccessError> {
 /// if it can't, because its signature is missing or no longer trusted, this
 /// one runs instead. It's started with `switch`, if there's one.
 pub fn hand_over(switch: Option<&str>) -> bool {
-    if cfg!(feature = "uiaccess") || read_dword(w!("UIAccess")) != Some(1) {
+    if cfg!(feature = "uiaccess") || !ui_access_on() {
         return false;
     }
     let Some(dir) = dir() else {
@@ -141,54 +167,9 @@ pub fn hand_over(switch: Option<&str>) -> bool {
 }
 
 fn read_dword(name: PCWSTR) -> Option<u32> {
-    let mut value = 0u32;
-    let mut size = std::mem::size_of::<u32>() as u32;
-    unsafe {
-        RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            KEY,
-            name,
-            RRF_RT_REG_DWORD,
-            None,
-            Some((&mut value as *mut u32).cast()),
-            Some(&mut size),
-        )
-        .ok()
-        .ok()?;
-    }
-    Some(value)
+    win::reg_dword(HKEY_LOCAL_MACHINE, KEY, name)
 }
 
 fn read_string(name: PCWSTR) -> Option<String> {
-    unsafe {
-        let mut size = 0u32;
-        RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            KEY,
-            name,
-            RRF_RT_REG_SZ,
-            None,
-            None,
-            Some(&mut size),
-        )
-        .ok()
-        .ok()?;
-        let mut buf = vec![0u16; (size as usize).div_ceil(2)];
-        RegGetValueW(
-            HKEY_LOCAL_MACHINE,
-            KEY,
-            name,
-            RRF_RT_REG_SZ,
-            None,
-            Some(buf.as_mut_ptr().cast()),
-            Some(&mut size),
-        )
-        .ok()
-        .ok()?;
-        buf.truncate(size as usize / 2);
-        while buf.last() == Some(&0) {
-            buf.pop();
-        }
-        Some(String::from_utf16_lossy(&buf))
-    }
+    win::reg_string(HKEY_LOCAL_MACHINE, KEY, name)
 }

@@ -16,6 +16,8 @@
 //!   `http`) fill them; `translate` translates the word (Google Translate,
 //!   else MyMemory); `wikipedia` answers for names the dictionaries skip,
 //!   and has the articles definitions link to.
+//! - `dicts`: the dictionaries other than English, downloaded when chosen.
+//! - `lang`: language codes, kept apart from the text they travel with.
 //! - `popup` (the card, with `searchbox`), `menu`, `settings` and `intro`:
 //!   the windows, each a composition visual tree built from `ui`, drawn by
 //!   `render` in the colors of `theme`.

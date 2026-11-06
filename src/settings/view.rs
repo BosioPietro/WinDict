@@ -11,6 +11,11 @@ use windows_numerics::Vector3;
 use crate::i18n;
 use crate::ui::RESIZE_MS;
 
+/// What's wanted isn't there to be shown: never, once the view is built.
+fn missing() -> windows::core::Error {
+    E_UNEXPECTED.into()
+}
+
 use super::widgets::{container, outline, resizable_outline, rounded};
 use super::*;
 
@@ -223,10 +228,8 @@ impl Settings {
         self.frame.resize(&self.anim, w, h, v3(m, m), s, false)?;
         view.body.SetSize(v2(w, h - view.header_h))?;
         self.scroller.at = self.scroller.at.min(self.max_scroll());
-        if let Some(view) = &self.view {
-            Animator::stop(&view.scroller, &["Offset"]);
-            view.scroller.SetOffset(v3(0.0, -self.scroller.at))?;
-        }
+        Animator::stop(&view.scroller, &["Offset"]);
+        view.scroller.SetOffset(v3(0.0, -self.scroller.at))?;
         self.show_scroll(false)
     }
 
@@ -323,7 +326,6 @@ impl Settings {
         let (languages_layout, slack) = self.layout_languages()?;
         let translate_h =
             px(TRANSLATE_HEAD) + (languages_layout.height * s).ceil() + slack + px(TRANSLATE_FOOT);
-        let missing = || windows::core::Error::from(E_UNEXPECTED);
         let mut parts = Parts {
             // Over the groups, where the box of WinDict's language goes.
             overlay: Some(container(c, &scroller, v3(0.0, 0.0))?),
@@ -682,7 +684,7 @@ impl Settings {
         group.Children()?.InsertAtTop(&ring)?;
 
         Ok(ShortcutView {
-            hover: hover.ok_or_else(|| windows::core::Error::from(E_UNEXPECTED))?,
+            hover: hover.ok_or_else(missing)?,
             caps,
             old_caps,
             caps_right: x - px(CAPS_GAP),
@@ -982,7 +984,7 @@ impl Settings {
                     .stops
                     .push((Stop::Switch(sw), place(track).outset(outset), radius));
                 parts.switches[sw as usize] = Some(SwitchView {
-                    hover: hover.ok_or_else(|| windows::core::Error::from(E_UNEXPECTED))?,
+                    hover: hover.ok_or_else(missing)?,
                     ..view
                 });
             }
@@ -1035,7 +1037,7 @@ impl Settings {
                 parts
                     .stops
                     .push((Stop::Fold(fold), ring_at, px(RECORD_RADIUS)));
-                let hover = hover.ok_or_else(|| windows::core::Error::from(E_UNEXPECTED))?;
+                let hover = hover.ok_or_else(missing)?;
                 parts.folds[fold as usize] = Some((hover, chevron));
             }
         }
@@ -1109,10 +1111,7 @@ impl Settings {
             &self.theme,
             self.scale,
         );
-        let overlay = parts
-            .overlay
-            .as_ref()
-            .ok_or_else(|| windows::core::Error::from(E_UNEXPECTED))?;
+        let overlay = parts.overlay.as_ref().ok_or_else(missing)?;
         let (layout, moving) = self.layout_interface()?;
         let text = Text::new(c, overlay)?;
         text.visual.SetOffset(at)?;

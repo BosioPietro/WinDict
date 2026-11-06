@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Storage::FileSystem::{FILE_SHARE_DELETE, FILE_SHARE_READ};
 use windows::Win32::System::Memory::{
     CreateFileMappingW, MapViewOfFile, UnmapViewOfFile, FILE_MAP_READ, MEMORY_MAPPED_VIEW_ADDRESS,
     PAGE_READONLY,
@@ -251,11 +252,11 @@ unsafe impl Sync for Mapping {}
 
 impl Mapping {
     fn open(path: &std::path::Path) -> std::io::Result<Mapping> {
-        // FILE_SHARE_READ | FILE_SHARE_DELETE: others may read it, or move
-        // a newer copy in its place, but not change it.
+        // Others may read it, or move a newer copy in its place, but not
+        // change it.
         let file = File::options()
             .read(true)
-            .share_mode(0x1 | 0x4)
+            .share_mode((FILE_SHARE_READ | FILE_SHARE_DELETE).0)
             .open(path)?;
         let len = usize::try_from(file.metadata()?.len()).unwrap_or(usize::MAX);
         if len < HEADER {
@@ -301,12 +302,8 @@ impl Drop for Mapping {
 /// "a domesticated canid" → "A domesticated canid."
 /// A definition as a sentence: capitalised, with a full stop.
 pub fn sentence(text: &str) -> String {
-    let mut chars = text.chars();
-    let mut out: String = match chars.next() {
-        Some(c) => c.to_uppercase().chain(chars).collect(),
-        None => return String::new(),
-    };
-    if !out.ends_with(['.', '!', '?', ')']) {
+    let mut out = dictionary::capitalize(text);
+    if !out.is_empty() && !out.ends_with(['.', '!', '?', ')']) {
         out.push('.');
     }
     out
@@ -367,11 +364,7 @@ mod tests {
 
     #[test]
     fn keeps_what_is_asked_for() {
-        let brief = Detail {
-            senses: 1,
-            synonyms: 0,
-            examples: false,
-        };
+        let brief = Detail::BRIEF;
         let run = lookup("run", brief).unwrap();
         assert!(run.meanings.iter().all(|m| m.senses.len() == 1));
         assert!(run.meanings.iter().all(|m| m.synonyms.is_empty()));

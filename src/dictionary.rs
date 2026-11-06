@@ -92,6 +92,14 @@ pub struct Detail {
 }
 
 impl Detail {
+    /// A word's first sense in each part of speech and nothing else: what
+    /// a translation or a gloss needs to tell what it means.
+    pub const BRIEF: Detail = Detail {
+        senses: 1,
+        synonyms: 0,
+        examples: false,
+    };
+
     /// `def` with only what's asked for. The limits on senses and synonyms
     /// are kept as it's put together; this drops what's left.
     pub fn apply(self, def: Definition) -> Definition {
@@ -193,15 +201,13 @@ pub fn merge(local: Definition, online: Option<&Lookup>, order: &[LangCode]) -> 
     let Some(Lookup::Found(online)) = online else {
         return local;
     };
-    let mut sections = local.clone().into_sections();
+    let mut sections = local.into_sections();
     for theirs in online.sections() {
         match sections.iter_mut().find(|s| s.language == theirs.language) {
             // The same word: what the dictionary has, it says better. A
             // word whose base form was shown ("case" → "casa") is left as
             // the dictionary has it.
-            Some(ours) if ours.word.to_lowercase() == theirs.word.to_lowercase() => {
-                fill(ours, theirs)
-            }
+            Some(ours) if same_word(&ours.word, &theirs.word) => fill(ours, theirs),
             Some(_) => {}
             None => sections.push(Definition {
                 others: Vec::new(),
@@ -209,7 +215,8 @@ pub fn merge(local: Definition, online: Option<&Lookup>, order: &[LangCode]) -> 
             }),
         }
     }
-    combine(sections, order).unwrap_or(local)
+    // Never empty: the local section is there.
+    combine(sections, order).expect("the local section is there")
 }
 
 fn fill(local: &mut Definition, online: &Definition) {
@@ -237,30 +244,54 @@ fn fill(local: &mut Definition, online: &Definition) {
 
 /// A web page for `word` at `source`, for the card's footer links.
 pub fn source_url(source: &str, word: &str) -> Option<String> {
-    match source {
-        WIKTIONARY => Some(format!(
-            "https://en.wiktionary.org/wiki/{}",
-            percent_encode(&word.replace(' ', "_"))
-        )),
+    let host = match source {
+        WIKTIONARY => "en.wiktionary.org",
         _ => match crate::kaikki::EDITIONS.iter().find(|e| e.source == source) {
-            Some(edition) => Some(format!(
-                "https://{}/wiki/{}",
-                edition.host,
-                percent_encode(&word.replace(' ', "_"))
-            )),
-            None => crate::offline::link(source, word),
+            Some(edition) => edition.host,
+            None => return crate::offline::link(source, word),
         },
+    };
+    Some(format!("https://{host}/wiki/{}", wiki_title(word)))
+}
+
+/// `word` as the title of its Wiktionary or Wikipedia page goes in a URL:
+/// with underscores for spaces.
+pub fn wiki_title(word: &str) -> String {
+    percent_encode(&word.replace(' ', "_"))
+}
+
+/// Whether `a` and `b` are the same word but for case, in any alphabet.
+pub fn same_word(a: &str, b: &str) -> bool {
+    a.chars()
+        .flat_map(char::to_lowercase)
+        .eq(b.chars().flat_map(char::to_lowercase))
+}
+
+/// `text` on one line, its words a single space apart.
+pub fn tidy(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// "serendipity" → "Serendipity". Only the first letter changes.
+pub fn capitalize(word: &str) -> String {
+    let mut chars = word.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().chain(chars).collect(),
+        None => String::new(),
     }
 }
 
 pub fn percent_encode(s: &str) -> String {
+    use std::fmt::Write;
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(b as char)
             }
-            _ => out.push_str(&format!("%{b:02X}")),
+            _ => {
+                let _ = write!(out, "%{b:02X}");
+            }
         }
     }
     out
@@ -269,6 +300,15 @@ pub fn percent_encode(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_words_in_any_case() {
+        assert!(same_word("Città", "città"));
+        assert!(same_word("ÉTÉ", "été"));
+        assert!(same_word("Señor", "señor"));
+        assert!(!same_word("città", "citta"));
+        assert!(!same_word("senor", "señor"));
+    }
 
     /// The built-in dictionary's name.
     const WORDNET: &str = "Open English WordNet";

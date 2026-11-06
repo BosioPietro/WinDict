@@ -10,7 +10,7 @@ use std::borrow::Cow;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::dictionary::{percent_encode, NormalizeError, MAX_LOOKUP_CHARS};
+use crate::dictionary::{percent_encode, same_word, tidy, NormalizeError, MAX_LOOKUP_CHARS};
 use crate::http;
 use crate::i18n::{fill, tr};
 use crate::lang::LangCode;
@@ -156,7 +156,7 @@ fn fold(text: &str) -> String {
 /// `raw`, the selection, as it's translated: on one line, with its spaces
 /// tidied, unless there's nothing to it or too much.
 pub fn passage(raw: &str) -> Result<String, NormalizeError> {
-    let text = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let text = tidy(raw);
     if !text.chars().any(char::is_alphanumeric) {
         return Err(NormalizeError::Empty);
     }
@@ -211,7 +211,7 @@ pub struct Group {
 }
 
 /// A translation, and what it means back in the word's language.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Term {
     pub text: String,
     pub back: Vec<String>,
@@ -227,29 +227,45 @@ pub struct Direction {
     pub sure: bool,
 }
 
+impl Direction {
+    fn new(from: &str, to: &str, sure: bool) -> Direction {
+        Direction {
+            from: from.into(),
+            to: to.into(),
+            sure,
+        }
+    }
+}
+
+/// The language to translate `from` into when nothing else says: the
+/// `default` way's far end, or its near one should that be `from`, else
+/// the first language there is that isn't.
+fn other_than<'a>(from: &str, default: (&'a str, &'a str)) -> &'a str {
+    [default.1, default.0]
+        .into_iter()
+        .chain(LANGUAGES.iter().map(|(code, _)| *code))
+        .find(|&l| l != from)
+        .unwrap_or("en")
+}
+
 /// Which way to translate a word that's in `found` (the card's languages,
 /// in its order). With two languages looked up in, it's from the one the
 /// word is in to the other; unless it's in both, when that's only a guess.
 /// Otherwise it's from the word's language to `default.1`, or `default.0`
 /// should that be the word's.
 pub fn pick(found: &[&str], enabled: &[LangCode], default: (&str, &str)) -> Direction {
-    let direction = |from: &str, to: &str, sure| Direction {
-        from: from.into(),
-        to: to.into(),
-        sure,
-    };
     if let [a, b] = enabled {
         if supported(a) && supported(b) {
             let in_a = found.contains(&a.as_str());
             let in_b = found.contains(&b.as_str());
             match (in_a, in_b) {
-                (true, false) => return direction(a, b, true),
-                (false, true) => return direction(b, a, true),
+                (true, false) => return Direction::new(a, b, true),
+                (false, true) => return Direction::new(b, a, true),
                 // In both: the card's first language comes first.
                 (true, true) if found.first() == Some(&b.as_str()) => {
-                    return direction(b, a, false)
+                    return Direction::new(b, a, false)
                 }
-                (true, true) => return direction(a, b, false),
+                (true, true) => return Direction::new(a, b, false),
                 (false, false) => {}
             }
         }
@@ -259,12 +275,7 @@ pub fn pick(found: &[&str], enabled: &[LangCode], default: (&str, &str)) -> Dire
         .copied()
         .filter(|l| supported(l))
         .unwrap_or(default.0);
-    let to = [default.1, default.0]
-        .into_iter()
-        .chain(LANGUAGES.iter().map(|(code, _)| *code))
-        .find(|&l| l != from)
-        .unwrap_or("en");
-    direction(from, to, true)
+    Direction::new(from, other_than(from, default), true)
 }
 
 /// Which way to translate text typed `from` a language, if that could be
@@ -274,33 +285,19 @@ pub fn pick(found: &[&str], enabled: &[LangCode], default: (&str, &str)) -> Dire
 /// the default way, and not `sure`.
 pub fn typed(from: Option<&str>, enabled: &[LangCode], default: (&str, &str)) -> Direction {
     let Some(from) = from.filter(|l| supported(l)) else {
-        return Direction {
-            from: default.0.into(),
-            to: default.1.into(),
-            sure: false,
-        };
-    };
-    let direction = |from: &str, to: &str| Direction {
-        from: from.into(),
-        to: to.into(),
-        sure: true,
+        return Direction::new(default.0, default.1, false);
     };
     if let [a, b] = enabled {
         if supported(a) && supported(b) {
             if from == a.as_str() {
-                return direction(a, b);
+                return Direction::new(a, b, true);
             }
             if from == b.as_str() {
-                return direction(b, a);
+                return Direction::new(b, a, true);
             }
         }
     }
-    let to = [default.1, default.0]
-        .into_iter()
-        .chain(LANGUAGES.iter().map(|(code, _)| *code))
-        .find(|&l| l != from)
-        .unwrap_or("en");
-    direction(from, to)
+    Direction::new(from, other_than(from, default), true)
 }
 
 /// Translates `word` between the languages of `direction`: Google first,
@@ -465,7 +462,7 @@ fn google_translation<I: serde_json::value::Index + Copy>(
 struct MyMemoryResponse {
     #[serde(rename = "responseData")]
     data: Option<MyMemoryData>,
-    #[serde(rename = "quotaFinished", default)]
+    #[serde(rename = "quotaFinished")]
     quota_finished: Option<bool>,
     #[serde(rename = "responseStatus", default)]
     status: Value,
@@ -488,7 +485,7 @@ where
 
 #[derive(Deserialize)]
 struct MyMemoryData {
-    #[serde(rename = "translatedText", default)]
+    #[serde(rename = "translatedText")]
     text: Option<String>,
 }
 
@@ -588,12 +585,11 @@ fn parse_mymemory(body: &[u8], query: &str) -> Result<(String, Vec<String>), Str
     let mut alternatives: Vec<String> = Vec::new();
     for m in &response.matches {
         let alternative = m.translation.trim();
-        let same = |a: &str, b: &str| a.to_lowercase() == b.to_lowercase();
         let new = !alternative.is_empty()
-            && same(&m.segment, query)
-            && !same(alternative, &text)
-            && !same(alternative, query)
-            && !alternatives.iter().any(|a| same(a, alternative));
+            && same_word(&m.segment, query)
+            && !same_word(alternative, &text)
+            && !same_word(alternative, query)
+            && !alternatives.iter().any(|a| same_word(a, alternative));
         if new {
             alternatives.push(alternative.to_string());
         }

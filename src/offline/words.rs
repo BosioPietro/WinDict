@@ -9,7 +9,7 @@ use super::format::{Dict, Entry};
 use super::{active, Dictionary};
 
 /// A word offered for what's been typed in the search box.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Suggestion {
     /// As it's written ("Paris", "ice cream").
     pub word: String,
@@ -51,16 +51,17 @@ impl Words {
     }
 
     pub(super) fn of(dictionaries: Vec<Arc<Dictionary>>) -> Words {
-        let mut words = Words {
-            text: String::new(),
-            words: Vec::new(),
-            dictionaries,
-        };
-        for (i, dictionary) in words.dictionaries.clone().iter().enumerate() {
+        let (mut text, mut list) = (String::new(), Vec::new());
+        for (i, dictionary) in dictionaries.iter().enumerate() {
             if let Some(dict) = dictionary.dict() {
-                words.add(&dict, i as u8);
+                Words::add(&mut text, &mut list, &dict, i as u8);
             }
         }
+        let mut words = Words {
+            text,
+            words: list,
+            dictionaries,
+        };
         // Each dictionary's are in key order; together, they're put back in
         // it. Stable: a word in several languages keeps their order.
         if words.dictionaries.len() > 1 {
@@ -71,8 +72,9 @@ impl Words {
         words
     }
 
-    fn add(&mut self, dict: &Dict, dictionary: u8) {
-        let words = self;
+    /// Adds `dict`'s words, from dictionary number `dictionary`, to
+    /// `list`, and their text to `out`.
+    fn add(out: &mut String, list: &mut Vec<Word>, dict: &Dict, dictionary: u8) {
         for block in 0..dict.entry_blocks {
             let Some(text) = dict.entry_block(block) else {
                 continue;
@@ -97,15 +99,15 @@ impl Words {
                     continue;
                 }
                 let display = entry.display.filter(|d| d != key).unwrap_or_default();
-                words.words.push(Word {
-                    start: words.text.len() as u32,
+                list.push(Word {
+                    start: out.len() as u32,
                     key_len: key.len() as u16,
                     display_len: display.len() as u16,
                     senses: senses.min(u16::MAX as usize) as u16,
                     dictionary,
                 });
-                words.text.push_str(key);
-                words.text.push_str(&display);
+                out.push_str(key);
+                out.push_str(&display);
             }
         }
     }

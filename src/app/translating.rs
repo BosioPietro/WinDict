@@ -41,20 +41,10 @@ impl App {
             text: text.clone(),
             window: unsafe { GetForegroundWindow() },
         });
-        // Translations come from the internet, like the online answers.
-        if !self.config.online_lookup {
-            return self.show_message(
-                anchor,
-                tr().translate_offline,
-                tr().translate_offline_detail,
-                true,
-            );
+        if self.refuse_translation_offline(anchor) {
+            return;
         }
-        let detail = Detail {
-            senses: 1,
-            synonyms: 0,
-            examples: false,
-        };
+        let detail = Detail::BRIEF;
         let word = dictionary::normalize(&text).ok();
         let def = word.as_deref().and_then(|w| offline::lookup(w, detail));
         // What's selected is translated as it's written, in the languages
@@ -107,6 +97,34 @@ impl App {
     /// Turns the card into a translation of `about`, from a language to
     /// another, fetching it unless which way is still `asking`. It was
     /// `typed` in that box, if it was typed.
+    /// Translations come from the internet, like the online answers: with
+    /// those off, says so on a card at `anchor` instead. Whether it did.
+    pub(super) fn refuse_translation_offline(&mut self, anchor: Option<RECT>) -> bool {
+        if self.config.online_lookup {
+            return false;
+        }
+        let (title, detail) = (tr().translate_offline, tr().translate_offline_detail);
+        self.show_message(anchor, title, detail, true);
+        true
+    }
+
+    /// Translates `text`, a passage rather than a word of the dictionary,
+    /// the `way` given, from the box it was `typed` in, if it was.
+    pub(super) fn translate_passage(
+        &mut self,
+        text: String,
+        way: (LangCode, LangCode),
+        typed: Option<Search>,
+    ) {
+        (self.card.current, self.card.speakable) = (None, None);
+        let about = Translatable {
+            word: text,
+            senses: Vec::new(),
+        };
+        self.card.translatable = Some(about.clone());
+        self.begin_translation(about, way, false, typed);
+    }
+
     pub(super) fn begin_translation(
         &mut self,
         about: Translatable,
@@ -114,6 +132,7 @@ impl App {
         asking: bool,
         typed: Option<Search>,
     ) {
+        self.keep_focus_behind();
         self.card.translating = Some(Translating {
             about,
             pair: LanguagePair::new(from, to),
@@ -247,10 +266,12 @@ impl App {
             picker: t.pair.picker(),
         };
         popup.hold_region(t.pair.picking.is_some());
-        let _ = popup.set_back(back);
-        let _ = popup.set_translate(false);
-        let _ = popup.set_wikipedia(false);
-        let _ = popup.set_speak(false);
+        let _ = popup.set_button(CardButton::Back, back);
+        let _ = popup.set_buttons(&[
+            (CardButton::Translate, false),
+            (CardButton::Wikipedia, false),
+            (CardButton::Speak, false),
+        ]);
         let body = Body::Translation(card);
         let title = translate::heading(&t.about.word);
         if popup.set_content(&title, None, body, transition).is_err() {
@@ -353,7 +374,7 @@ impl App {
     /// A character typed while the list of languages is open: narrows it
     /// down, or, with Enter, picks the highlighted one.
     pub(super) fn type_language(&mut self, unit: u16) {
-        let hwnd = self.card.popup.as_ref().map(|p| p.hwnd);
+        let hwnd = self.card.hwnd();
         let Some((picking, current)) = self.picking() else {
             return;
         };

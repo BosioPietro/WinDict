@@ -54,10 +54,7 @@ impl App {
         };
         let rgb = (accent.R, accent.G, accent.B);
         let card = scanning.card;
-        let near = POINT {
-            x: (card.left + card.right) / 2,
-            y: (card.top + card.bottom) / 2,
-        };
+        let near = win::centre(card);
         match Snip::open(self.hwnd, WM_APP_SNIPPED, rgb, near) {
             Some(snip) => scanning.snip = Some(snip),
             None => self.end_snip(false),
@@ -94,14 +91,7 @@ impl App {
         self.card.return_focus = scanning.return_focus;
         self.card.search = Some(search);
         self.refresh_search();
-        if self
-            .card
-            .search
-            .as_ref()
-            .is_some_and(|s| s.languages.is_some())
-        {
-            self.show_typed_languages();
-        }
+        self.show_typed_languages();
         let Some((picture, _)) = area else {
             return;
         };

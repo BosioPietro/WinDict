@@ -183,7 +183,7 @@ impl Step {
             Step::Lookup => "\u{E721}",
             Step::Translate => "\u{E8C1}",
             Step::AboveStart => "\u{E81E}",
-            Step::Ready => "\u{E73E}",
+            Step::Ready => crate::ui::CHECK_GLYPH,
         }
     }
 
@@ -233,7 +233,7 @@ pub struct Options {
 }
 
 /// Something done in the window, for the app to carry out.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Action {
     /// Closed before the last step: it's been seen all the same.
     Close,
@@ -744,10 +744,7 @@ impl Intro {
     /// The window moved to a monitor with another `dpi`. `suggested` is
     /// where Windows would put it, in screen pixels.
     pub fn rescale(&mut self, dpi: u32, suggested: RECT) -> Result<()> {
-        let centre = POINT {
-            x: (suggested.left + suggested.right) / 2,
-            y: (suggested.top + suggested.bottom) / 2,
-        };
+        let centre = win::centre(suggested);
         let work = ui::monitor_at(centre).0;
         let s = fitted(work, dpi as f32 / 96.0);
         if (s - self.scale).abs() < 0.01 {

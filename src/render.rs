@@ -1,8 +1,10 @@
 //! Text layout (DirectWrite) and drawing (Direct2D) into composition surfaces.
 //!
 //! This file has the layout types and the [`Renderer`] itself; `text` lays out
-//! lines and fields, `body` the card's contents, and `draw` paints layouts
-//! and shapes into surfaces.
+//! lines and fields, `body` the card's contents, `page` the pages behind the
+//! intro's cards, and `draw` paints layouts and shapes into surfaces, with
+//! `flags` for the language flags; `select` is the text selection within a
+//! layout.
 
 mod body;
 mod draw;
@@ -31,7 +33,7 @@ use windows::Win32::System::WinRT::Composition::*;
 use windows::UI::Composition::{CompositionDrawingSurface, CompositionGraphicsDevice, Compositor};
 use windows_numerics::{Matrix3x2, Vector2};
 
-use crate::dictionary::{self, percent_encode, Definition};
+use crate::dictionary::{self, capitalize, percent_encode, same_word, Definition};
 use crate::dicts;
 use crate::gloss::Gloss;
 use crate::i18n::{fill, tr};
@@ -180,6 +182,21 @@ pub struct Layout {
     pub list: Option<Box<ListLayout>>,
 }
 
+impl Layout {
+    /// A layout of `items` alone, `width` by `height`: nothing on it to
+    /// click, type into or pick from.
+    fn new(items: Vec<Item>, width: f32, height: f32) -> Layout {
+        Layout {
+            items,
+            width,
+            height,
+            links: Vec::new(),
+            caret: None,
+            list: None,
+        }
+    }
+}
+
 /// A list that scrolls in a layout: all its rows, laid out apart, and the
 /// band of the layout they show through.
 pub struct ListLayout {
@@ -291,7 +308,7 @@ pub struct Link {
 }
 
 /// What a click on a link does.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
     /// Opens a web page.
     Url(String),
@@ -445,7 +462,7 @@ const SWAP_ICON: &str = "\u{E8AB}";
 const CHEVRON_DOWN: &str = "\u{E70D}";
 const CHEVRON_UP: &str = "\u{E70E}";
 const SEARCH_ICON: &str = "\u{E721}";
-const CHECK_ICON: &str = "\u{E73E}";
+const CHECK_ICON: &str = crate::ui::CHECK_GLYPH;
 // A translation's languages, in DIPs: a box for each, the swap button
 // between them, and the list under the one being picked.
 pub const SELECT_H: f32 = 36.0;
@@ -490,6 +507,19 @@ impl Stack {
     /// and height; moving down is up to the caller.
     fn text(&mut self, layout: Text, x: f32, ink: Ink) -> (f32, f32) {
         self.text_with_accents(layout, x, ink, Vec::new())
+    }
+
+    /// Places `layout` at (`x`, `y`) as something that can't be selected:
+    /// an icon, a check mark, a name beside what it names.
+    fn glyph(&mut self, layout: Text, x: f32, y: f32, ink: Ink) {
+        self.items.push(Item::Text {
+            layout,
+            x,
+            y,
+            ink,
+            accents: Vec::new(),
+            selectable: false,
+        });
     }
 
     /// Like [`Stack::text`], with `accents` drawn in the accent color.
@@ -670,13 +700,13 @@ impl Renderer {
         }
     }
 
-    /// The widest and tallest surface the GPU draws, in pixels.
     /// Whether icons are drawn in Segoe Fluent Icons (Windows 11), rather
     /// than Segoe MDL2 Assets (Windows 10).
     pub fn fluent_icons(&self) -> bool {
         self.formats.fluent
     }
 
+    /// The widest and tallest surface the GPU draws, in pixels.
     pub fn max_px(&self) -> f32 {
         let level = unsafe { self.d3d.borrow().GetFeatureLevel() };
         if level.0 >= D3D_FEATURE_LEVEL_11_0.0 {
@@ -897,15 +927,6 @@ fn create_formats(dwrite: &IDWriteFactory) -> Result<Formats> {
     })
 }
 
-/// "serendipity" → "Serendipity". Only the first letter changes.
-pub fn capitalize(word: &str) -> String {
-    let mut chars = word.chars();
-    match chars.next() {
-        Some(c) => c.to_uppercase().chain(chars).collect(),
-        None => String::new(),
-    }
-}
-
 /// A laid-out text, and the text, which DirectWrite can't give back: what's
 /// selected of it is copied from that.
 struct Text {
@@ -934,6 +955,13 @@ fn metrics(layout: &IDWriteTextLayout) -> (f32, f32, f32) {
             m.height,
             lines[0].baseline,
         )
+    }
+}
+
+impl Renderer {
+    /// How tall a line of `format` is, laid out `width` wide.
+    fn line_height(&self, format: &IDWriteTextFormat, width: f32) -> Result<f32> {
+        Ok(metrics(&self.text("Ag", format, width)?.layout).1)
     }
 }
 

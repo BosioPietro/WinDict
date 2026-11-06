@@ -16,18 +16,14 @@ impl App {
     /// do with it what the `purpose` shortcut does. It opens at `anchor`,
     /// the text caret, when there is one.
     pub(super) fn open_search(&mut self, purpose: Shortcut, anchor: Option<RECT>) {
-        // Translations come from the internet, like the online answers.
-        if purpose == Shortcut::Translate && !self.config.online_lookup {
-            let (title, detail) = (tr().translate_offline, tr().translate_offline_detail);
-            return self.show_message(anchor, title, detail, true);
+        if purpose == Shortcut::Translate && self.refuse_translation_offline(anchor) {
+            return;
         }
         let title = match purpose {
             Shortcut::Lookup => tr().search_title,
             Shortcut::Translate => tr().translate_title,
         };
-        self.card.current = None;
-        self.card.history.clear();
-        self.card.clear_content();
+        self.card.start_over();
         self.sync_back_keys();
         let previous = unsafe { GetForegroundWindow() };
         self.dismiss_menu();
@@ -327,16 +323,10 @@ impl App {
             return;
         };
         let typed = self.card.search.take();
-        (self.card.current, self.card.speakable) = (None, None);
-        let about = Translatable {
-            word: text,
-            senses: Vec::new(),
-        };
-        self.card.translatable = Some(about.clone());
         if let Some(popup) = self.card.popup.as_mut() {
             popup.hold_region(false);
         }
-        self.begin_translation(about, way, false, typed);
+        self.translate_passage(text, way, typed);
     }
 
     /// Back from the translation of what was typed: the box it was typed

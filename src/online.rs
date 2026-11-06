@@ -3,6 +3,7 @@
 //! API as a fallback, and for the languages that have one, their own
 //! Wiktionary (`kaikki`).
 
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -10,7 +11,8 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::dictionary::{
-    self, percent_encode, Definition, Detail, Lookup, Meaning, Sense, MAX_ANTONYMS, WIKTIONARY,
+    self, percent_encode, same_word, wiki_title, Definition, Detail, Lookup, Meaning, Sense,
+    MAX_ANTONYMS, WIKTIONARY,
 };
 use crate::http;
 use crate::i18n::{fill, tr};
@@ -172,14 +174,12 @@ fn lookup_free_dictionary(word: &str, max_senses: usize, max_synonyms: usize) ->
 /// response holds: its definitions are in English, whatever the word's
 /// language.
 fn lookup_wiktionary(word: &str, max_senses: usize, languages: &[LangCode]) -> Lookup {
-    let path = format!(
-        "/api/rest_v1/page/definition/{}",
-        percent_encode(&word.replace(' ', "_"))
-    );
+    let path = format!("/api/rest_v1/page/definition/{}", wiki_title(word));
     fetch("en.wiktionary.org", &path, |body| {
+        let mut entries: HashMap<String, Vec<WiktEntry>> = serde_json::from_slice(body).ok()?;
         let found = languages
             .iter()
-            .filter_map(|l| parse_wiktionary(body, word, max_senses, l))
+            .filter_map(|l| wiktionary_definition(entries.remove(l.as_str())?, word, max_senses, l))
             .collect();
         dictionary::combine(found, languages)
     })
@@ -241,16 +241,14 @@ struct WiktExample {
     example: String,
 }
 
-fn parse_wiktionary(
-    body: &[u8],
+/// The definition `entries`, English Wiktionary's for `word` in
+/// `language`, make up, if they define it.
+fn wiktionary_definition(
+    entries: Vec<WiktEntry>,
     word: &str,
     max_senses: usize,
     language: &str,
 ) -> Option<Definition> {
-    let mut languages: std::collections::HashMap<String, Vec<WiktEntry>> =
-        serde_json::from_slice(body).ok()?;
-    let entries = languages.remove(language)?;
-
     let mut meanings: Vec<Meaning> = Vec::new();
     for entry in entries {
         let pos = part_of_speech(&entry.part_of_speech);
@@ -271,21 +269,7 @@ fn parse_wiktionary(
             })
             .take(max_senses)
             .collect();
-        if senses.is_empty() {
-            continue;
-        }
-        match meanings.iter_mut().find(|m| m.part_of_speech == pos) {
-            Some(m) => {
-                let room = max_senses.saturating_sub(m.senses.len());
-                m.senses.extend(senses.into_iter().take(room));
-            }
-            None => meanings.push(Meaning {
-                part_of_speech: pos,
-                senses,
-                synonyms: Vec::new(),
-                antonyms: Vec::new(),
-            }),
-        }
+        kaikki::add_senses(&mut meanings, &pos, senses, max_senses);
     }
     if meanings.is_empty() {
         return None;
@@ -314,10 +298,7 @@ pub fn strip_html(html: &str) -> String {
             _ => {}
         }
     }
-    decode_entities(&out)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    dictionary::tidy(&decode_entities(&out))
 }
 
 /// Decodes HTML's character references, once each: `&amp;lt;` is `&lt;`.
@@ -362,11 +343,6 @@ fn entity(name: &str) -> Option<char> {
         },
     };
     char::from_u32(code)
-}
-
-/// Whether two words are the same but for case, in any script.
-pub fn same_word(a: &str, b: &str) -> bool {
-    a.to_lowercase() == b.to_lowercase()
 }
 
 fn parse(body: &[u8], max_senses: usize, max_synonyms: usize) -> Option<Definition> {
@@ -501,6 +477,18 @@ struct ApiDefinition {
 mod tests {
     use super::*;
 
+    /// What `lookup_wiktionary` makes of the response `body` for `word` in
+    /// `language`.
+    fn parse_wiktionary(
+        body: &[u8],
+        word: &str,
+        max_senses: usize,
+        language: &str,
+    ) -> Option<Definition> {
+        let mut entries: HashMap<String, Vec<WiktEntry>> = serde_json::from_slice(body).ok()?;
+        wiktionary_definition(entries.remove(language)?, word, max_senses, language)
+    }
+
     #[test]
     fn strips_html() {
         assert_eq!(strip_html("<b>bold</b>  and\n<i>x</i>"), "bold and x");
@@ -523,13 +511,6 @@ mod tests {
         assert_eq!(part_of_speech("determiner"), "article");
         assert_eq!(part_of_speech("Numeral"), "numeral");
         assert_eq!(part_of_speech(""), "other");
-    }
-
-    #[test]
-    fn same_words_in_any_case() {
-        assert!(same_word("Città", "città"));
-        assert!(same_word("ÉTÉ", "été"));
-        assert!(!same_word("città", "citta"));
     }
 
     #[test]

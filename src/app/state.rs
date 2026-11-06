@@ -194,6 +194,14 @@ pub(super) struct Translating {
 }
 
 impl Translating {
+    /// The translation, once it's come.
+    pub(super) fn text(&self) -> Option<&str> {
+        match &self.result {
+            Some(Ok(translation)) => Some(&translation.text),
+            _ => None,
+        }
+    }
+
     /// How the card changes as the translation comes: from the definition
     /// it's another card; on the translation, only what's under the
     /// languages changes.
@@ -408,8 +416,15 @@ pub(super) struct Card {
     pub(super) local: Option<Definition>,
     /// The word the card shows, as it was looked up.
     pub(super) current: Option<Query>,
-    /// Words the card showed before synonyms were followed, most recent last.
-    pub(super) history: Vec<Query>,
+    /// Words the card showed before synonyms were followed, most recent
+    /// last, each with what had the focus on it, where Back puts it again.
+    pub(super) history: Vec<(Query, Option<Target>)>,
+    /// What had the focus on the definition, or the passage, the card
+    /// turned into a translation or an article from.
+    pub(super) focus_behind: Option<Target>,
+    /// Where the focus goes back to once the card shows it, on the way
+    /// back: a definition may come later, or its Wikipedia button.
+    pub(super) refocus: Option<Target>,
     /// The passage the first of them was looked up from, if it was.
     pub(super) passage: Option<Passage>,
     /// The phrase selected, of several words, glossed instead if the
@@ -454,6 +469,14 @@ impl Card {
 
     /// What the card shows is going: there's nothing to translate, or to
     /// say, until something else is shown.
+    /// Forgets what the card showed, for a fresh lookup or box: the word,
+    /// what was typed, the way back, and all that was on it.
+    pub(super) fn start_over(&mut self) {
+        (self.current, self.search) = (None, None);
+        self.history.clear();
+        self.clear_content();
+    }
+
     pub(super) fn clear_content(&mut self) {
         (self.translatable, self.translating, self.speakable) = (None, None, None);
         self.passage = None;

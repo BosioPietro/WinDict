@@ -92,7 +92,7 @@ pub fn fetch(
     path: &str,
     mut sink: impl FnMut(&[u8]) -> Result<(), String>,
 ) -> Result<u32, String> {
-    let offline = || tr().network_unavailable.to_string();
+    let unreachable = || tr().network_unavailable.to_string();
     let session = session()?;
     let connect = Handle(unsafe {
         WinHttpConnect(
@@ -103,7 +103,7 @@ pub fn fetch(
         )
     });
     if connect.0.is_null() {
-        return Err(offline());
+        return Err(unreachable());
     }
     let request = Handle(unsafe {
         WinHttpOpenRequest(
@@ -117,11 +117,11 @@ pub fn fetch(
         )
     });
     if request.0.is_null() {
-        return Err(offline());
+        return Err(unreachable());
     }
     unsafe {
-        WinHttpSendRequest(request.0, None, None, 0, 0, 0).map_err(|_| offline())?;
-        WinHttpReceiveResponse(request.0, std::ptr::null_mut()).map_err(|_| offline())?;
+        WinHttpSendRequest(request.0, None, None, 0, 0, 0).map_err(|_| unreachable())?;
+        WinHttpReceiveResponse(request.0, std::ptr::null_mut()).map_err(|_| unreachable())?;
     }
 
     let mut status: u32 = 0;
@@ -136,7 +136,7 @@ pub fn fetch(
             std::ptr::null_mut(),
         )
     }
-    .map_err(|_| offline())?;
+    .map_err(|_| unreachable())?;
 
     let mut chunk = vec![0u8; CHUNK];
     loop {
@@ -151,7 +151,7 @@ pub fn fetch(
                 &mut read,
             )
         }
-        .map_err(|_| offline())?;
+        .map_err(|_| unreachable())?;
         if read == 0 {
             break;
         }

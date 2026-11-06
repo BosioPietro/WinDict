@@ -83,7 +83,7 @@ impl Popup {
         let anchor = selecting.anchor;
         // Off the body, it's the text at its top or bottom edge.
         let s = self.scale;
-        let (x, y) = (x as f32 - MARGIN * s, y as f32 - self.frame_y());
+        let (x, y) = self.card_point(x, y);
         let y = y.clamp(self.header_h, (self.card_h - 1.0).max(self.header_h));
         let (bx, by) = (x - PAD_X * s, y - self.header_h + self.scroller.at);
         let point = (self.shown.as_ref()).and_then(|shown| shown.body.text_point(bx / s, by / s));

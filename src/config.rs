@@ -186,11 +186,16 @@ impl Default for Config {
     }
 }
 
-pub fn dir() -> PathBuf {
+fn dir() -> PathBuf {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
     base.join("WinDict")
+}
+
+/// What went wrong with the file, said with its name.
+fn err(e: impl std::fmt::Display) -> String {
+    format!("config.json: {e}")
 }
 
 pub fn path() -> PathBuf {
@@ -212,26 +217,30 @@ pub fn load() -> Result<(Config, bool), String> {
 }
 
 fn load_from(path: &Path) -> Result<(Config, bool), String> {
-    match std::fs::read(path) {
-        Ok(bytes) => parse(&bytes).map(|config| (config, false)),
+    match read_from(path)? {
+        Some(config) => Ok((config, false)),
         // Only a missing file is a first run: one that can't be read right
         // now (locked, no access) mustn't be overwritten with the defaults.
-        Err(e) if e.kind() == ErrorKind::NotFound => {
+        None => {
             let config = Config::default();
             let _ = save_to(path, &config);
             Ok((config, true))
         }
-        Err(e) => Err(format!("config.json: {e}")),
     }
 }
 
 /// Reads the config as [`load`] does, but leaves writing the defaults to
 /// WinDict: `wd`'s settings are its, and a first run is still to come.
 pub fn read() -> Result<Config, String> {
-    match std::fs::read(path()) {
-        Ok(bytes) => parse(&bytes),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(Config::default()),
-        Err(e) => Err(format!("config.json: {e}")),
+    Ok(read_from(&path())?.unwrap_or_default())
+}
+
+/// The settings in the file at `path`, or nothing if there's no file.
+fn read_from(path: &Path) -> Result<Option<Config>, String> {
+    match std::fs::read(path) {
+        Ok(bytes) => parse(&bytes).map(Some),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(err(e)),
     }
 }
 
@@ -248,7 +257,7 @@ pub fn save(config: &Config) -> Result<(), String> {
 /// its place: a write cut short (a crash, a full disk) leaves the old
 /// settings, not half of the new ones, and `wd` never reads half a file.
 fn save_to(path: &Path, config: &Config) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(config).map_err(|e| format!("config.json: {e}"))?;
+    let json = serde_json::to_string_pretty(config).map_err(err)?;
     let temp = path.with_extension("json.tmp");
     let write = || -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
@@ -262,13 +271,12 @@ fn save_to(path: &Path, config: &Config) -> Result<(), String> {
     };
     write().map_err(|e| {
         let _ = std::fs::remove_file(&temp);
-        format!("config.json: {e}")
+        err(e)
     })
 }
 
 fn parse(bytes: &[u8]) -> Result<Config, String> {
-    let mut json: serde_json::Value =
-        serde_json::from_slice(bytes).map_err(|e| format!("config.json: {e}"))?;
+    let mut json: serde_json::Value = serde_json::from_slice(bytes).map_err(err)?;
     // A choice this version doesn't know, saved by a newer one or mistyped,
     // goes back to the default instead of making the whole file unreadable.
     if let Some(fields) = json.as_object_mut() {
@@ -276,8 +284,7 @@ fn parse(bytes: &[u8]) -> Result<Config, String> {
         forget_unknown::<ThemeMode>(fields, "theme");
         forget_unknown::<SelectionMode>(fields, "selection");
     }
-    let mut config: Config =
-        serde_json::from_value(json).map_err(|e| format!("config.json: {e}"))?;
+    let mut config: Config = serde_json::from_value(json).map_err(err)?;
     config.max_definitions = config.max_definitions.clamp(DEFINITIONS.0, DEFINITIONS.1);
     config.max_synonyms = config.max_synonyms.clamp(SYNONYMS.0, SYNONYMS.1);
     // Each language once, and at least one, or nothing could be looked up.

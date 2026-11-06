@@ -118,14 +118,7 @@ impl Renderer {
                 x += w + gap;
             }
         }
-        Ok(Layout {
-            items,
-            width,
-            height,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        })
+        Ok(Layout::new(items, width, height))
     }
 
     /// How wide `text` is, set in `font`, in DIPs.

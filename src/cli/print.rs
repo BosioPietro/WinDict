@@ -2,6 +2,7 @@
 //! console, as plain lines when it's piped or redirected, and what's being
 //! waited for on stderr meanwhile.
 
+use std::fmt::Write as _;
 use std::io::{self, IsTerminal, StdoutLock, Write};
 use std::ops::Range;
 
@@ -18,6 +19,12 @@ const SENSE_INDENT: usize = 4;
 /// Where the translations' meanings back start, past the widest of them,
 /// unless that's wider than this.
 const MAX_TERM_WIDTH: usize = 24;
+
+/// Where what follows words `widths` wide lines up: two spaces in, and two
+/// past the widest, up to a limit.
+fn indent_after(widths: impl Iterator<Item = usize>) -> usize {
+    2 + widths.max().unwrap_or(0).min(MAX_TERM_WIDTH) + 2
+}
 /// The widest lines are, however wide the window: longer ones are hard to
 /// read.
 const MAX_COLUMNS: usize = 88;
@@ -150,7 +157,7 @@ impl Printer {
                 let name = dicts::name(&section.language);
                 let mut heading = vec![(Style::Strong, name.as_str())];
                 // The base form of what was looked up.
-                if section.word.to_lowercase() != def.word.to_lowercase() {
+                if !same_word(&section.word, &def.word) {
                     heading.push((Style::Faint, &section.word));
                 }
                 self.text(&heading);
@@ -224,8 +231,7 @@ impl Printer {
                 pos => tr().part_of_speech(pos),
             };
             self.text(&[(Style::Accent, &label.to_uppercase())]);
-            let widest = group.terms.iter().map(|t| t.text.chars().count()).max();
-            let indent = 2 + widest.unwrap_or(0).min(MAX_TERM_WIDTH) + 2;
+            let indent = indent_after(group.terms.iter().map(|t| t.text.chars().count()));
             for term in &group.terms {
                 let word = capitalize(&term.text);
                 let back = capitalize(&term.back.join(", "));
@@ -256,12 +262,11 @@ impl Printer {
             self.text(&[(Style::Faint, tr().gloss_none)]);
             return;
         }
-        let widest = glossary.iter().map(|(w, _)| w.chars().count()).max();
-        let indent = 2 + widest.unwrap_or(0).min(MAX_TERM_WIDTH) + 2;
+        let indent = indent_after(glossary.iter().map(|(w, _)| w.chars().count()));
         for (word, def) in glossary {
             let mut spans = Vec::new();
             let sense = def.as_ref().and_then(|def| {
-                if def.word.to_lowercase() != word.to_lowercase() {
+                if !same_word(&def.word, word) {
                     spans.push((Style::Faint, def.word.as_str()));
                 }
                 Some(def.meanings.first()?.senses.first()?.text.as_str())
@@ -345,7 +350,7 @@ fn wrap(
 ) -> String {
     let paint = |out: &mut String, (style, text): (Style, &str)| {
         if styled && style != Style::Plain {
-            out.push_str(&format!("\x1b[{}m{text}\x1b[0m", style.sgr()));
+            let _ = write!(out, "\x1b[{}m{text}\x1b[0m", style.sgr());
         } else {
             out.push_str(text);
         }
@@ -398,11 +403,14 @@ fn mark(text: &str, marked: &[Range<usize>], columns: usize, styled: bool) -> St
             let (from, to) = (range.start.max(start), range.end.min(end));
             out.push_str(&text[at..from]);
             match styled {
-                true => out.push_str(&format!(
-                    "\x1b[{}m{}\x1b[0m",
-                    Style::Marked.sgr(),
-                    &text[from..to]
-                )),
+                true => {
+                    let _ = write!(
+                        out,
+                        "\x1b[{}m{}\x1b[0m",
+                        Style::Marked.sgr(),
+                        &text[from..to]
+                    );
+                }
                 false => out.push_str(&text[from..to]),
             }
             at = to;

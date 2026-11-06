@@ -186,10 +186,12 @@ impl Popup {
         in_place: bool,
         returning: bool,
     ) -> Result<()> {
-        self.set_back(false)?;
-        self.set_translate(false)?;
-        self.set_wikipedia(false)?;
-        self.set_speak(false)?;
+        self.set_buttons(&[
+            (CardButton::Back, false),
+            (CardButton::Translate, false),
+            (CardButton::Wikipedia, false),
+            (CardButton::Speak, false),
+        ])?;
         self.pin.set_shown(&self.anim, false, self.scale)?;
         self.focus_link(None, 0)?;
         self.select(None)?;
@@ -229,7 +231,6 @@ impl Popup {
         // The scan button sits level with the heading, where the pin button
         // was; a pinned card stays put, so it can't be read from behind, and
         // without a language to read in, Windows can't read it at all.
-        let s = self.scale;
         let top = ((PAD_TOP + (self.search.title_line() - BACK_SIZE) / 2.0) * s).round();
         self.scan.place(top, s)?;
         let scannable = !self.pinned && ocr::available();

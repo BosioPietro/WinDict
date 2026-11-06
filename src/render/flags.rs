@@ -61,17 +61,7 @@ impl Flag {
 
 /// Draws `flag` filling 0,0 to 60,40.
 pub(super) unsafe fn draw_flag(dc: &ID2D1DeviceContext, flag: Flag) -> Result<()> {
-    let brush = |rgb: u32| unsafe {
-        dc.CreateSolidColorBrush(
-            &D2D1_COLOR_F {
-                r: (rgb >> 16) as f32 / 255.0,
-                g: (rgb >> 8 & 0xff) as f32 / 255.0,
-                b: (rgb & 0xff) as f32 / 255.0,
-                a: 1.0,
-            },
-            None,
-        )
-    };
+    let brush = |rgb: u32| unsafe { dc.CreateSolidColorBrush(&super::draw::hex(rgb), None) };
     let rect = |left: f32, top: f32, right: f32, bottom: f32| D2D_RECT_F {
         left,
         top,

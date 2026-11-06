@@ -517,7 +517,7 @@ impl Menu {
                 )?);
                 if checked {
                     visuals.push(self.text(
-                        "\u{E73E}",
+                        crate::ui::CHECK_GLYPH,
                         Face::Icon,
                         Ink::Primary,
                         16.0,

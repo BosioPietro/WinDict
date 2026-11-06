@@ -10,18 +10,27 @@ impl App {
     /// being downloaded for them ticked already.
     pub(super) fn settings_values(&self) -> Values {
         let mut config = self.config.clone();
-        for installing in self.installing.iter().filter(|i| i.wanted && !i.quiet) {
-            let language = installing.download.language;
-            if !config.languages.iter().any(|l| l == language) {
-                config.languages.push(language.into());
-            }
-        }
-        config.languages.sort_by_key(|l| dicts::rank(l));
+        config.languages = self.chosen_languages();
         Values {
             config,
             autostart: autostart::is_enabled(),
             ui_access: installed::ui_access_available().then(installed::ui_access_on),
         }
+    }
+
+    /// The languages words are looked up in, as the settings tick them:
+    /// those in use, and those whose dictionaries are being downloaded to
+    /// be, in the settings' order.
+    pub(super) fn chosen_languages(&self) -> Vec<LangCode> {
+        let mut languages = self.config.languages.clone();
+        for installing in self.installing.iter().filter(|i| i.wanted && !i.quiet) {
+            let language = installing.download.language;
+            if !languages.iter().any(|l| l == language) {
+                languages.push(language.into());
+            }
+        }
+        languages.sort_by_key(|l| dicts::rank(l));
+        languages
     }
 
     /// Opens the settings window, or brings it back to the front.
@@ -50,7 +59,7 @@ impl App {
     }
 
     pub(super) fn close_settings(&mut self) {
-        let Some(settings) = self.settings.as_mut().filter(|s| s.visible) else {
+        let Some(settings) = self.visible_settings_mut() else {
             return;
         };
         let recording = settings.recording();
@@ -76,7 +85,7 @@ impl App {
     /// window shows them as they are now.
     pub(super) fn refresh_settings(&mut self) {
         let (theme, values) = (self.theme(), self.settings_values());
-        let Some(settings) = self.settings.as_mut().filter(|s| s.visible) else {
+        let Some(settings) = self.visible_settings_mut() else {
             return;
         };
         // Which stops recording, which had put the shortcuts aside.
@@ -202,7 +211,7 @@ impl App {
                 self.each_card(|app| {
                     let translate = app.can_translate();
                     if let Some(popup) = app.card.popup.as_mut() {
-                        let _ = popup.set_translate(translate);
+                        let _ = popup.set_button(CardButton::Translate, translate);
                     }
                     app.sync_link_keys();
                 });
@@ -265,9 +274,6 @@ impl App {
         self.use_languages();
     }
 
-    /// Makes sure `download` is in place, fetching it if it isn't, then
-    /// looks words up in its language too. Asked for again while it
-    /// downloads, the download under way carries on.
     /// Opens the chosen languages' dictionaries. One downloaded that's
     /// gone, or isn't the one this version lists, is fetched again, and
     /// failing to is told then. Returns what else went wrong.
@@ -283,6 +289,9 @@ impl App {
         error.filter(|_| !fetched)
     }
 
+    /// Makes sure `download` is in place, fetching it if it isn't, then
+    /// looks words up in its language too. Asked for again while it
+    /// downloads, the download under way carries on.
     pub(super) fn install(&mut self, download: &'static dicts::Download, quiet: bool) {
         let language = download.language;
         if let Some(installing) = self
@@ -365,20 +374,18 @@ impl App {
         }
         // Online answers are for the languages there were.
         self.cache.clear();
-        if let Err(e) = config::save(&self.config) {
-            self.tray.notify(tr().settings_not_saved, &e);
-        }
+        self.save_setting(|_| {});
         self.show_languages();
     }
 
     /// Ticks the languages used, and those being downloaded, in the
     /// settings window and on the introduction.
     pub(super) fn show_languages(&mut self) {
-        let languages = self.settings_values().config.languages;
-        if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
+        let languages = self.chosen_languages();
+        if let Some(settings) = self.visible_settings_mut() {
             let _ = settings.show_languages(&languages);
         }
-        if let Some(intro) = self.intro.as_mut().filter(|i| i.visible) {
+        if let Some(intro) = self.visible_intro_mut() {
             let _ = intro.show_languages(&languages);
         }
     }
@@ -386,10 +393,10 @@ impl App {
     /// Says how `language`'s download is going in the settings window and
     /// on the introduction.
     pub(super) fn show_download(&mut self, language: &str, status: Option<(&str, bool)>) {
-        if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
+        if let Some(settings) = self.visible_settings_mut() {
             let _ = settings.show_download(language, status);
         }
-        if let Some(intro) = self.intro.as_mut().filter(|i| i.visible) {
+        if let Some(intro) = self.visible_intro_mut() {
             let _ = intro.show_download(language, status);
         }
     }
@@ -400,8 +407,6 @@ impl App {
         self.refresh_settings();
     }
 
-    /// The colors changed, the system's or the setting: every window
-    /// follows them.
     /// A drawing failed because the GPU went away, or the displays
     /// changed, which can take it: every window draws everything again,
     /// with another.
@@ -423,12 +428,14 @@ impl App {
         });
     }
 
+    /// The colors changed, the system's or the setting: every window
+    /// follows them.
     pub(super) fn on_colors_changed(&mut self) {
         let theme = self.theme();
-        if let Some(settings) = self.settings.as_mut().filter(|s| s.visible) {
+        if let Some(settings) = self.visible_settings_mut() {
             let _ = settings.retheme(theme);
         }
-        if let Some(intro) = self.intro.as_mut().filter(|i| i.visible) {
+        if let Some(intro) = self.visible_intro_mut() {
             let _ = intro.retheme(theme);
         }
         self.each_card(|app| {

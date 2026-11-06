@@ -23,16 +23,14 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::win::{self, Window};
 
-/// Marks input we inject so it can be recognised.
+/// Marks the input we inject as ours, for whatever looks at where input
+/// comes from.
 const INJECTED: usize = 0x5744_4943; // "WDIC"
 
-const CF_TEXT_ID: u32 = 1;
-const CF_DIB_ID: u32 = 8;
-const CF_OEMTEXT_ID: u32 = 7;
-const CF_UNICODETEXT_ID: u32 = 13;
-const CF_HDROP_ID: u32 = 15;
-const CF_LOCALE_ID: u32 = 16;
-const CF_DIBV5_ID: u32 = 17;
+/// A clipboard format as the clipboard calls take it.
+const fn id(format: CLIPBOARD_FORMAT) -> u32 {
+    format.0 as u32
+}
 
 /// How long a copy that didn't come in time is still watched for, to put
 /// the clipboard back if it comes after all.
@@ -295,16 +293,7 @@ impl Capturer {
                 break;
             }
         }
-        let text = if changed {
-            // Some apps write several formats one after another.
-            wait(Duration::from_millis(25));
-            read_clipboard_text(owner)
-        } else {
-            None
-        };
-        if changed {
-            saved.restore(owner);
-        } else {
+        if !changed {
             // The app may still copy, too late to be read: then the
             // clipboard is put back once it does.
             LATE_COPY_PENDING.with(|late| {
@@ -319,7 +308,12 @@ impl Capturer {
             unsafe {
                 SetTimer(Some(owner), LATE_COPY_TIMER, 50, Some(late_copy_timer));
             }
+            return None;
         }
+        // Some apps write several formats one after another.
+        wait(Duration::from_millis(25));
+        let text = clipboard_text(owner);
+        saved.restore(owner);
         text.filter(|t| !t.trim().is_empty())
     }
 }
@@ -334,9 +328,7 @@ fn settle_late_copy(done: bool) {
         (came || done || Instant::now() >= copy.until).then(|| (late.take(), came))
     });
     if let Some((Some(copy), came)) = settled {
-        unsafe {
-            let _ = KillTimer(Some(copy.owner), LATE_COPY_TIMER);
-        }
+        win::kill_timer(copy.owner, LATE_COPY_TIMER);
         // An owner that can't be told is taken to be the app asked to copy.
         let owner = unsafe { GetClipboardOwner() }.map_or(0, process_of);
         if came && (owner == 0 || owner == copy.app) {
@@ -392,9 +384,7 @@ fn settle_paste() {
     let Some(pasted) = PASTE_PENDING.with(|p| p.borrow_mut().take()) else {
         return;
     };
-    unsafe {
-        let _ = KillTimer(Some(pasted.owner), PASTE_TIMER);
-    }
+    win::kill_timer(pasted.owner, PASTE_TIMER);
     if unsafe { GetClipboardSequenceNumber() } == pasted.after {
         pasted.saved.restore(pasted.owner);
     }
@@ -522,8 +512,7 @@ pub fn is_shell_flyout(hwnd: HWND) -> bool {
     ) {
         return true;
     }
-    let mut pid = 0;
-    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    let pid = process_of(hwnd);
     let Ok(process) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) })
     else {
         return false;
@@ -587,16 +576,9 @@ pub fn take_foreground(hwnd: HWND) -> bool {
         if SetForegroundWindow(hwnd).as_bool() {
             return true;
         }
-        // A key no keyboard has: it does nothing but count as input.
-        let inputs = [key(VIRTUAL_KEY(0xFF), false), key(VIRTUAL_KEY(0xFF), true)];
-        SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+        send(&nothing());
         SetForegroundWindow(hwnd).as_bool()
     }
-}
-
-/// The text on the clipboard, if any.
-pub fn clipboard_text(owner: HWND) -> Option<String> {
-    read_clipboard_text(owner)
 }
 
 /// Closes Start/Search with Esc.
@@ -604,8 +586,18 @@ pub fn close_flyout() {
     // A still-held Ctrl/Alt from the hotkey would turn this into Ctrl+Alt+Esc,
     // which Start ignores.
     release_modifiers();
-    let inputs = [key(VK_ESCAPE, false), key(VK_ESCAPE, true)];
-    unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    send(&[key(VK_ESCAPE, false), key(VK_ESCAPE, true)]);
+}
+
+/// Types `inputs`, as if from the keyboard.
+fn send(inputs: &[INPUT]) {
+    unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
+}
+
+/// A press and release of a key no keyboard has: it does nothing but count
+/// as input.
+fn nothing() -> [INPUT; 2] {
+    [key(VIRTUAL_KEY(0xFF), false), key(VIRTUAL_KEY(0xFF), true)]
 }
 
 fn is_terminal(hwnd: HWND) -> bool {
@@ -678,9 +670,9 @@ fn release_modifiers() {
     }
     // A throwaway key press keeps a lone Alt/Win release from opening a menu
     // or the Start menu.
-    let mut inputs = vec![key(VIRTUAL_KEY(0xFF), false), key(VIRTUAL_KEY(0xFF), true)];
+    let mut inputs = nothing().to_vec();
     inputs.extend(held.iter().map(|&vk| key(vk, true)));
-    unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    send(&inputs);
 }
 
 fn send_copy() {
@@ -692,13 +684,12 @@ fn send_paste() {
 }
 
 fn send_ctrl(vk: VIRTUAL_KEY) {
-    let inputs = [
+    send(&[
         key(VK_LCONTROL, false),
         key(vk, false),
         key(vk, true),
         key(VK_LCONTROL, true),
-    ];
-    unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    ]);
 }
 
 // ---------------------------------------------------------------------------
@@ -741,24 +732,27 @@ fn open_clipboard(owner: HWND) -> bool {
     false
 }
 
-fn read_clipboard_text(owner: HWND) -> Option<String> {
+/// The text on the clipboard, if any.
+pub fn clipboard_text(owner: HWND) -> Option<String> {
     if !open_clipboard(owner) {
         return None;
     }
     let text = unsafe {
-        GetClipboardData(CF_UNICODETEXT_ID).ok().and_then(|handle| {
-            let global = HGLOBAL(handle.0);
-            let ptr = GlobalLock(global) as *const u16;
-            if ptr.is_null() {
-                return None;
-            }
-            let max = GlobalSize(global) / 2;
-            let slice = std::slice::from_raw_parts(ptr, max);
-            let len = slice.iter().position(|&c| c == 0).unwrap_or(max);
-            let text = String::from_utf16_lossy(&slice[..len]);
-            let _ = GlobalUnlock(global);
-            Some(text)
-        })
+        GetClipboardData(id(CF_UNICODETEXT))
+            .ok()
+            .and_then(|handle| {
+                let global = HGLOBAL(handle.0);
+                let ptr = GlobalLock(global) as *const u16;
+                if ptr.is_null() {
+                    return None;
+                }
+                let max = GlobalSize(global) / 2;
+                let slice = std::slice::from_raw_parts(ptr, max);
+                let len = slice.iter().position(|&c| c == 0).unwrap_or(max);
+                let text = String::from_utf16_lossy(&slice[..len]);
+                let _ = GlobalUnlock(global);
+                Some(text)
+            })
     };
     unsafe {
         let _ = CloseClipboard();
@@ -785,7 +779,7 @@ fn put_text(owner: HWND, text: &str, transient: bool) -> bool {
     let set = unsafe {
         let emptied = EmptyClipboard().is_ok();
         if emptied {
-            set_data(CF_UNICODETEXT_ID, &wide);
+            set_data(id(CF_UNICODETEXT), &wide);
             if transient {
                 exclude_from_history();
             }
@@ -892,19 +886,27 @@ unsafe fn set_data(format: u32, data: &[u8]) {
 }
 
 fn is_restorable(format: u32) -> bool {
-    match format {
-        CF_TEXT_ID | CF_OEMTEXT_ID | CF_UNICODETEXT_ID | CF_LOCALE_ID | CF_DIB_ID | CF_DIBV5_ID
-        | CF_HDROP_ID => true,
-        0xC000..=0xFFFF => {
-            // Registered formats are memory-backed, except OLE's private plumbing.
-            let mut buf = [0u16; 64];
-            let len = unsafe { GetClipboardFormatNameW(format, &mut buf) } as usize;
-            let name = String::from_utf16_lossy(&buf[..len]);
-            !matches!(
-                name.as_str(),
-                "DataObject" | "Ole Private Data" | "OwnerLink" | "ObjectLink" | "Native"
-            )
-        }
-        _ => false,
+    const STANDARD: [CLIPBOARD_FORMAT; 7] = [
+        CF_TEXT,
+        CF_OEMTEXT,
+        CF_UNICODETEXT,
+        CF_LOCALE,
+        CF_DIB,
+        CF_DIBV5,
+        CF_HDROP,
+    ];
+    if STANDARD.iter().any(|&f| id(f) == format) {
+        return true;
     }
+    // Registered formats are memory-backed, except OLE's private plumbing.
+    if !(0xC000..=0xFFFF).contains(&format) {
+        return false;
+    }
+    let mut buf = [0u16; 64];
+    let len = unsafe { GetClipboardFormatNameW(format, &mut buf) } as usize;
+    let name = String::from_utf16_lossy(&buf[..len]);
+    !matches!(
+        name.as_str(),
+        "DataObject" | "Ole Private Data" | "OwnerLink" | "ObjectLink" | "Native"
+    )
 }

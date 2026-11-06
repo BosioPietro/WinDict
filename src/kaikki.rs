@@ -6,12 +6,12 @@
 use serde::Deserialize;
 
 use crate::dictionary::{
-    percent_encode, Definition, Lookup, Meaning, Sense, DEUTSCHES_WIKTIONARY, MAX_ANTONYMS,
-    WIKCIONARIO, WIKCIONARIO_PT, WIKIZIONARIO, WIKTIONNAIRE,
+    percent_encode, same_word, tidy, Definition, Lookup, Meaning, Sense, DEUTSCHES_WIKTIONARY,
+    MAX_ANTONYMS, WIKCIONARIO, WIKCIONARIO_PT, WIKIZIONARIO, WIKTIONNAIRE,
 };
 use crate::i18n::{fill, tr};
 use crate::offline::sentence;
-use crate::online::{fetch, same_word};
+use crate::online::fetch;
 use crate::wikizionario;
 
 /// A Wiktionary in the language it defines.
@@ -177,8 +177,8 @@ struct Word {
     word: String,
 }
 
-fn words(list: &[Word]) -> Vec<&str> {
-    list.iter().map(|w| w.word.as_str()).collect()
+fn words(list: &[Word]) -> impl Iterator<Item = &str> {
+    list.iter().map(|w| w.word.as_str())
 }
 
 #[derive(Deserialize)]
@@ -300,10 +300,14 @@ fn parse(
 
 /// Synonyms or opposites worth showing: words or short phrases, not
 /// questions or fragments, each once, and not the word itself.
-pub fn related(words: Vec<&str>, word: &str, max: usize) -> Vec<String> {
+pub fn related<'a>(
+    words: impl IntoIterator<Item = &'a str>,
+    word: &str,
+    max: usize,
+) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for w in words {
-        let w = w.split_whitespace().collect::<Vec<_>>().join(" ");
+        let w = tidy(w);
         let count = w.chars().count();
         let is_word = (2..=40).contains(&count)
             && w.chars()

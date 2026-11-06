@@ -98,16 +98,11 @@ pub fn name(language: &str) -> String {
 pub fn install(download: &Download, mut progress: impl FnMut(u32)) -> Result<(), String> {
     let dir = offline::dicts_dir();
     let path = dir.join(format!("{}.wdict", download.language));
-    if std::fs::read(&path).is_ok_and(|bytes| download.matches(&bytes)) {
+    let file = download.file();
+    if std::fs::read(&path).is_ok_and(|bytes| file.matches(&bytes)) {
         return Ok(());
     }
     std::fs::create_dir_all(&dir).map_err(unsaved)?;
-    let file = File {
-        release: DICTIONARIES,
-        name: download.file,
-        size: download.size,
-        sha256: download.sha256,
-    };
     save(&file, &path, &mut progress)
 }
 
@@ -159,7 +154,7 @@ fn fetch(file: &File, part: &Path, progress: &mut impl FnMut(u32)) -> Result<(),
         }
         Ok(())
     })
-    .map_err(|_| if oversized { damaged() } else { offline() })?;
+    .map_err(|_| if oversized { damaged() } else { unreachable() })?;
     if status != 200 {
         return Err(fill(tr().download_status, &[("status", &status)]));
     }
@@ -171,7 +166,7 @@ fn fetch(file: &File, part: &Path, progress: &mut impl FnMut(u32)) -> Result<(),
         .map_err(unsaved)
 }
 
-fn offline() -> String {
+fn unreachable() -> String {
     tr().download_unreachable.into()
 }
 
@@ -189,19 +184,22 @@ impl Download {
         (self.size + 500_000) / 1_000_000
     }
 
-    fn matches(&self, bytes: &[u8]) -> bool {
-        matches(bytes, self.size, self.sha256)
+    /// The file it's downloaded from, as it must be.
+    fn file(&self) -> File<'_> {
+        File {
+            release: DICTIONARIES,
+            name: self.file,
+            size: self.size,
+            sha256: self.sha256,
+        }
     }
 }
 
 impl File<'_> {
+    /// Whether `bytes` are the file, whole and as released.
     fn matches(&self, bytes: &[u8]) -> bool {
-        matches(bytes, self.size, self.sha256)
+        bytes.len() as u64 == self.size && sha256(bytes).is_some_and(|h| hex(&h) == self.sha256)
     }
-}
-
-fn matches(bytes: &[u8], size: u64, sha256_hex: &str) -> bool {
-    bytes.len() as u64 == size && sha256(bytes).is_some_and(|h| hex(&h) == sha256_hex)
 }
 
 fn sha256(bytes: &[u8]) -> Option<[u8; 32]> {
@@ -257,8 +255,8 @@ mod tests {
             size: 3,
             sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
         };
-        assert!(d.matches(b"abc"));
-        assert!(!d.matches(b"abd"));
-        assert!(!d.matches(b"abcd"));
+        assert!(d.file().matches(b"abc"));
+        assert!(!d.file().matches(b"abd"));
+        assert!(!d.file().matches(b"abcd"));
     }
 }

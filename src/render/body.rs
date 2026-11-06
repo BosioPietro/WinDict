@@ -196,7 +196,7 @@ impl Renderer {
         }
         let name = self.text(&dicts::name(&section.language), &self.formats.title, width)?;
         let (w, h) = out.text(name, 0.0, Ink::Primary);
-        if section.word.to_lowercase() != title.to_lowercase() {
+        if !same_word(&section.word, title) {
             let x = w + 8.0;
             let word = self.text(&section.word, &self.formats.body, (width - x).max(1.0))?;
             let (_, word_h, _) = metrics(&word);
@@ -480,7 +480,7 @@ impl Renderer {
             }),
         });
         let format = &self.formats.suggestion;
-        let line_h = metrics(&self.text("Ag", format, width)?.layout).1;
+        let line_h = self.line_height(format, width)?;
         let line_y = ((height - line_h) / 2.0).round();
         let mut x = SELECT_PAD;
         x += self.badge(&mut out, language, x, line_y, line_h)? + 10.0;
@@ -489,14 +489,7 @@ impl Renderer {
             let check = self.text(CHECK_ICON, &self.formats.icon, width)?;
             let (check_w, check_h, _) = metrics(&check);
             end -= check_w;
-            out.items.push(Item::Text {
-                layout: check,
-                x: end,
-                y: ((height - check_h) / 2.0).round(),
-                ink: Ink::Accent,
-                accents: Vec::new(),
-                selectable: false,
-            });
+            out.glyph(check, end, ((height - check_h) / 2.0).round(), Ink::Accent);
             end -= 8.0;
         }
         let line = self.text(&translate::name(language), format, (end - x).max(1.0))?;
@@ -517,14 +510,7 @@ impl Renderer {
             accents: Vec::new(),
             selectable: false,
         });
-        Ok(Layout {
-            items: out.items,
-            width,
-            height,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        })
+        Ok(Layout::new(out.items, width, height))
     }
 
     /// A box for each language, which lists the others to pick from, and
@@ -601,7 +587,7 @@ impl Renderer {
             target,
         });
         let format = &self.formats.suggestion;
-        let line_h = metrics(&self.text("Ag", format, width)?.layout).1;
+        let line_h = self.line_height(format, width)?;
         let line_y = y + ((SELECT_H - line_h) / 2.0).round();
         let centred = |h: f32| y + ((SELECT_H - h) / 2.0).round();
 
@@ -614,14 +600,7 @@ impl Renderer {
         let (chevron_w, chevron_h, _) = metrics(&chevron);
         let chevron_x = x + width - SELECT_PAD - chevron_w;
         let chevron_at = out.items.len();
-        out.items.push(Item::Text {
-            layout: chevron,
-            x: chevron_x,
-            y: centred(chevron_h),
-            ink: Ink::Secondary,
-            accents: Vec::new(),
-            selectable: false,
-        });
+        out.glyph(chevron, chevron_x, centred(chevron_h), Ink::Secondary);
 
         let mut left = x + SELECT_PAD;
         let Some(picker) = picker else {
@@ -630,26 +609,12 @@ impl Renderer {
             }
             let name = self.text(&translate::name(language), format, chevron_x - left)?;
             let name_at = out.items.len();
-            out.items.push(Item::Text {
-                layout: name,
-                x: left,
-                y: line_y,
-                ink: Ink::Primary,
-                accents: Vec::new(),
-                selectable: false,
-            });
+            out.glyph(name, left, line_y, Ink::Primary);
             return Ok((chevron_at, name_at));
         };
         let glyph = self.text(SEARCH_ICON, &self.formats.icon, width)?;
         let (glyph_w, glyph_h, _) = metrics(&glyph);
-        out.items.push(Item::Text {
-            layout: glyph,
-            x: left,
-            y: centred(glyph_h),
-            ink: Ink::Secondary,
-            accents: Vec::new(),
-            selectable: false,
-        });
+        out.glyph(glyph, left, centred(glyph_h), Ink::Secondary);
         left += glyph_w + 8.0;
         // Until something's typed, the language it is now, faintly.
         let (text, ink, at) = if picker.query.is_empty() {
@@ -747,18 +712,11 @@ impl Renderer {
     fn layout_rows(&self, picker: &Picker, current: &str, width: f32) -> Result<Layout> {
         let mut out = Stack::default();
         let format = &self.formats.suggestion;
-        let line_h = metrics(&self.text("Ag", format, width)?.layout).1;
+        let line_h = self.line_height(format, width)?;
         let line_y = |y: f32| y + ((ROW_H - line_h) / 2.0).round();
         if picker.matches.is_empty() {
             let line = self.text(tr().no_languages_match, format, width)?;
-            out.items.push(Item::Text {
-                layout: line,
-                x: SELECT_PAD,
-                y: line_y(0.0),
-                ink: Ink::Tertiary,
-                accents: Vec::new(),
-                selectable: false,
-            });
+            out.glyph(line, SELECT_PAD, line_y(0.0), Ink::Tertiary);
         }
         let scrolls = picker.matches.len() > picker.shown();
         let right = width - SELECT_PAD - if scrolls { 6.0 } else { 0.0 };
@@ -793,14 +751,12 @@ impl Renderer {
                 let check = self.text(CHECK_ICON, &self.formats.icon, width)?;
                 let (check_w, check_h, _) = metrics(&check);
                 end -= check_w;
-                out.items.push(Item::Text {
-                    layout: check,
-                    x: end,
-                    y: y + ((ROW_H - check_h) / 2.0).round(),
-                    ink: Ink::Accent,
-                    accents: Vec::new(),
-                    selectable: false,
-                });
+                out.glyph(
+                    check,
+                    end,
+                    y + ((ROW_H - check_h) / 2.0).round(),
+                    Ink::Accent,
+                );
                 end -= 8.0;
             }
             // Its name in English too, where that's another.
@@ -884,7 +840,7 @@ impl Renderer {
     fn layout_tick_rows(&self, ticks: &[Tick], scrolls: bool, width: f32) -> Result<Layout> {
         let mut out = Stack::default();
         let format = &self.formats.suggestion;
-        let line_h = metrics(&self.text("Ag", format, width)?.layout).1;
+        let line_h = self.line_height(format, width)?;
         let right = width - SELECT_PAD - if scrolls { 6.0 } else { 0.0 };
         for (i, tick) in ticks.iter().enumerate() {
             let y = i as f32 * TICK_ROW_H;
@@ -909,14 +865,12 @@ impl Renderer {
             if tick.on {
                 let check = self.text(CHECK_ICON, &self.formats.icon, width)?;
                 let (check_w, check_h, _) = metrics(&check);
-                out.items.push(Item::Text {
-                    layout: check,
-                    x: x + ((TICK_BOX - check_w) / 2.0).round(),
-                    y: box_y + ((TICK_BOX - check_h) / 2.0).round(),
-                    ink: Ink::OnAccent,
-                    accents: Vec::new(),
-                    selectable: false,
-                });
+                out.glyph(
+                    check,
+                    x + ((TICK_BOX - check_w) / 2.0).round(),
+                    box_y + ((TICK_BOX - check_h) / 2.0).round(),
+                    Ink::OnAccent,
+                );
             }
             x += TICK_BOX + 12.0;
             x += self.badge(&mut out, tick.code, x, line_y, line_h)? + 10.0;
@@ -926,14 +880,12 @@ impl Renderer {
                 let aside = self.text(tick.aside, &self.formats.footer, width)?;
                 let (aside_w, aside_h, _) = metrics(&aside);
                 end -= aside_w;
-                out.items.push(Item::Text {
-                    layout: aside,
-                    x: end,
-                    y: y + ((TICK_ROW_H - aside_h) / 2.0).round(),
-                    ink: Ink::Secondary,
-                    accents: Vec::new(),
-                    selectable: false,
-                });
+                out.glyph(
+                    aside,
+                    end,
+                    y + ((TICK_ROW_H - aside_h) / 2.0).round(),
+                    Ink::Secondary,
+                );
                 end -= 8.0;
             }
             let ink = if tick.fixed {
@@ -1183,14 +1135,7 @@ fn take(items: &mut Vec<Item>, i: usize, room: f32) -> Placed {
         (*at_x, *at_y) = (0.0, 0.0);
     }
     Placed {
-        layout: Layout {
-            items: vec![item],
-            width: size.0 + room,
-            height: size.1,
-            links: Vec::new(),
-            caret: None,
-            list: None,
-        },
+        layout: Layout::new(vec![item], size.0 + room, size.1),
         x,
         y,
     }

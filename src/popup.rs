@@ -110,7 +110,7 @@ const BADGE_SHADOW: f32 = 10.0;
 const BADGE_SHADOW_DY: f32 = 2.0;
 const BADGE_SHADOW_OPACITY: f32 = 0.8;
 /// "Accept" (a check mark) in Segoe Fluent Icons and Segoe MDL2 Assets.
-const COPIED_GLYPH: &str = "\u{E73E}";
+const COPIED_GLYPH: &str = crate::ui::CHECK_GLYPH;
 
 // Durations, in ms.
 pub const SHOW_MS: u64 = 340;
@@ -218,7 +218,7 @@ pub struct Popup {
 }
 
 /// One of the buttons on the card.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CardButton {
     Speak,
     Translate,
@@ -496,12 +496,9 @@ impl Popup {
         // Release the text surfaces while idle.
         self.header.release();
         self.content.release(&self.anim);
-        self.back.release();
-        self.translate.release();
-        self.wikipedia.release();
-        self.speak.release();
-        self.pin.release();
-        self.scan.release();
+        for button in CardButton::ALL {
+            self.button(button).release();
+        }
         self.badge.release();
         self.loader.stop();
         self.search.reset();
@@ -748,35 +745,21 @@ impl Popup {
         Ok(())
     }
 
-    /// Shows or hides the back button. The word moves to make room for it
-    /// with the next [`Popup::set_content`].
-    pub fn set_back(&mut self, shown: bool) -> Result<()> {
-        self.back.set_shown(&self.anim, shown, self.scale)?;
+    /// Shows or hides `button`. The word, and the buttons beside it, make
+    /// room for it with the next [`Popup::set_content`].
+    pub fn set_button(&mut self, button: CardButton, shown: bool) -> Result<()> {
+        let scale = self.scale;
+        let (ui, anim) = self.button_mut(button);
+        ui.set_shown(anim, shown, scale)?;
         self.sync_tooltip();
         Ok(())
     }
 
-    /// Shows or hides the translate button. The word makes room for it with
-    /// the next [`Popup::set_content`].
-    pub fn set_translate(&mut self, shown: bool) -> Result<()> {
-        self.translate.set_shown(&self.anim, shown, self.scale)?;
-        self.sync_tooltip();
-        Ok(())
-    }
-
-    /// Shows or hides the Wikipedia button. The translate button and the
-    /// word make room for it with the next [`Popup::set_content`].
-    pub fn set_wikipedia(&mut self, shown: bool) -> Result<()> {
-        self.wikipedia.set_shown(&self.anim, shown, self.scale)?;
-        self.sync_tooltip();
-        Ok(())
-    }
-
-    /// Shows or hides the button saying the word. The heading makes room
-    /// for it with the next [`Popup::set_content`].
-    pub fn set_speak(&mut self, shown: bool) -> Result<()> {
-        self.speak.set_shown(&self.anim, shown, self.scale)?;
-        self.sync_tooltip();
+    /// Shows or hides each of `buttons`, as [`Popup::set_button`] does.
+    pub fn set_buttons(&mut self, buttons: &[(CardButton, bool)]) -> Result<()> {
+        for &(button, shown) in buttons {
+            self.set_button(button, shown)?;
+        }
         Ok(())
     }
 
@@ -810,7 +793,10 @@ impl Popup {
     /// after its word.
     fn sync_title(&self) {
         let title = match self.pinned {
-            true => format!("{} - WinDict", render::capitalize(&self.header_key.0)),
+            true => format!(
+                "{} - WinDict",
+                crate::dictionary::capitalize(&self.header_key.0)
+            ),
             false => "WinDict".to_string(),
         };
         win::set_title(self.hwnd, &title);
@@ -847,10 +833,7 @@ impl Popup {
             return Ok(());
         };
         let r = self.card_rect();
-        let center = POINT {
-            x: (r.left + r.right) / 2,
-            y: (r.top + r.bottom) / 2,
-        };
+        let center = win::centre(r);
         let (work, scale) = monitor_at(center);
         let old = self.scale;
         self.scale = zoomed(work, scale, self.zoom);
@@ -1064,7 +1047,7 @@ impl Popup {
     }
 
     /// Shrinks the window's hit-test region to the card once a resize settles.
-    pub fn settle(&mut self) {
+    pub fn settle(&self) {
         self.set_region(self.card_h, self.card_h);
     }
 
@@ -1156,10 +1139,7 @@ impl Popup {
     /// Picks the window position and scale for a card next to `anchor`, on
     /// the monitor the anchor is on.
     fn place(&mut self, anchor: RECT, downward: bool) {
-        let center = POINT {
-            x: (anchor.left + anchor.right) / 2,
-            y: (anchor.top + anchor.bottom) / 2,
-        };
+        let center = win::centre(anchor);
         let (work, scale) = monitor_at(center);
         self.scale = zoomed(work, scale, self.zoom);
         (self.window, self.grow_up) = placement(anchor, work, self.scale, downward);
@@ -1172,12 +1152,10 @@ impl Popup {
         self.loader.apply_theme(&t)?;
         let c = &self.anim.compositor;
         self.content.apply_theme(c, &t, self.scale)?;
-        self.back.apply_theme(&self.renderer, &t, self.scale)?;
-        self.translate.apply_theme(&self.renderer, &t, self.scale)?;
-        self.wikipedia.apply_theme(&self.renderer, &t, self.scale)?;
-        self.speak.apply_theme(&self.renderer, &t, self.scale)?;
-        self.pin.apply_theme(&self.renderer, &t, self.scale)?;
-        self.scan.apply_theme(&self.renderer, &t, self.scale)?;
+        for button in CardButton::ALL {
+            self.button(button)
+                .apply_theme(&self.renderer, &t, self.scale)?;
+        }
         self.badge.apply_theme(&self.renderer, &t, self.scale)?;
         self.scroll_chrome.apply_theme(&t)
     }

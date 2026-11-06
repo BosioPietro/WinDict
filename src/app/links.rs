@@ -48,6 +48,8 @@ impl App {
 
     /// Tab or Shift+Tab: rings the next or previous link.
     pub(super) fn step_link(&mut self, forward: bool) {
+        // Moved on, the focus needn't go back where it was.
+        self.card.refocus = None;
         if let Some(popup) = self.visible_popup_mut() {
             let _ = popup.step_link(forward);
         }
@@ -75,10 +77,7 @@ impl App {
         }
         match &self.card.translating {
             Some(t) if t.asking => None,
-            Some(t) => match &t.result {
-                Some(Ok(translation)) => Some(translation.text.clone()),
-                _ => None,
-            },
+            Some(t) => t.text().map(str::to_owned),
             None => match &self.card.reading {
                 Some(reading) => Some(reading.article.title.clone()),
                 None => self.card.translatable.as_ref().map(|t| t.word.clone()),
@@ -87,7 +86,7 @@ impl App {
     }
 
     /// Ctrl+C: copies what [`App::copyable`] says, and shows it did.
-    pub(super) fn copy(&mut self) {
+    pub(super) fn copy(&self) {
         let Some(text) = self.copyable() else {
             return;
         };
@@ -107,10 +106,7 @@ impl App {
         if t.asking || t.typed.is_some() || t.about.word != selected.text {
             return None;
         }
-        match &t.result {
-            Some(Ok(translation)) => Some(translation.text.clone()),
-            _ => None,
-        }
+        t.text().map(str::to_owned)
     }
 
     /// Ctrl+Enter: closes the card and pastes the translation over the
@@ -138,6 +134,7 @@ impl App {
             Target::Back => self.back(),
             Target::Wikipedia => {
                 if let Some(article) = self.card.wiki.article().cloned() {
+                    self.keep_focus_behind();
                     self.show_article(Place::Same(Transition::Replace), article, true);
                     self.sync_back_keys();
                 }

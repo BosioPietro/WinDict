@@ -8,7 +8,6 @@ use std::time::Instant;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, VK_ESCAPE};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -288,12 +287,11 @@ fn with<R>(f: impl FnOnce(&mut Overlay) -> R) -> Option<R> {
 
 fn register() {
     unsafe {
-        let instance = GetModuleHandleW(None).ok().map(|m| HINSTANCE(m.0));
         let cursor = LoadCursorW(None, IDC_CROSS).unwrap_or_default();
         // Fails, harmlessly, once it's registered.
         RegisterClassW(&WNDCLASSW {
             lpfnWndProc: Some(snip_proc),
-            hInstance: instance.unwrap_or_default(),
+            hInstance: win::instance(),
             hCursor: cursor,
             lpszClassName: CLASS,
             ..Default::default()
