@@ -13,6 +13,9 @@
 ;
 ; Build with the three executables in ..\dist:
 ;     iscc /DVersion=0.26.0 installer\windict.iss
+; For Windows on ARM, with the executables built for it in another folder,
+; and Arm64 defined: the setup is then marked -arm64, and installs only there.
+;     iscc /DVersion=0.26.0 /DArm64 /DDist=..\dist\arm64 installer\windict.iss
 
 #ifndef Version
   #error Pass the version: iscc /DVersion=x.y.z
@@ -22,6 +25,14 @@
 #endif
 
 #define EnvironmentKey "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+
+#ifdef Arm64
+  #define Arch "arm64"
+  #define Mark "-arm64"
+#else
+  #define Arch "x64compatible"
+  #define Mark ""
+#endif
 
 [Setup]
 ; Never change it: it's how Windows and WinGet know an install is WinDict's.
@@ -39,14 +50,14 @@ DisableDirPage=yes
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
 PrivilegesRequired=admin
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
+ArchitecturesAllowed={#Arch}
+ArchitecturesInstallIn64BitMode={#Arch}
 ; It closes WinDict itself, and starts it again if it was running.
 CloseApplications=no
 OutputDir={#Dist}
 ; Not published as it is: the setup people download, WinGet and "Update app"
 ; run carries it (src/setup.rs), as WinDict-v<version>-setup.exe.
-OutputBaseFilename=WinDict-v{#Version}-inno
+OutputBaseFilename=WinDict-v{#Version}{#Mark}-inno
 SetupIconFile=..\assets\windict.ico
 UninstallDisplayIcon={app}\WinDict.exe
 LicenseFile=..\LICENSE

@@ -16,6 +16,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: clippy, rustfmt
+          targets: aarch64-pc-windows-msvc
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo fmt --check
       - run: cargo clippy --release --all-targets -- -D warnings
@@ -25,10 +26,14 @@ jobs:
       - run: cargo test --release
       - run: cargo test --release --features uiaccess
       - run: cargo build --release
+      # For Windows on ARM, which can only be built here, not run.
+      - run: cargo build --release --target aarch64-pc-windows-msvc
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windict
-          path: target/release/windict.exe
+          path: |
+            target/release/windict.exe
+            target/aarch64-pc-windows-msvc/release/windict.exe
       # As release.yml does, so a broken setup shows before a release.
       - name: Build the setup
         shell: pwsh

@@ -1,7 +1,8 @@
 name: release
 
 # Publishes WinDict as a GitHub Release, either by pushing a tag like `v0.2.0`
-# or from the Actions tab ("Run workflow", entering the version).
+# or from the Actions tab ("Run workflow", entering the version). Each release
+# has the x64 files, and the same again for Windows on ARM, marked -arm64.
 on:
   push:
     tags: ["v*"]
@@ -16,6 +17,7 @@ permissions:
 
 env:
   TAG: ${{ inputs.version || github.ref_name }}
+  ARM64: aarch64-pc-windows-msvc
 
 jobs:
   release:
@@ -33,36 +35,55 @@ jobs:
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
           if ($env:TAG -ne "v$version") { throw "$env:TAG doesn't match Cargo.toml's $version" }
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: aarch64-pc-windows-msvc
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo test --release
       - run: cargo build --release
-      - name: Name the executable after the version
-        shell: pwsh
-        run: Copy-Item target/release/windict.exe "WinDict-$env:TAG.exe"
-      # The installer, with the variant that can appear above Start; see
-      # installer/windict.iss.
-      - name: Build the installer
+      # The ARM build can only be built here, not run: the tests above
+      # stand for it.
+      - run: cargo build --release --target $env:ARM64
+      - name: Name the executables after the version
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/windict.exe "WinDict-$env:TAG.exe"
+          Copy-Item "target/$env:ARM64/release/windict.exe" "WinDict-$env:TAG-arm64.exe"
+      # The installers, each with the variant that can appear above Start; see
+      # installer/windict.iss.
+      - name: Build the installers
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist, dist/arm64 | Out-Null
           Copy-Item "WinDict-$env:TAG.exe" dist/WinDict.exe
           Copy-Item target/release/wd.exe dist/wd.exe
+          Copy-Item "WinDict-$env:TAG-arm64.exe" dist/arm64/WinDict.exe
+          Copy-Item "target/$env:ARM64/release/wd.exe" dist/arm64/wd.exe
           cargo build --release --features uiaccess
           if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
           Copy-Item target/release/windict.exe dist/WinDict-uiaccess.exe
+          cargo build --release --features uiaccess --target $env:ARM64
+          if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
+          Copy-Item "target/$env:ARM64/release/windict.exe" dist/arm64/WinDict-uiaccess.exe
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y }
-          & $iscc "/DVersion=$($env:TAG.TrimStart('v'))" installer/windict.iss
+          $version = $env:TAG.TrimStart('v')
+          & $iscc "/DVersion=$version" installer/windict.iss
           if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
-      # The setup people download, WinGet and "Update app" install with, which
-      # carries the installer above and runs it; see src/setup.rs.
-      - name: Build the setup
+          & $iscc "/DVersion=$version" /DArm64 '/DDist=..\dist\arm64' installer/windict.iss
+          if ($LASTEXITCODE -ne 0) { throw 'ISCC failed' }
+      # The setups people download, WinGet and "Update app" install with, which
+      # carry the installers above and run them; see src/setup.rs.
+      - name: Build the setups
         shell: pwsh
         run: |
           $env:WINDICT_SETUP = (Resolve-Path "dist/WinDict-$env:TAG-inno.exe").Path
           cargo build --release --features setup --bin windict-setup
           if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
           Copy-Item target/release/windict-setup.exe "dist/WinDict-$env:TAG-setup.exe"
+          $env:WINDICT_SETUP = (Resolve-Path "dist/arm64/WinDict-$env:TAG-arm64-inno.exe").Path
+          cargo build --release --features setup --bin windict-setup --target $env:ARM64
+          if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
+          Copy-Item "target/$env:ARM64/release/windict-setup.exe" "dist/WinDict-$env:TAG-arm64-setup.exe"
       # The features and fixes since the last release; see cliff.toml. Run from
       # the Actions tab, the tag doesn't exist yet, so the commits since the
       # last tag are named after it.
@@ -82,5 +103,7 @@ jobs:
           target_commitish: ${{ github.sha }}
           files: |
             WinDict-${{ env.TAG }}.exe
+            WinDict-${{ env.TAG }}-arm64.exe
             dist/WinDict-${{ env.TAG }}-setup.exe
+            dist/WinDict-${{ env.TAG }}-arm64-setup.exe
           body_path: notes.md

@@ -83,7 +83,10 @@ try {
     if (-not $latest) { throw "Release $($release.tag_name) isn't a version" }
     $installed = ConvertTo-Version (Get-ItemProperty $Uninstall -Name DisplayVersion).DisplayVersion
     if (-not $installed -or $latest -le $installed) { throw "WinDict $installed is up to date" }
-    $name = "WinDict-$($release.tag_name)-setup.exe"
+    # The setup built for this PC's processor: the ARM one is marked, the
+    # x64 one, which came first, isn't.
+    $mark = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { '-arm64' } else { '' }
+    $name = "WinDict-$($release.tag_name)$mark-setup.exe"
     $asset = $release.assets | Where-Object name -eq $name | Select-Object -First 1
     if (-not $asset) { throw "Release $($release.tag_name) has no $name" }
     # GitHub publishes the SHA-256 of each file.

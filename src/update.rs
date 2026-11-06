@@ -65,7 +65,39 @@ pub fn check() -> Result<Option<Release>, String> {
     if status != 200 {
         return Err(fill(tr().download_status, &[("status", &status)]));
     }
-    parse(&body, env!("CARGO_PKG_VERSION"), Edition::current())
+    parse(
+        &body,
+        env!("CARGO_PKG_VERSION"),
+        Edition::current(),
+        Arch::current(),
+    )
+}
+
+/// The processor this copy was built for, which decides which of a
+/// release's files update it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Arch {
+    X64,
+    Arm64,
+}
+
+impl Arch {
+    fn current() -> Arch {
+        if cfg!(target_arch = "aarch64") {
+            Arch::Arm64
+        } else {
+            Arch::X64
+        }
+    }
+
+    /// What a release's files for it are marked with, before their
+    /// extension: nothing for x64, whose files came first.
+    fn mark(self) -> &'static str {
+        match self {
+            Arch::X64 => "",
+            Arch::Arm64 => "-arm64",
+        }
+    }
 }
 
 /// How this copy of WinDict was installed, which decides what updates it.
@@ -86,11 +118,12 @@ impl Edition {
         }
     }
 
-    /// The release file that updates it.
-    fn file(self, tag: &str) -> String {
+    /// The release file that updates it, built for `arch`.
+    fn file(self, tag: &str, arch: Arch) -> String {
+        let mark = arch.mark();
         match self {
-            Edition::Portable => format!("WinDict-{tag}.exe"),
-            Edition::Installed => format!("WinDict-{tag}-setup.exe"),
+            Edition::Portable => format!("WinDict-{tag}{mark}.exe"),
+            Edition::Installed => format!("WinDict-{tag}{mark}-setup.exe"),
         }
     }
 }
@@ -102,8 +135,14 @@ pub fn by_task() -> bool {
 }
 
 /// The release in the GitHub API's `json`, if it's newer than `current` and
-/// has the file that updates `edition`, with a digest to check it by.
-fn parse(json: &[u8], current: &str, edition: Edition) -> Result<Option<Release>, String> {
+/// has the file that updates `edition` on `arch`, with a digest to check it
+/// by.
+fn parse(
+    json: &[u8],
+    current: &str,
+    edition: Edition,
+    arch: Arch,
+) -> Result<Option<Release>, String> {
     let latest: Latest =
         serde_json::from_slice(json).map_err(|_| tr().download_damaged.to_string())?;
     let (Some(latest_version), Some(current)) = (version(&latest.tag_name), version(current))
@@ -114,7 +153,7 @@ fn parse(json: &[u8], current: &str, edition: Edition) -> Result<Option<Release>
         return Ok(None);
     }
     let tag = latest.tag_name;
-    let exe = edition.file(&tag);
+    let exe = edition.file(&tag, arch);
     let release = latest.assets.into_iter().find_map(|asset| {
         let sha256 = asset.digest?.strip_prefix("sha256:")?.to_ascii_lowercase();
         let hex = sha256.len() == 64 && sha256.bytes().all(|b| b.is_ascii_hexdigit());
@@ -244,9 +283,15 @@ mod tests {
             r#"{{"tag_name": "{tag}", "assets": [
                 {{"name": "WinDict-{tag}.exe", "size": 8441344, "digest": "sha256:{DIGEST}"}},
                 {{"name": "WinDict-{tag}-setup.exe", "size": 8441344, "digest": "sha256:{DIGEST}"}},
+                {{"name": "WinDict-{tag}-arm64.exe", "size": 8441345, "digest": "sha256:{DIGEST}"}},
+                {{"name": "WinDict-{tag}-arm64-setup.exe", "size": 8441346, "digest": "sha256:{DIGEST}"}},
                 {{"name": "notes.txt", "size": 2404}}
             ]}}"#
         )
+    }
+
+    fn parse(json: &str, current: &str, edition: Edition) -> Result<Option<Release>, String> {
+        super::parse(json.as_bytes(), current, edition, Arch::X64)
     }
 
     #[test]
@@ -270,47 +315,37 @@ mod tests {
     #[test]
     fn finds_newer_releases() {
         let json = latest("v0.21.0");
-        let release = parse(json.as_bytes(), "0.20.3", Edition::Portable)
-            .unwrap()
-            .unwrap();
+        let release = parse(&json, "0.20.3", Edition::Portable).unwrap().unwrap();
         assert_eq!(release.tag, "v0.21.0");
         assert_eq!(release.exe, "WinDict-v0.21.0.exe");
         assert_eq!(release.size, 8441344);
         assert_eq!(release.sha256, DIGEST);
-        let release = parse(json.as_bytes(), "0.20.3", Edition::Installed)
-            .unwrap()
-            .unwrap();
+        let release = parse(&json, "0.20.3", Edition::Installed).unwrap().unwrap();
         assert_eq!(release.exe, "WinDict-v0.21.0-setup.exe");
+        // On ARM, the files marked for it.
+        let arm = |edition| super::parse(json.as_bytes(), "0.20.3", edition, Arch::Arm64);
+        let release = arm(Edition::Portable).unwrap().unwrap();
+        assert_eq!(
+            (release.exe.as_str(), release.size),
+            ("WinDict-v0.21.0-arm64.exe", 8441345)
+        );
+        let release = arm(Edition::Installed).unwrap().unwrap();
+        assert_eq!(release.exe, "WinDict-v0.21.0-arm64-setup.exe");
         // Not newer.
-        assert_eq!(
-            parse(json.as_bytes(), "0.21.0", Edition::Portable),
-            Ok(None)
-        );
-        assert_eq!(
-            parse(json.as_bytes(), "0.22.0", Edition::Portable),
-            Ok(None)
-        );
+        assert_eq!(parse(&json, "0.21.0", Edition::Portable), Ok(None));
+        assert_eq!(parse(&json, "0.22.0", Edition::Portable), Ok(None));
     }
 
     #[test]
     fn needs_an_executable_to_check() {
         let without_digest =
             r#"{"tag_name": "v1.0.0", "assets": [{"name": "WinDict-v1.0.0.exe", "size": 5}]}"#;
-        assert_eq!(
-            parse(without_digest.as_bytes(), "0.1.0", Edition::Portable),
-            Ok(None)
-        );
+        assert_eq!(parse(without_digest, "0.1.0", Edition::Portable), Ok(None));
         let bad_digest = r#"{"tag_name": "v1.0.0", "assets": [
             {"name": "WinDict-v1.0.0.exe", "size": 5, "digest": "md5:abc"}]}"#;
-        assert_eq!(
-            parse(bad_digest.as_bytes(), "0.1.0", Edition::Portable),
-            Ok(None)
-        );
+        assert_eq!(parse(bad_digest, "0.1.0", Edition::Portable), Ok(None));
         let no_assets = r#"{"tag_name": "v1.0.0"}"#;
-        assert_eq!(
-            parse(no_assets.as_bytes(), "0.1.0", Edition::Portable),
-            Ok(None)
-        );
-        assert!(parse(b"not json", "0.1.0", Edition::Portable).is_err());
+        assert_eq!(parse(no_assets, "0.1.0", Edition::Portable), Ok(None));
+        assert!(parse("not json", "0.1.0", Edition::Portable).is_err());
     }
 }

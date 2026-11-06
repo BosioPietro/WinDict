@@ -213,15 +213,17 @@ Use `-Disable -Restart` instead to turn UI access off.
 ### Using the setup (recommended)
 
 1. Download `WinDict-<version>-setup.exe` from the
-   [latest release](https://github.com/BosioPietro/WinDict/releases/latest).
+   [latest release](https://github.com/BosioPietro/WinDict/releases/latest);
+   on Windows on ARM, `WinDict-<version>-arm64-setup.exe`.
 2. Run it. It installs WinDict to `C:\Program Files\WinDict`, which it needs to
    show the card above Start, and adds it to Start and to Settings → Apps,
    where it can be uninstalled.
 
 ### Without installing
 
-Download `WinDict-<version>.exe` instead and run it from anywhere: it's the
-whole app in a single executable.
+Download `WinDict-<version>.exe` instead (`WinDict-<version>-arm64.exe` on
+Windows on ARM) and run it from anywhere: it's the whole app in a single
+executable.
 
 To carry it on a USB stick, create an empty `config.json` in the same
 folder before starting it: the settings are kept there, and the
@@ -274,6 +276,7 @@ WinDict needs Windows and a Rust toolchain (1.88 or newer).
 
 ```powershell
 cargo build --release        # target\release\windict.exe and wd.exe
+cargo build --release --target aarch64-pc-windows-msvc   # for Windows on ARM
 cargo test                   # unit tests, including the bundled dictionary
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
