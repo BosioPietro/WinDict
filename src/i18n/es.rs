@@ -104,6 +104,7 @@ pub const ES: Strings = Strings {
     translate_too_long: "Selecciona un texto más corto para traducir.",
     translate_offline: "La traducción está desactivada",
     translate_offline_detail: "Activa el diccionario en línea en Configuración para traducir.",
+    no_offline_translation: "Los diccionarios de este PC no tienen una traducción. Activa el diccionario en línea en Configuración para tener más.",
     also: "También",
     no_languages_match: "Ningún idioma coincide",
 
@@ -299,7 +300,6 @@ pub const ES: Strings = Strings {
     cli_no_passage: "Indica un pasaje para glosar.",
     cli_gloss_too_long: "Indica un pasaje más corto para glosar.",
     cli_gloss_unknown_detail: "Indica en qué idioma está con --lang.",
-    cli_translate_offline_detail: "Activa el diccionario en línea en Configuración, o añade --online.",
     cli_unknown_language: "\u{201C}{language}\u{201D} no es un idioma que WinDict pueda traducir.",
     cli_guessed_direction: "Se tradujo de {from} a {to}; usa --from o --to para elegir.",
 

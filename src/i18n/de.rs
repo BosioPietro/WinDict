@@ -106,6 +106,7 @@ pub const DE: Strings = Strings {
     translate_too_long: "Markieren Sie einen kürzeren Abschnitt.",
     translate_offline: "Übersetzen ist ausgeschaltet",
     translate_offline_detail: "Schalten Sie dazu in den Einstellungen das Online-Wörterbuch ein.",
+    no_offline_translation: "Die Wörterbücher auf diesem PC haben keine Übersetzung dafür. Schalten Sie in den Einstellungen das Online-Wörterbuch ein, um mehr zu erhalten.",
     also: "Weitere",
     no_languages_match: "Keine passende Sprache",
 
@@ -300,7 +301,6 @@ pub const DE: Strings = Strings {
     cli_no_passage: "Geben Sie einen Abschnitt an, in dem seltene Wörter gesucht werden sollen.",
     cli_gloss_too_long: "Geben Sie einen kürzeren Abschnitt an.",
     cli_gloss_unknown_detail: "Geben Sie die Sprache mit --lang an.",
-    cli_translate_offline_detail: "Schalten Sie in den Einstellungen das Online-Wörterbuch ein oder verwenden Sie --online.",
     cli_unknown_language: "\u{201E}{language}\u{201C} ist keine Sprache, die WinDict übersetzt.",
     cli_guessed_direction: "Übersetzt von {from} nach {to}; mit --from oder --to legen Sie die Richtung fest.",
 

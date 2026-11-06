@@ -1019,13 +1019,20 @@ impl Renderer {
         }
         out.y += 14.0;
         let source = translation.source;
-        if source == translate::GOOGLE {
+        let url = if source == translate::GOOGLE {
             let url = format!(
                 "https://translate.google.com/?sl={}&tl={}&text={}&op=translate",
                 card.from,
                 card.to,
                 percent_encode(card.word)
             );
+            Some(url)
+        } else {
+            // A dictionary on this PC: its page for the word, or for the
+            // translation, whichever is in its language.
+            offline::translation_link(source, card.word, &translation.text, card.from)
+        };
+        if let Some(url) = url {
             let (w, h) = self.external_link(out, source, 0.0, width)?;
             out.links.push(Link {
                 x: -4.0,

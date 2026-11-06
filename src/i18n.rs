@@ -174,6 +174,9 @@ strings! {
     translate_too_long: "Select a shorter passage to translate.",
     translate_offline: "Translation is off",
     translate_offline_detail: "Turn on the online dictionary in Settings to translate.",
+    /// On the translation card, offline, for a word no dictionary in use
+    /// has a translation of.
+    no_offline_translation: "The dictionaries on this PC have no translation for it. Turn on the online dictionary in Settings for more.",
     /// The heading over translations that have no part of speech.
     also: "Also",
     no_languages_match: "No languages match",
@@ -397,7 +400,6 @@ strings! {
     cli_no_passage: "Give a passage to gloss.",
     cli_gloss_too_long: "Give a shorter passage to gloss.",
     cli_gloss_unknown_detail: "Give the language it\u{2019}s in with --lang.",
-    cli_translate_offline_detail: "Turn on the online dictionary in Settings, or pass --online.",
     /// `{language}`, as it was given.
     cli_unknown_language: "\u{201C}{language}\u{201D} isn\u{2019}t a language WinDict translates.",
     /// After `translate_ambiguous`. `{from}`, `{to}`.

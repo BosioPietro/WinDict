@@ -24,6 +24,7 @@ use crate::config;
 use crate::dictionary::{self, percent_encode, Definition, Detail};
 use crate::i18n::{fill, tr};
 use crate::lang::LangCode;
+use crate::translate::{Group, Term, Translation};
 
 mod format;
 mod words;
@@ -76,6 +77,76 @@ pub fn detect(text: &str) -> Option<LangCode> {
         (Some((_, language)), None) => Some(language),
         _ => None,
     }
+}
+
+/// `word` translated from the language with code `from` into the one with
+/// code `to` by the dictionaries in use, when one of them has it: the
+/// dictionary of the language it's in has its translations, and that of
+/// the language it's translated into has it among the words it knows the
+/// other way. The first is the translation, the rest come under it. Only
+/// single words: a passage isn't in any dictionary.
+pub fn translate(word: &str, from: &str, to: &str) -> Option<Translation> {
+    translate_with(&active(), word, from, to)
+}
+
+fn translate_with(
+    dictionaries: &[Arc<Dictionary>],
+    word: &str,
+    from: &str,
+    to: &str,
+) -> Option<Translation> {
+    let word = dictionary::normalize(word).ok()?;
+    let (dictionary, words) = dictionaries
+        .iter()
+        .find_map(|d| Some((d, d.translate(&word, from, to)?)))?;
+    let mut words = words.into_iter();
+    let text = words.next()?;
+    let terms: Vec<Term> = words
+        .map(|text| Term {
+            text,
+            back: Vec::new(),
+        })
+        .collect();
+    let groups = match terms.is_empty() {
+        true => Vec::new(),
+        false => vec![Group {
+            part_of_speech: String::new(),
+            terms,
+        }],
+    };
+    Some(Translation {
+        text,
+        context: None,
+        groups,
+        source: dictionary.info.name,
+    })
+}
+
+/// Whether any of the dictionaries in use carries translations, so that
+/// a word may be translated without the internet.
+pub fn translates() -> bool {
+    active()
+        .iter()
+        .any(|d| d.dict().is_some_and(|dict| dict.translates()))
+}
+
+/// The page of the dictionary named `source` that a translation of `word`
+/// came from, if it's one in use: the word's, when it's the dictionary of
+/// the word's language (`from`), else the `translation`'s.
+pub fn translation_link(source: &str, word: &str, translation: &str, from: &str) -> Option<String> {
+    let language = active()
+        .iter()
+        .find(|d| d.info.name == source)?
+        .language()
+        .clone();
+    link(
+        source,
+        if *language == *from {
+            word
+        } else {
+            translation
+        },
+    )
 }
 
 /// The dictionaries lookups use, in order of preference: English until
@@ -223,6 +294,20 @@ impl Dictionary {
             language: self.info.language.clone(),
             ..def
         }))
+    }
+
+    /// `word` in the language with code `to`, best first, when this is the
+    /// dictionary of the language with code `from`; or, when it's that of
+    /// `to`, the words of its language `word`, in `from`, translates to.
+    fn translate(&self, word: &str, from: &str, to: &str) -> Option<Vec<String>> {
+        let dict = self.dict().filter(Dict::translates)?;
+        if *self.info.language == *from {
+            dict.translations(word, to)
+        } else if *self.info.language == *to {
+            dict.reverse(from, word)
+        } else {
+            None
+        }
     }
 }
 
@@ -485,6 +570,51 @@ mod tests {
         assert_eq!(languages(), ["en"]);
         assert!(set(&["en"]).is_ok());
         assert_eq!(find("dog").language, "en");
+    }
+
+    #[test]
+    fn translates_words_from_the_dictionaries() {
+        let dir = std::env::temp_dir().join(format!("windict-translate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("it.wdict");
+        let data = format::tests::file(
+            "language=it\nname=Test\nlink=https://it.wiktionary.org/wiki/{}",
+            &[
+                ("casa", "Pn0\nTen house|home\nTde Haus"),
+                ("case", "Rcasa"),
+                ("gatto", "Pn1\nTen cat"),
+            ],
+            &["casa\n\nedificio", "gatto\n\nfelino"],
+            &[("en\tcat", "gatto"), ("en\thouse", "casa\ndimora")],
+        );
+        std::fs::write(&path, data).unwrap();
+        let italian = Arc::new(open_file(&path, "it").unwrap());
+        let dictionaries = vec![english(), italian];
+        let translate = |word, from, to| translate_with(&dictionaries, word, from, to);
+        // From its language: the first is the translation, the rest come
+        // under it.
+        let house = translate("Casa", "it", "en").unwrap();
+        assert_eq!((house.text.as_str(), house.source), ("house", "Test"));
+        assert_eq!(house.groups[0].terms[0].text, "home");
+        assert!(house.groups[0].terms[0].back.is_empty());
+        // Through a form of the word, and into another language.
+        assert_eq!(translate("case", "de", "it"), None);
+        assert_eq!(translate("case", "it", "de").unwrap().text, "Haus");
+        // Into its language, from the words it knows the other way.
+        let casa = translate("house", "en", "it").unwrap();
+        assert_eq!(casa.text, "casa");
+        assert_eq!(casa.groups[0].terms[0].text, "dimora");
+        assert!(translate("cat", "en", "it").unwrap().groups.is_empty());
+        // Nothing for what isn't there, nor between other languages.
+        assert_eq!(translate("dog", "en", "it"), None);
+        assert_eq!(translate("casa", "it", "fr"), None);
+        assert_eq!(translate("house", "en", "de"), None);
+        assert_eq!(translate("the house", "en", "it"), None);
+        // English, from WordNet, carries none of its own.
+        assert_eq!(translate_with(&[english()], "house", "en", "it"), None);
+        assert!(!english().dict().unwrap().translates());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

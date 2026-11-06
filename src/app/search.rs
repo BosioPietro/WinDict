@@ -16,7 +16,10 @@ impl App {
     /// do with it what the `purpose` shortcut does. It opens at `anchor`,
     /// the text caret, when there is one.
     pub(super) fn open_search(&mut self, purpose: Shortcut, anchor: Option<RECT>) {
-        if purpose == Shortcut::Translate && self.refuse_translation_offline(anchor) {
+        // Translations come from the internet, like the online answers,
+        // but for single words, which a dictionary in use may have.
+        let translates = purpose == Shortcut::Translate && !offline::translates();
+        if translates && self.refuse_translation_offline(anchor) {
             return;
         }
         let title = match purpose {

@@ -75,7 +75,7 @@ impl Words {
     /// Adds `dict`'s words, from dictionary number `dictionary`, to
     /// `list`, and their text to `out`.
     fn add(out: &mut String, list: &mut Vec<Word>, dict: &Dict, dictionary: u8) {
-        for block in 0..dict.entry_blocks {
+        for block in 0..dict.entry_blocks() {
             let Some(text) = dict.entry_block(block) else {
                 continue;
             };

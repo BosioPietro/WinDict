@@ -16,6 +16,7 @@ use crate::dictionary::{percent_encode, same_word, tidy, NormalizeError, MAX_LOO
 use crate::http;
 use crate::i18n::{fill, tr};
 use crate::lang::LangCode;
+use crate::offline;
 
 const GOOGLE_HOST: &str = "translate.googleapis.com";
 const GOOGLE_WEB_HOST: &str = "translate-pa.googleapis.com";
@@ -354,6 +355,25 @@ pub fn translate(
         groups: Vec::new(),
         source: source.unwrap_or(GOOGLE),
     })
+}
+
+/// Translates `text` as [`translate`] does when `online`, and from the
+/// dictionaries on this PC (`offline::translate`) when that fails, or when
+/// it isn't to go online at all. They have single words, between a
+/// dictionary's language and the others.
+pub fn online_or_offline(
+    text: &str,
+    from: &LangCode,
+    to: &LangCode,
+    context: Option<&str>,
+    email: &str,
+    online: bool,
+) -> Result<Translation, String> {
+    let from_dictionaries = || offline::translate(text, from, to);
+    if !online {
+        return from_dictionaries().ok_or_else(|| tr().no_offline_translation.into());
+    }
+    translate(text, from, to, context, email).or_else(|e| from_dictionaries().ok_or(e))
 }
 
 /// Translates `text`, which the services take whole, as [`translate`] says.

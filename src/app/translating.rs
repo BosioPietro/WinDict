@@ -3,9 +3,10 @@
 use super::*;
 
 impl App {
-    /// Whether the card shows a definition it can turn into a translation.
+    /// Whether the card shows a definition it can turn into a translation:
+    /// online, or from a dictionary in use that carries translations.
     pub(super) fn can_translate(&self) -> bool {
-        self.config.online_lookup
+        (self.config.online_lookup || offline::translates())
             && self.card.translatable.is_some()
             && self.card.translating.is_none()
     }
@@ -41,11 +42,14 @@ impl App {
             text: text.clone(),
             window: unsafe { GetForegroundWindow() },
         });
-        if self.refuse_translation_offline(anchor) {
+        let word = dictionary::normalize(&text).ok();
+        // Translations come from the internet, like the online answers,
+        // but for a single word, which a dictionary in use may have.
+        let from_dictionaries = word.is_some() && offline::translates();
+        if !from_dictionaries && self.refuse_translation_offline(anchor) {
             return;
         }
         let detail = Detail::BRIEF;
-        let word = dictionary::normalize(&text).ok();
         let def = word.as_deref().and_then(|w| offline::lookup(w, detail));
         // What's selected is translated as it's written, in the languages
         // the dictionary has it in.
@@ -186,9 +190,11 @@ impl App {
         }
         let (id, events) = (self.card.request, self.events.clone());
         let email = self.config.mymemory_email.clone();
+        let online = self.config.online_lookup;
         std::thread::spawn(move || {
             let (word, from, to) = &key;
-            let result = translate::translate(word, from, to, context.as_deref(), &email);
+            let context = context.as_deref();
+            let result = translate::online_or_offline(word, from, to, context, &email, online);
             events.send(Event::Translated(Translated { id, key, result }));
         });
     }

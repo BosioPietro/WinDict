@@ -105,6 +105,7 @@ pub const FR: Strings = Strings {
     translate_too_long: "Sélectionnez un passage plus court.",
     translate_offline: "La traduction est désactivée",
     translate_offline_detail: "Activez le dictionnaire en ligne dans les paramètres.",
+    no_offline_translation: "Les dictionnaires de ce PC n\u{2019}ont pas de traduction. Activez le dictionnaire en ligne dans les paramètres pour en avoir plus.",
     also: "Également",
     no_languages_match: "Aucune langue trouvée",
 
@@ -301,7 +302,6 @@ pub const FR: Strings = Strings {
     cli_no_passage: "Indiquez un passage à gloser.",
     cli_gloss_too_long: "Indiquez un passage plus court à gloser.",
     cli_gloss_unknown_detail: "Précisez-la avec --lang.",
-    cli_translate_offline_detail: "Activez le dictionnaire en ligne dans les paramètres, ou ajoutez --online.",
     cli_unknown_language: "«\u{A0}{language}\u{A0}» n\u{2019}est pas une langue que WinDict traduit.",
     cli_guessed_direction: "Traduction déduite\u{A0}: {from} \u{2192} {to}. Précisez avec --from ou --to.",
 

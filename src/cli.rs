@@ -321,10 +321,6 @@ fn translate_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
     if from.is_some() && from == to {
         return usage_error(tr().cli_same_language);
     }
-    // Translations come from the internet, like the online answers.
-    if !args.online.unwrap_or(config.online_lookup) {
-        return failure(tr().translate_offline, tr().cli_translate_offline_detail);
-    }
     load_dictionaries(config);
     // A word the dictionary has: which languages it's in tells which way
     // it goes, and its first sense in the one it's from, what it means.
@@ -352,14 +348,18 @@ fn translate_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
         let section = def.sections().find(|s| s.language == direction.from)?;
         Some(section.meanings.first()?.senses.first()?.text.as_str())
     });
+    // Translations come from the internet, like the online answers; offline,
+    // a single word may be in a dictionary that carries them.
+    let online = args.online.unwrap_or(config.online_lookup);
     let result = {
         let _waiting = Waiting::show(tr().translating);
-        translate::translate(
+        translate::online_or_offline(
             &text,
             &direction.from,
             &direction.to,
             context,
             &config.mymemory_email,
+            online,
         )
     };
     match result {

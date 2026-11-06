@@ -38,6 +38,7 @@ use crate::dicts;
 use crate::gloss::Gloss;
 use crate::i18n::{fill, tr};
 use crate::lang::LangCode;
+use crate::offline;
 use crate::theme::{to_d2d, Theme};
 use crate::translate::{self, Translation};
 use crate::wikipedia::Article;

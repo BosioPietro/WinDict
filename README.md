@@ -53,7 +53,7 @@ theme and accent color.
 
 - **Definitions in place: select a word, press Alt+D**
 - **Translations of a word, a phrase or a whole passage with Alt+T, between 22 languages**
-- **Dictionaries in English, Spanish, French, German, Italian and Portuguese that work offline**
+- **Dictionaries in English, Spanish, French, German, Italian and Portuguese that work offline, and translate single words offline too**
 - **Shows above Start and Search, once installed**
 - **Alt+D on a whole passage underlines its uncommon words, each a click or a Tab away from its definition**
 - Inflected forms are looked up by their base word ("ran" shows "run")
@@ -111,6 +111,13 @@ To translate straight away, select a word, a phrase or a whole passage (up to
 5,000 characters) and press **Alt+T**: the card opens on the translation. A
 long passage is translated a few sentences at a time.
 For a single word the dictionary has, Back shows its definition.
+
+Single words are also translated without the internet, from the translations
+in the dictionaries you've downloaded: from a dictionary's language into any
+of the 22, and from any of them into it, so with the Italian dictionary
+"casa" becomes "house" and "house" "casa" offline. That's what's used when
+the online dictionary is off, or when the translation services can't be
+reached; passages still need them.
 
 <details>
 <summary>Typing the text to translate</summary>
@@ -264,8 +271,9 @@ by hand, use **Open config.json** at the bottom of the settings window, then
   picked on the introduction or in the settings, and works offline from then
   on.
 - The online dictionary is used for pronunciations and for words the built-in
-  one doesn't have. Translations are fetched only when asked for. Both can be
-  turned off in the settings.
+  one doesn't have. Translations are fetched only when asked for, and single
+  words come from the downloaded dictionaries when they can't be. Both can
+  be turned off in the settings.
 
 WinDict uses about 3 MB of memory while idle and around 20 MB while a card is
 open.
