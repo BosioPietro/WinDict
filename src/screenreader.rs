@@ -13,6 +13,7 @@ use windows::core::{implement, Error, IUnknown, Result, BSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, VARIANT_FALSE, VARIANT_TRUE, WPARAM};
 use windows::Win32::System::Variant::{VARIANT, VT_BOOL, VT_BSTR, VT_I4};
 use windows::Win32::UI::Accessibility::*;
+use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
 
 use crate::dictionary::capitalize;
 use crate::dictionary::Definition;
@@ -37,6 +38,12 @@ pub struct Card {
     provider: IRawElementProviderSimple,
     /// The word the card shows, which names it.
     name: Rc<RefCell<String>>,
+    /// What was last read out, not to start it over for a card redrawn the
+    /// same (its picture arriving, say).
+    last: RefCell<String>,
+    /// What's to be read out once the window is shown: a notification from
+    /// a hidden window goes unheard.
+    pending: RefCell<Option<String>>,
 }
 
 impl Card {
@@ -52,6 +59,8 @@ impl Card {
             hwnd,
             provider,
             name,
+            last: RefCell::new(String::new()),
+            pending: RefCell::new(None),
         }
     }
 
@@ -64,12 +73,21 @@ impl Card {
         }
     }
 
-    /// Has `text` read out, if a screen reader is listening.
+    /// Has `text` read out, if a screen reader is listening, once the
+    /// window is up (see [`Card::appeared`]).
     pub fn say(&self, text: &str) {
         let text = text.trim();
-        if text.is_empty() || !unsafe { UiaClientsAreListening() }.as_bool() {
+        if text.is_empty() {
             return;
         }
+        if !unsafe { IsWindowVisible(self.hwnd) }.as_bool() {
+            *self.pending.borrow_mut() = Some(text.to_owned());
+            return;
+        }
+        if *self.last.borrow() == text || !unsafe { UiaClientsAreListening() }.as_bool() {
+            return;
+        }
+        *self.last.borrow_mut() = text.to_owned();
         unsafe {
             let _ = UiaRaiseNotificationEvent(
                 &self.provider,
@@ -79,6 +97,20 @@ impl Card {
                 &BSTR::from(ACTIVITY),
             );
         }
+    }
+
+    /// The window has been shown, and UI Automation has had time to take it
+    /// in: what was waiting for it is read out.
+    pub fn appeared(&self) {
+        if let Some(text) = self.pending.borrow_mut().take() {
+            self.say(&text);
+        }
+    }
+
+    /// The window has been hidden: the next card is read out whatever it is.
+    pub fn hidden(&self) {
+        self.last.borrow_mut().clear();
+        *self.pending.borrow_mut() = None;
     }
 }
 
@@ -110,12 +142,9 @@ pub fn spoken(body: &Body) -> Option<String> {
     match body {
         Body::Loading { .. } => return None,
         Body::Definition(def) => {
-            let mut heading = def.word.clone();
-            if let Some(phonetic) = &def.phonetic {
-                heading.push(' ');
-                heading.push_str(phonetic);
-            }
-            out.push(heading);
+            // Not the phonetic: screen readers spell IPA out letter by
+            // letter, and it comes after the rest, which would start over.
+            out.push(def.word.clone());
             let several = !def.others.is_empty();
             for section in def.sections() {
                 if several {
@@ -329,7 +358,7 @@ mod tests {
         let def = definition();
         assert_eq!(
             spoken(&Body::Definition(&def)).unwrap(),
-            "dog /dɒɡ/. Noun. A domesticated canid. Similar: hound."
+            "dog. Noun. A domesticated canid. Similar: hound."
         );
         // With more languages, each is named.
         let mut both = definition();

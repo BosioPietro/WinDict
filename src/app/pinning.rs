@@ -171,6 +171,11 @@ impl App {
                 }
             }
             TIMER_TRANSLATING => app.stop_waiting(),
+            TIMER_SPOKEN => {
+                if let Some(p) = app.card.popup.as_ref() {
+                    p.announce();
+                }
+            }
             _ => {}
         });
     }

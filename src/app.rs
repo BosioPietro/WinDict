@@ -319,6 +319,7 @@ const TIMER_UPDATE_CHECK: usize = 10;
 const TIMER_CLOSED: usize = 11;
 const TIMER_INTRO_HIDE: usize = 12;
 const TIMER_SNIP: usize = 13;
+const TIMER_SPOKEN: usize = 14;
 
 /// Free the GPU resources after this long without a lookup.
 const IDLE_TEARDOWN_MS: u32 = 3 * 60 * 1000;
@@ -337,6 +338,9 @@ const HIDE_DONE_MS: u32 = ui::HIDE_MS as u32 + 30;
 const SETTLE_MS: u32 = ui::RESIZE_MS as u32 + 60;
 /// How long the card waits for a translation before showing it on its way.
 const TRANSLATING_WAIT_MS: u32 = 400;
+/// Tell screen readers what a card just shown says once UI Automation has
+/// taken its window in: told at once, they don't hear it.
+const SPOKEN_MS: u32 = 350;
 const CACHE_SIZE: usize = 64;
 const TRANSLATION_CACHE_SIZE: usize = 32;
 const ARTICLE_CACHE_SIZE: usize = 64;

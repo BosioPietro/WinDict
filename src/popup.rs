@@ -497,6 +497,7 @@ impl Popup {
         unsafe {
             let _ = ShowWindow(self.hwnd, SW_HIDE);
         }
+        self.reader.hidden();
         // Release the text surfaces while idle.
         self.header.release();
         self.content.release(&self.anim);
@@ -1125,6 +1126,12 @@ impl Popup {
         self.visible = true;
 
         self.anim.fade_in(&self.root, ui::FADE_IN_MS, SHOW_MS)
+    }
+
+    /// The card has been up long enough for screen readers to have taken
+    /// its window in: they're told what it says, if they weren't yet.
+    pub fn announce(&self) {
+        self.reader.appeared();
     }
 
     /// A point in window pixels, relative to the card's top left.

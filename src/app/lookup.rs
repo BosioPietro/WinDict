@@ -509,6 +509,9 @@ impl App {
         self.install_dismiss_hooks();
         self.sync_link_keys();
         win::set_timer(hwnd, TIMER_COVERED, COVERED_CHECK_MS);
+        if let Some(popup) = self.card.popup.as_ref() {
+            win::set_timer(popup.hwnd, TIMER_SPOKEN, SPOKEN_MS);
+        }
     }
 
     /// The card changed size: clicks outside it now are those outside the

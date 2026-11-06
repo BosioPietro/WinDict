@@ -389,7 +389,7 @@ pub(super) unsafe extern "system" fn popup_proc(
             LRESULT(0)
         }
         // The card's own: other timers on the window, its tooltips', aren't.
-        WM_TIMER if matches!(wparam.0, TIMER_SETTLE | TIMER_TRANSLATING) => {
+        WM_TIMER if matches!(wparam.0, TIMER_SETTLE | TIMER_TRANSLATING | TIMER_SPOKEN) => {
             with_app(|app| app.on_card_timer(hwnd, wparam.0));
             LRESULT(0)
         }
