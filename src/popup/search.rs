@@ -43,6 +43,7 @@ impl Popup {
 
     /// Changes the search box's heading.
     pub fn set_search_title(&mut self, title: &str) -> Result<()> {
+        self.reader.show(title, Some(title.to_owned()));
         self.search
             .set_title(&self.renderer, &self.anim, &self.theme, title)
     }
@@ -215,6 +216,8 @@ impl Popup {
         self.content.set_links(Vec::new());
         self.selecting = None;
         self.shown = None;
+        // The box is the card now: a screen reader hears what it's for.
+        self.reader.show(title, Some(title.to_owned()));
         let delay = if in_place { MAKE_WAY_MS } else { 0 };
         let (renderer, theme, s) = (&self.renderer, &self.theme, self.scale);
         let h = self

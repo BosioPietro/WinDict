@@ -41,6 +41,9 @@ setup = []
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 windows-numerics = "0.3"
+# What `windows` builds on: named too for its `implement` macro, which
+# spells it out (screenreader.rs).
+windows-core = "0.62"
 miniz_oxide = "0.8"
 
 [dependencies.windows]

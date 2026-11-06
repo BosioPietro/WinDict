@@ -25,6 +25,7 @@ use crate::render::{
     self, Body, Face, Ink, Link, ListLayout, Mark, Renderer, Target, TextPoint, LANGUAGES_TOP,
     WORD_SIZE,
 };
+use crate::screenreader;
 use crate::searchbox::SearchBox;
 use crate::theme::Theme;
 use crate::ui::{
@@ -213,6 +214,8 @@ pub struct Popup {
     pub visible: bool,
     /// Pinned open: a window of its own, dragged by its heading.
     pinned: bool,
+    /// What screen readers are told the card shows.
+    reader: screenreader::Card,
     /// Last, so it goes after everything shown on it.
     _window: Window,
 }
@@ -455,6 +458,7 @@ impl Popup {
             last_press: None,
             visible: false,
             pinned: false,
+            reader: screenreader::Card::new(hwnd),
             _window: window,
         })
     }
@@ -538,6 +542,7 @@ impl Popup {
         let heading =
             self.renderer
                 .layout_header(word, phonetic, content_w - room, indent, button, muted)?;
+        self.reader.show(word, screenreader::spoken(&body));
         let shown = Shown {
             word: word.to_owned(),
             phonetic: phonetic.map(str::to_owned),

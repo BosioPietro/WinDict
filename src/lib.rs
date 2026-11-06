@@ -24,6 +24,8 @@
 //! - `config`, `hotkey`, `autostart`, `tray`: settings and their storage, the
 //!   shortcut, "Start with Windows", and the notification-area icon.
 //! - `speech`: saying the word out loud, in its language's voice.
+//! - `screenreader`: what screen readers are told about the card, which
+//!   is drawn rather than made of controls.
 //! - `snip` and `ocr`: picking an area of the screen, and reading the text
 //!   in it into the search box.
 //! - `update`: looking for a new version, and installing it.
@@ -60,6 +62,7 @@ mod offline;
 mod online;
 mod popup;
 mod render;
+mod screenreader;
 mod searchbox;
 mod selection;
 mod settings;

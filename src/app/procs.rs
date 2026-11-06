@@ -13,7 +13,7 @@ use windows::Win32::UI::Shell::{NINF_KEY, NIN_SELECT};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::*;
-use crate::win;
+use crate::{screenreader, win};
 
 thread_local! {
     /// The card being dragged, if one is: it's drawn at its monitor's
@@ -245,6 +245,8 @@ pub(super) unsafe extern "system" fn popup_proc(
     let card = |f: &mut dyn FnMut(&mut App)| with_app(|app| app.with_card(hwnd, |app| f(app)));
     let default = || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     match msg {
+        // A screen reader asking what the card is; see `screenreader`.
+        WM_GETOBJECT => screenreader::get_object(hwnd, wparam, lparam).unwrap_or_else(default),
         // Never steal focus from the app the user is reading in, unless the
         // card's pinned, which takes the keyboard like any window.
         WM_MOUSEACTIVATE if win::activates(hwnd) => LRESULT(MA_ACTIVATE as isize),

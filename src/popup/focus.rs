@@ -73,7 +73,15 @@ impl Popup {
             (Some(i), true) => (i + 1) % n,
             (Some(i), false) => (i + n - 1) % n,
         };
-        self.go_to(current, stops[next])
+        self.go_to(current, stops[next])?;
+        // A screen reader can't see the ring: it's told what it's on.
+        if let Some(name) = self
+            .focused_link()
+            .and_then(|t| screenreader::spoken_target(t, self.pinned))
+        {
+            self.reader.say(&name);
+        }
+        Ok(())
     }
 
     /// Rings `to`, which the ring glides to from `from`. Between a button
