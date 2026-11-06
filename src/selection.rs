@@ -27,6 +27,10 @@ use crate::win::{self, Window};
 /// comes from.
 const INJECTED: usize = 0x5744_4943; // "WDIC"
 
+/// The most of the selection read through UI Automation: as much as can be
+/// translated, and one more, to tell a passage that's too long.
+const MAX_SELECTION_CHARS: i32 = crate::translate::MAX_PASSAGE_CHARS as i32 + 1;
+
 /// A clipboard format as the clipboard calls take it.
 const fn id(format: CLIPBOARD_FORMAT) -> u32 {
     format.0 as u32
@@ -91,7 +95,7 @@ fn selected_text(pattern: &IUIAutomationTextPattern) -> Option<(String, IUIAutom
             return None;
         }
         let range = ranges.GetElement(0).ok()?;
-        let text = range.GetText(512).ok()?.to_string();
+        let text = range.GetText(MAX_SELECTION_CHARS).ok()?.to_string();
         Some((text, range))
     }
 }

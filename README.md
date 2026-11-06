@@ -79,7 +79,7 @@ any, opposite ones ("good": "bad"). Clicking one opens its definition in the
 same card. To go back, use the arrow next to the word, Backspace, Alt+← or the
 mouse's back button.
 
-Select a whole passage instead (up to 500 characters) and **Alt+D** glosses
+Select a whole passage instead (up to 5,000 characters) and **Alt+D** glosses
 it: the card shows the passage with its uncommon words underlined. Click one,
 or move to it with **Tab** and press Enter, to open its definition in the same
 card; Back comes back to the passage. WinDict tells the passage's language
@@ -108,7 +108,8 @@ When online lookup is on, the translate button at the top right of the card,
 or **Ctrl+T**, shows a translation of the word instead.
 
 To translate straight away, select a word, a phrase or a whole passage (up to
-500 characters) and press **Alt+T**: the card opens on the translation.
+5,000 characters) and press **Alt+T**: the card opens on the translation. A
+long passage is translated a few sentences at a time.
 For a single word the dictionary has, Back shows its definition.
 
 <details>

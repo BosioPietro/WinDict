@@ -3,9 +3,11 @@
 //! by part of speech, then the older keyless `gtx` endpoint should that
 //! fail, and MyMemory (<https://mymemory.translated.net>) as a last fallback,
 //! asked with the word's first definition for context. The translation
-//! shortcut translates whole passages the same way.
+//! shortcut translates whole passages the same way, a few sentences at a
+//! time when they're long.
 
 use std::borrow::Cow;
+use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -29,9 +31,13 @@ const MAX_BACK: usize = 4;
 const MAX_ALTERNATIVES: usize = 5;
 /// Longer contexts cost more of MyMemory's daily allowance than they help.
 const MAX_CONTEXT_CHARS: usize = 160;
-/// The most a passage can be to be translated: it goes in the URL, and
-/// MyMemory takes no more than 500 bytes.
-pub const MAX_PASSAGE_CHARS: usize = 500;
+/// The most a passage can be to be translated. It's sent a piece at a time
+/// (see [`pieces`]), so this is as much as the card and the box to type in
+/// take, not what the services do.
+pub const MAX_PASSAGE_CHARS: usize = 5000;
+/// The most of a passage sent to a service at once: it goes in the URL,
+/// and MyMemory takes no more than 500 bytes.
+const PIECE_CHARS: usize = 500;
 /// Joins the word and its definition, so the translation of one can be told
 /// from that of the other.
 const CONTEXT_SEPARATOR: &str = ": ";
@@ -301,20 +307,180 @@ pub fn typed(from: Option<&str>, enabled: &[LangCode], default: (&str, &str)) ->
     Direction::new(from, other_than(from, default), true)
 }
 
-/// Translates `word` between the languages of `direction`: Google first,
-/// the website's endpoint and then gtx, then MyMemory, told what the word
-/// means by `context` (its first definition), and `email`, if given, for
-/// its larger allowance.
+/// Translates `text`, a word or a passage, from one language to another:
+/// Google first, the website's endpoint and then gtx, then MyMemory, told
+/// what a word means by `context` (its first definition), and `email`, if
+/// given, for its larger allowance. A passage longer than the services
+/// take goes in pieces of whole sentences, asked for all at once and put
+/// back together; the first that can't be translated fails the whole.
 pub fn translate(
-    word: &str,
+    text: &str,
     from: &LangCode,
     to: &LangCode,
     context: Option<&str>,
     email: &str,
 ) -> Result<Translation, String> {
-    google_web(word, from, to)
-        .or_else(|e| or_next(e, || google(word, from, to)))
-        .or_else(|e| or_next(e, || mymemory(word, from, to, context, email)))
+    let pieces = pieces(text, PIECE_CHARS);
+    if pieces.len() <= 1 {
+        return translate_piece(text, from, to, context, email);
+    }
+    let results: Vec<Result<Translation, String>> = std::thread::scope(|scope| {
+        let asked: Vec<_> = pieces
+            .iter()
+            .map(|piece| scope.spawn(move || translate_piece(piece, from, to, None, email)))
+            .collect();
+        asked
+            .into_iter()
+            .map(|asking| {
+                asking
+                    .join()
+                    .unwrap_or_else(|_| Err(tr().no_translation.into()))
+            })
+            .collect()
+    });
+    let mut translated = String::new();
+    let mut source = None;
+    for result in results {
+        let piece = result?;
+        if !translated.is_empty() {
+            translated.push(' ');
+        }
+        translated.push_str(&piece.text);
+        source.get_or_insert(piece.source);
+    }
+    Ok(Translation {
+        text: translated,
+        context: None,
+        groups: Vec::new(),
+        source: source.unwrap_or(GOOGLE),
+    })
+}
+
+/// Translates `text`, which the services take whole, as [`translate`] says.
+fn translate_piece(
+    text: &str,
+    from: &LangCode,
+    to: &LangCode,
+    context: Option<&str>,
+    email: &str,
+) -> Result<Translation, String> {
+    google_web(text, from, to)
+        .or_else(|e| or_next(e, || google(text, from, to)))
+        .or_else(|e| or_next(e, || mymemory(text, from, to, context, email)))
+}
+
+/// `text` in pieces of at most `max` characters, each a run of whole
+/// sentences where it can be: a sentence longer than that is cut between
+/// its words, and a word longer still between its characters. Whole, when
+/// it fits.
+fn pieces(text: &str, max: usize) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut piece: Option<Range<usize>> = None;
+    let mut chars = 0;
+    for unit in units(text, max) {
+        let len = text[unit.clone()].chars().count();
+        match piece.as_mut() {
+            Some(piece) if chars + text[piece.end..unit.start].chars().count() + len <= max => {
+                chars += text[piece.end..unit.start].chars().count() + len;
+                piece.end = unit.end;
+            }
+            Some(_) => {
+                out.push(&text[piece.replace(unit).unwrap()]);
+                chars = len;
+            }
+            None => {
+                piece = Some(unit);
+                chars = len;
+            }
+        }
+    }
+    out.extend(piece.map(|piece| &text[piece]));
+    out
+}
+
+/// What `text` is cut into for the pieces: its sentences, those longer
+/// than `max` characters cut into words, and those longer still into runs
+/// of `max` characters. Each is where it is in `text`.
+fn units(text: &str, max: usize) -> Vec<Range<usize>> {
+    let fits = |range: &Range<usize>| text[range.clone()].chars().count() <= max;
+    let mut out = Vec::new();
+    for sentence in sentences(text) {
+        if fits(&sentence) {
+            out.push(sentence);
+            continue;
+        }
+        for word in words(text, sentence) {
+            if fits(&word) {
+                out.push(word);
+                continue;
+            }
+            let mut start = word.start;
+            let mut n = 0;
+            for (i, _) in text[word.clone()].char_indices() {
+                if n == max {
+                    out.push(start..word.start + i);
+                    start = word.start + i;
+                    n = 0;
+                }
+                n += 1;
+            }
+            out.push(start..word.end);
+        }
+    }
+    out
+}
+
+/// Where each sentence of `text` is: they end at a full stop, a question
+/// or exclamation mark or an ellipsis that has a space, or the end, after
+/// it, so that "3.14" and "e.g." stay whole where they can.
+fn sentences(text: &str) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        let ends = matches!(
+            c,
+            '.' | '!' | '?' | '\u{2026}' | '\u{3002}' | '\u{FF01}' | '\u{FF1F}'
+        );
+        let blank_next = chars.peek().is_none_or(|(_, next)| next.is_whitespace());
+        if ends && blank_next {
+            let end = i + c.len_utf8();
+            out.extend(trimmed(text, start..end));
+            start = end;
+        }
+    }
+    out.extend(trimmed(text, start..text.len()));
+    out
+}
+
+/// Where each word of `text` within `range` is.
+fn words(text: &str, range: Range<usize>) -> Vec<Range<usize>> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (i, c) in text[range.clone()].char_indices() {
+        let i = range.start + i;
+        match (c.is_whitespace(), start) {
+            (true, Some(s)) => {
+                out.push(s..i);
+                start = None;
+            }
+            (false, None) => start = Some(i),
+            _ => {}
+        }
+    }
+    out.extend(start.map(|s| s..range.end));
+    out
+}
+
+/// `range` without the whitespace at either end, if anything's left.
+fn trimmed(text: &str, range: Range<usize>) -> Option<Range<usize>> {
+    let slice = &text[range.clone()];
+    let trimmed = slice.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let start = range.start + (trimmed.as_ptr() as usize - slice.as_ptr() as usize);
+    Some(start..start + trimmed.len())
 }
 
 /// Asks the next service, unless there's no internet: then it couldn't
@@ -660,6 +826,37 @@ mod tests {
         // Longer than a lookup takes is fine.
         let sentence = "this is a much longer sentence than a word, and so on";
         assert_eq!(passage(sentence).unwrap(), sentence);
+    }
+
+    #[test]
+    fn cuts_passages_into_pieces() {
+        // What fits goes whole.
+        assert_eq!(pieces("Hello, world!", 20), ["Hello, world!"]);
+        assert_eq!(pieces("", 20), [""; 0]);
+        // Whole sentences, as many as fit at a time.
+        let text = "One sentence. Then another one! A third? Then a fourth…";
+        assert_eq!(
+            pieces(text, 32),
+            ["One sentence. Then another one!", "A third? Then a fourth…"]
+        );
+        // A full stop within a word isn't the end of a sentence.
+        assert_eq!(
+            pieces("Pi is 3.14 or so. Yes.", 18),
+            ["Pi is 3.14 or so.", "Yes."]
+        );
+        // A sentence too long is cut between words, a word too long between
+        // characters.
+        assert_eq!(
+            pieces("a bb ccc dddd eeeee", 8),
+            ["a bb ccc", "dddd", "eeeee"]
+        );
+        assert_eq!(pieces("ààààà bb", 2), ["àà", "àà", "à", "bb"]);
+        // Together, the pieces are the text.
+        let long = "Word word word word. ".repeat(100);
+        let pieces = pieces(long.trim(), PIECE_CHARS);
+        assert!(pieces.len() > 1);
+        assert!(pieces.iter().all(|p| p.chars().count() <= PIECE_CHARS));
+        assert_eq!(pieces.join(" "), long.trim());
     }
 
     #[test]
