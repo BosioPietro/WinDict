@@ -277,6 +277,7 @@ pub const IT: Strings = Strings {
         "Tutte:\n",
         "      --online            Usa i dizionari e i traduttori online\n",
         "      --offline           Usa solo i dizionari su questo PC\n",
+        "      --json              Stampa la risposta in JSON\n",
         "  -V, --version           Mostra la versione\n",
         "  -h, --help              Mostra questo aiuto\n",
         "\n",

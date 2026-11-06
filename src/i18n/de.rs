@@ -282,6 +282,7 @@ pub const DE: Strings = Strings {
         "Für alle Befehle:\n",
         "      --online            Online-Wörterbücher und -Übersetzer verwenden\n",
         "      --offline           Nur die Wörterbücher auf diesem PC verwenden\n",
+        "      --json              Die Antwort als JSON ausgeben\n",
         "  -V, --version           Die Version anzeigen\n",
         "  -h, --help              Diese Hilfe anzeigen\n",
         "\n",

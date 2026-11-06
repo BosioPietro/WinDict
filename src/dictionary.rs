@@ -2,11 +2,14 @@
 //! they come from: the bundled dictionary (`offline.rs`) and the online
 //! ones (`online.rs`).
 
+use serde::Serialize;
+
 use crate::lang::LangCode;
 
 /// A word in one language, followed by what it is in the others looked up
 /// in, which the card shows under it, each under a heading of its own.
-#[derive(Clone, Debug)]
+/// Serialized as `wd --json` prints it.
+#[derive(Clone, Debug, Serialize)]
 pub struct Definition {
     pub word: String,
     /// The code of the language it's in ("en").
@@ -124,7 +127,7 @@ pub const DEUTSCHES_WIKTIONARY: &str = "Deutsches Wiktionary";
 /// The Portuguese one.
 pub const WIKCIONARIO_PT: &str = "Wikcion\u{E1}rio";
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Meaning {
     pub part_of_speech: String,
     pub senses: Vec<Sense>,
@@ -135,7 +138,7 @@ pub struct Meaning {
 /// Most opposites shown per part of speech. Words rarely have more.
 pub const MAX_ANTONYMS: usize = 6;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Sense {
     pub text: String,
     pub example: Option<String>,

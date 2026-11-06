@@ -375,6 +375,7 @@ strings! {
         "All:\n",
         "      --online            Use the online dictionaries and translators\n",
         "      --offline           Use only the dictionaries on this PC\n",
+        "      --json              Print the answer as JSON\n",
         "  -V, --version           Show the version\n",
         "  -h, --help              Show this\n",
         "\n",

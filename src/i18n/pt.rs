@@ -281,6 +281,7 @@ pub const PT: Strings = Strings {
         "Todos:\n",
         "      --online            Usa os dicionários e tradutores online\n",
         "      --offline           Usa só os dicionários deste PC\n",
+        "      --json              Mostra a resposta em JSON\n",
         "  -V, --version           Mostra a versão\n",
         "  -h, --help              Mostra esta ajuda\n",
         "\n",

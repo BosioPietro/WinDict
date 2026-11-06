@@ -4,7 +4,7 @@
 
 use std::thread;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::dictionary::{capitalize, wiki_title};
 use crate::http;
@@ -17,8 +17,9 @@ const MAX_EXTRACT: usize = 420;
 /// summaries give the thumbnails' host, the files' before it.
 const PICTURES: [&str; 2] = ["thumb.wikimedia.org", "upload.wikimedia.org"];
 
-/// The opening of a page, as the card shows it.
-#[derive(Clone, Debug)]
+/// The opening of a page, as the card shows it. Serialized as `wd --json`
+/// prints it.
+#[derive(Clone, Debug, Serialize)]
 pub struct Article {
     pub title: String,
     /// What it's about, in a few words ("Capital of Italy"), if the page
@@ -33,7 +34,7 @@ pub struct Article {
 }
 
 /// The page's picture, made small.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Thumbnail {
     pub url: String,
     pub width: u32,

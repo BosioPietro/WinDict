@@ -5,9 +5,10 @@
 //! the command line goes before them.
 //!
 //! Answers go to stdout, styled and wrapped to the window when it's a
-//! console, as plain lines when it's piped or redirected; what went wrong
-//! goes to stderr. It exits with 0 for an answer, 1 for none, and 2 when
-//! the command line can't be made sense of.
+//! console, as plain lines when it's piped or redirected, or as JSON with
+//! `--json` (`json`); what went wrong goes to stderr. It exits with 0 for
+//! an answer, 1 for none, and 2 when the command line can't be made sense
+//! of.
 
 use std::io::{self, IsTerminal, Read, Write};
 use std::process::ExitCode;
@@ -23,8 +24,10 @@ use crate::translate::{self, Direction, Translation};
 use crate::wikipedia::{self, Article};
 use crate::{dicts, gloss, offline, online};
 
+mod json;
 mod print;
 
+use json::Answer;
 use print::{Printer, Waiting};
 
 /// Exit codes, besides success.
@@ -97,6 +100,8 @@ struct Args {
     synonyms: Option<usize>,
     examples: Option<bool>,
     online: Option<bool>,
+    /// `--json`: the answer as JSON, for a program to read.
+    json: bool,
 }
 
 /// Makes sense of the command line, without the program's name. A first
@@ -120,6 +125,7 @@ fn parse(given: Vec<String>) -> Result<Args, String> {
         synonyms: None,
         examples: None,
         online: None,
+        json: false,
     };
     let mut rest = rest.iter();
     let mut only_text = false;
@@ -159,6 +165,7 @@ fn parse(given: Vec<String>) -> Result<Args, String> {
                 | "--version"
                 | "--online"
                 | "--offline"
+                | "--json"
                 | "--examples"
                 | "--no-examples"
         );
@@ -179,6 +186,7 @@ fn parse(given: Vec<String>) -> Result<Args, String> {
             (Command::Help, _) => {}
             (_, "--online") => args.online = Some(true),
             (_, "--offline") => args.online = Some(false),
+            (_, "--json") => args.json = true,
             (Command::Define | Command::Gloss, "-l" | "--lang") => args.language = Some(value()?),
             (Command::Define, "-n" | "--senses") => args.senses = Some(number(value()?)?),
             (Command::Define, "-s" | "--synonyms") => args.synonyms = Some(number(value()?)?),
@@ -254,6 +262,7 @@ fn define(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
         (None, None) => Lookup::NotFound,
     };
     let (title, detail) = match &result {
+        Lookup::Found(def) if args.json => return json::emit(out, &Answer::Definition(def)),
         Lookup::Found(def) => {
             out.definition(def);
             return ExitCode::SUCCESS;
@@ -272,6 +281,9 @@ fn define(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
             wikipedia::find(&titles)
         };
         if let Ok(Some(article)) = found {
+            if args.json {
+                return json::emit(out, &Answer::Article(&article));
+            }
             out.article(&article);
             return ExitCode::SUCCESS;
         }
@@ -351,6 +363,16 @@ fn translate_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
         )
     };
     match result {
+        Ok(translation) if args.json => {
+            let translated = json::Translated {
+                input: &text,
+                from: &direction.from,
+                to: &direction.to,
+                guessed: !direction.sure,
+                translation: &translation,
+            };
+            json::emit(out, &Answer::Translation(translated))
+        }
         Ok(translation) => {
             out.translation(&translation, &text, &direction);
             ExitCode::SUCCESS
@@ -413,6 +435,9 @@ fn gloss_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
         });
     }
     let glossary: Vec<(&str, Option<Definition>)> = words.into_iter().zip(found).collect();
+    if args.json {
+        return json::emit(out, &Answer::Gloss(json::Glossed::new(&gloss, &glossary)));
+    }
     out.gloss(&gloss, &glossary);
     ExitCode::SUCCESS
 }
@@ -609,6 +634,10 @@ mod tests {
             (Command::Define, &["serendipity".to_string()][..])
         );
         assert_eq!(bare.online, Some(false));
+        assert!(!bare.json);
+        assert!(args("cat --json").unwrap().json);
+        assert!(args("t cat --json").unwrap().json);
+        assert!(args("g the cat --json").unwrap().json);
         let translate = args("t hello -t de --from English").unwrap();
         assert_eq!(translate.command, Command::Translate);
         assert_eq!(
@@ -636,6 +665,7 @@ mod tests {
         assert!(args("cat -n").is_err());
         assert!(args("cat -n many").is_err());
         assert!(args("cat --offline=false").is_err());
+        assert!(args("cat --json=yes").is_err());
         assert!(args("cat --examples=no").is_err());
     }
 

@@ -7,7 +7,7 @@
 
 use std::borrow::Cow;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::dictionary::{percent_encode, same_word, tidy, NormalizeError, MAX_LOOKUP_CHARS};
@@ -191,7 +191,8 @@ pub fn heading(text: &str) -> Cow<'_, str> {
     Cow::Owned(format!("{kept}\u{2026}"))
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// Serialized as `wd --json` prints it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Translation {
     /// The translation itself.
     pub text: String,
@@ -204,14 +205,14 @@ pub struct Translation {
     pub source: &'static str,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Group {
     pub part_of_speech: String,
     pub terms: Vec<Term>,
 }
 
 /// A translation, and what it means back in the word's language.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Term {
     pub text: String,
     pub back: Vec<String>,

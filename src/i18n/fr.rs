@@ -283,6 +283,7 @@ pub const FR: Strings = Strings {
         "Communes\u{A0}:\n",
         "      --online            Utilise les dictionnaires et traducteurs en ligne\n",
         "      --offline           Utilise seulement les dictionnaires de ce PC\n",
+        "      --json              Affiche la réponse en JSON\n",
         "  -V, --version           Affiche la version\n",
         "  -h, --help              Affiche cette aide\n",
         "\n",

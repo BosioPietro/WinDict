@@ -141,15 +141,21 @@ wd translate good morning        # or: wd t good morning
 wd t buongiorno --to German
 Get-Clipboard | wd t
 Get-Clipboard | wd gloss         # or: wd g, with --lang to give the language
+wd serendipity --json | ConvertFrom-Json
 ```
 
 It goes by WinDict's settings (dictionaries, languages, what's shown, the
 online dictionary), and what's given on the command line goes before them:
 `--lang`, `--senses`, `--synonyms` and `--[no-]examples` when looking up,
 `--from` and `--to` when translating, `--lang` when glossing (a code like `de`, or a name like
-`German`), and `--online` or `--offline` for both. `wd help` lists them all.
+`German`), and `--online` or `--offline` for all three. `wd help` lists them all.
 It exits with 0 for an answer, 1 for none, and 2 for a command it couldn't
 make sense of.
+
+With `--json`, the answer is one JSON object on a line, for scripts and
+other programs: its `type` is `definition`, `article`, `translation` or
+`gloss`, and the rest is what the card shows, field by field. What went
+wrong is still said on stderr, in words.
 
 ## Above the Start menu 🪟
 
