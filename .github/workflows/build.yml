@@ -28,6 +28,15 @@ jobs:
       - run: cargo build --release
       # For Windows on ARM, which can only be built here, not run.
       - run: cargo build --release --target aarch64-pc-windows-msvc
+      # Each takes its DLLs from System32 only and carries the C runtime;
+      # see tools/check_imports.py.
+      - run: >
+          python tools/check_imports.py
+          target/release/windict.exe target/release/wd.exe
+          target/aarch64-pc-windows-msvc/release/windict.exe
+          target/aarch64-pc-windows-msvc/release/wd.exe
+      # The one that can be run here does.
+      - run: target/release/wd.exe serendipity --offline
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windict
@@ -53,6 +62,8 @@ jobs:
           cargo build --release --features setup --bin windict-setup
           if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
           Copy-Item target/release/windict-setup.exe "dist/WinDict-v$version-setup.exe"
+          python tools/check_imports.py target/release/windict-setup.exe
+          if ($LASTEXITCODE -ne 0) { throw 'the setup would take DLLs from beside it' }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windict-setup
