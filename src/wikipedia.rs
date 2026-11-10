@@ -97,8 +97,10 @@ fn variants(title: &str) -> Vec<String> {
         .collect::<Vec<_>>()
         .join(" ");
     let mut out = vec![title.to_string()];
-    // Only past the first word: Wikipedia capitalizes that one.
-    if capitalized.get(1..) != title.get(1..) && title.contains(' ') {
+    // Only past the first letter: Wikipedia capitalizes that one. By
+    // letters, not bytes: the first may take several ("é", "Ж").
+    let differs = capitalized.chars().skip(1).ne(title.chars().skip(1));
+    if differs && title.contains(' ') {
         out.push(capitalized);
     }
     out
@@ -293,6 +295,13 @@ mod tests {
         assert_eq!(variants("new york"), ["new york", "New York"]);
         assert_eq!(variants("New York"), ["New York"]);
         assert_eq!(variants("barack obama"), ["barack obama", "Barack Obama"]);
+        // Whatever the first letter takes to write.
+        assert_eq!(
+            variants("évariste galois"),
+            ["évariste galois", "Évariste Galois"]
+        );
+        assert_eq!(variants("Évariste Galois"), ["Évariste Galois"]);
+        assert_eq!(variants("лев толстой"), ["лев толстой", "Лев Толстой"]);
     }
 
     #[test]
