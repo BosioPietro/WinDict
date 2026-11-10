@@ -264,16 +264,21 @@ pub fn read() -> Result<Config, String> {
 fn read_from(path: &Path) -> Result<Option<Config>, String> {
     match std::fs::read(path) {
         Ok(bytes) if blank(&bytes) => Ok(None),
-        Ok(bytes) => parse(&bytes).map(Some),
+        Ok(bytes) => parse(without_mark(&bytes)).map(Some),
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
         Err(e) => Err(err(e)),
     }
 }
 
+/// `bytes` without the byte order mark some editors, and Windows
+/// PowerShell, put ahead of UTF-8: it isn't part of the settings.
+fn without_mark(bytes: &[u8]) -> &[u8] {
+    bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes)
+}
+
 /// Whether the file has nothing in it but whitespace, or a byte order mark.
 fn blank(bytes: &[u8]) -> bool {
-    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-    bytes.iter().all(u8::is_ascii_whitespace)
+    without_mark(bytes).iter().all(u8::is_ascii_whitespace)
 }
 
 /// Writes the settings where [`load`] reads them, unless the file there
@@ -556,6 +561,21 @@ mod tests {
         std::fs::create_dir(&unreadable).unwrap();
         assert!(load_from(&unreadable).is_err());
         assert!(unreadable.is_dir());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reads_a_file_saved_with_a_byte_order_mark() {
+        // As Windows PowerShell and some editors save UTF-8: the settings
+        // in it are read, not taken for a file that can't be.
+        let dir = std::env::temp_dir().join(format!("windict-test-mark-{}", std::process::id()));
+        let path = dir.join("config.json");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&path, b"\xEF\xBB\xBF{\"hotkey\": \"Ctrl+Alt+D\"}").unwrap();
+        let (config, first_run) = load_from(&path).unwrap();
+        assert!(!first_run);
+        assert_eq!(config.hotkey, "Ctrl+Alt+D");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
