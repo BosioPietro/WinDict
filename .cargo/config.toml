@@ -1,0 +1,5 @@
+# The executables carry the C runtime rather than import it: they're run
+# on PCs that may not have the Visual C++ redistributable, and from the
+# Downloads folder, where a DLL of its name could be waiting beside them.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

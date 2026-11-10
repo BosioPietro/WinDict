@@ -12,6 +12,11 @@ fn main() {
     }
     println!("cargo:rerun-if-env-changed=WINDICT_SETUP");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // The DLLs the executables are linked against are looked for in
+        // System32 only, not beside them first: the setup and the portable
+        // copy are run from the Downloads folder, where anything may have
+        // left a DLL of the same name.
+        println!("cargo:rustc-link-arg-bins=/DEPENDENTLOADFLAG:0x800");
         // Embeds the icon and the manifest. The `uiaccess` build asks Windows
         // for UI access, which lets the card appear above Start and Search;
         // it only starts once installed by the setup and signed by
