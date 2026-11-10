@@ -269,8 +269,10 @@ struct Provider {
 }
 
 impl IRawElementProviderSimple_Impl for Provider_Impl {
+    /// On the thread the card is on, as COM would have it: the name is
+    /// the card's to change there, and no other thread's to read.
     fn ProviderOptions(&self) -> Result<ProviderOptions> {
-        Ok(ProviderOptions_ServerSideProvider)
+        Ok(ProviderOptions_ServerSideProvider | ProviderOptions_UseComThreading)
     }
 
     /// No patterns: nothing on the card is a control to a client.
