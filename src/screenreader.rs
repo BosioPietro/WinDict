@@ -102,7 +102,10 @@ impl Card {
     /// The window has been shown, and UI Automation has had time to take it
     /// in: what was waiting for it is read out.
     pub fn appeared(&self) {
-        if let Some(text) = self.pending.borrow_mut().take() {
+        // Taken first: said to a window that's hidden after all, it goes
+        // back to waiting.
+        let waiting = self.pending.borrow_mut().take();
+        if let Some(text) = waiting {
             self.say(&text);
         }
     }
@@ -445,5 +448,19 @@ mod tests {
             "One. Two! Three:"
         );
         assert_eq!(sentences(Vec::new()), "");
+    }
+
+    #[test]
+    fn keeps_what_a_hidden_card_has_to_say() {
+        // No window is as good as a hidden one: what there is to say waits
+        // for it, and waits on when it's found still hidden.
+        let card = Card::new(HWND::default());
+        card.show("dog", Some("dog. A domesticated canid.".into()));
+        assert!(card.pending.borrow().is_some());
+        card.appeared();
+        assert!(card.pending.borrow().is_some());
+        card.hidden();
+        assert!(card.pending.borrow().is_none());
+        card.appeared();
     }
 }
