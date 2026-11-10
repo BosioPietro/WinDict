@@ -974,7 +974,7 @@ impl App {
             return;
         }
         self.card.current = None;
-        self.card.search = None;
+        (self.card.search, self.card.searched) = (None, None);
         self.card.history.clear();
         self.card.passage = None;
         self.card.translating = None;
@@ -1098,6 +1098,7 @@ impl App {
             return;
         }
         self.card.history.clear();
+        self.card.searched = None;
         self.card.translating = None;
         // Back included: a word looked up from a passage, or an article
         // opened from a definition, still has somewhere to go back to, but

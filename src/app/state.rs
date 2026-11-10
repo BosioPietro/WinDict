@@ -298,6 +298,19 @@ pub(super) struct Search {
     pub(super) scanned: Option<LangCode>,
 }
 
+impl Search {
+    /// The box as it was opened, for Back to come to again: what was typed
+    /// in it gone, the words to suggest from kept.
+    pub(super) fn emptied(self) -> Search {
+        Search {
+            purpose: self.purpose,
+            title: self.title,
+            words: self.words,
+            ..Search::default()
+        }
+    }
+}
+
 /// The languages what's typed in the box is translated between, shown in
 /// boxes under the field.
 pub(super) struct Languages {
@@ -449,6 +462,9 @@ pub(super) struct Card {
     pub(super) speakable: Option<(String, HSTRING)>,
     /// The search box, while the card shows one.
     pub(super) search: Option<Search>,
+    /// The box the first word of the way back was typed in, emptied, which
+    /// Back goes back to from it.
+    pub(super) searched: Option<Search>,
     /// The window the search box took the keyboard from.
     pub(super) return_focus: Option<HWND>,
     /// The selection the card translates, which Ctrl+Enter replaces with
@@ -472,7 +488,7 @@ impl Card {
     /// Forgets what the card showed, for a fresh lookup or box: the word,
     /// what was typed, the way back, and all that was on it.
     pub(super) fn start_over(&mut self) {
-        (self.current, self.search) = (None, None);
+        (self.current, self.search, self.searched) = (None, None, None);
         self.history.clear();
         self.clear_content();
     }

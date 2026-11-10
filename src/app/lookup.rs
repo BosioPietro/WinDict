@@ -632,6 +632,12 @@ impl App {
             }
             return self.back_to_passage();
         }
+        // The word typed in the box goes back to the box, empty.
+        if self.card.translating.is_none() && self.card.history.is_empty() {
+            if let Some(searched) = self.card.searched.take() {
+                return self.reopen_search(searched);
+            }
+        }
         let (query, focus) = match self.card.translating.take() {
             Some(_) => (
                 self.card.current.clone(),
@@ -691,7 +697,8 @@ impl App {
             .reading
             .as_ref()
             .is_some_and(|r| r.from_definition);
-        !self.card.history.is_empty() || from_passage || from_definition
+        let from_search = self.card.current.is_some() && self.card.searched.is_some();
+        !self.card.history.is_empty() || from_passage || from_definition || from_search
     }
 
     /// Backspace and Alt+Left go back, but only while there's somewhere to

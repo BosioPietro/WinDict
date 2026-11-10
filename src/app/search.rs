@@ -77,18 +77,23 @@ impl App {
             languages,
             ..Search::default()
         });
-        // Reading the words takes a few tens of ms per dictionary: not on
-        // this thread, which would stop drawing and taking keys meanwhile.
         if purpose == Shortcut::Lookup {
             self.new_request();
-            let (id, events) = (self.card.request, self.events.clone());
-            std::thread::spawn(move || events.send(Event::Words(id, offline::Words::load())));
+            self.load_words();
         }
         self.sync_link_keys();
         // The languages it'll be translated between show from the start.
         if purpose == Shortcut::Translate {
             self.show_typed_languages();
         }
+    }
+
+    /// Reads the words to suggest from, for the box, as the current request.
+    /// It takes a few tens of ms per dictionary: not on this thread, which
+    /// would stop drawing and taking keys meanwhile.
+    fn load_words(&self) {
+        let (id, events) = (self.card.request, self.events.clone());
+        std::thread::spawn(move || events.send(Event::Words(id, offline::Words::load())));
     }
 
     /// A character typed into the card (WM_CHAR).
@@ -284,7 +289,9 @@ impl App {
         let written = dictionary::as_written(text).ok();
         let complaint = match dictionary::normalize(text) {
             Ok(word) => {
-                self.card.search = None;
+                // Back from the word comes to the box again, empty.
+                self.card.searched = self.card.search.take().map(Search::emptied);
+                self.card.history.clear();
                 self.card.written = written;
                 // The heading grows out of the word that was picked.
                 if let Some(popup) = self.card.popup.as_mut() {
@@ -333,18 +340,28 @@ impl App {
     }
 
     /// Back from the translation of what was typed: the box it was typed
-    /// in comes back as it was, its text and languages and all.
+    /// in comes back as it was, its text and languages and all. Back from
+    /// the word looked up in it, it comes back empty.
     pub(super) fn reopen_search(&mut self, search: Search) {
         let Some(popup) = self.visible_popup_mut() else {
             return;
         };
         popup.hold_region(false);
-        if let Err(e) = popup.return_to_search(search.title, search.purpose) {
+        // What's typed sinks back into the field; with nothing typed, the
+        // card just turns into the box.
+        let typed = !search.edit.text().is_empty();
+        if let Err(e) = popup.return_to_search(search.title, search.purpose, typed) {
             return self.tray.notify(tr().draw_window_failed, &e.message());
         }
         self.card.clear_content();
-        // Answers still on their way are for the translation.
+        (self.card.current, self.card.searched) = (None, None);
+        self.card.history.clear();
+        // Answers still on their way are for what the card showed.
         self.new_request();
+        // The words may not have been read before the box was left.
+        if search.purpose == Shortcut::Lookup && search.words.is_none() {
+            self.load_words();
+        }
         self.card.search = Some(search);
         self.refresh_search();
         self.show_typed_languages();

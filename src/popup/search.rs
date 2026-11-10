@@ -26,10 +26,11 @@ impl Popup {
     }
 
     /// Turns the card back into the search box what it shows was typed in,
-    /// under `title`: the heading sinks back into the field as what's
-    /// typed, and the languages under it glide back under the field.
-    pub fn return_to_search(&mut self, title: &str, purpose: Shortcut) -> Result<()> {
-        self.enter_search(title, purpose, true, true)
+    /// under `title`. With what was `typed` still in it, the heading sinks
+    /// back into the field as what's typed, and the languages under it
+    /// glide back under the field; otherwise what it showed fades out.
+    pub fn return_to_search(&mut self, title: &str, purpose: Shortcut, typed: bool) -> Result<()> {
+        self.enter_search(title, purpose, true, typed)
     }
 
     /// Shows `text` in the search box, the caret `at` UTF-16 units in, and
