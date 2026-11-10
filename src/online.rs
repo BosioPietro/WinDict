@@ -23,6 +23,53 @@ use crate::lang::LangCode;
 /// the second is asked too.
 const FALLBACK_DELAY: Duration = Duration::from_millis(500);
 
+/// How a word is written, for the sources that tell "Haus" from "haus":
+/// what's looked up is in lowercase, and they'd answer for another word,
+/// or none.
+#[derive(Clone, Copy, Default)]
+pub struct Written<'a> {
+    /// As it was selected or typed, if that's known.
+    pub as_given: Option<&'a str>,
+    /// As the dictionary of each language that has it writes it: the
+    /// language's code, and the word ("de", "Haus").
+    pub in_dictionaries: &'a [(LangCode, String)],
+}
+
+/// The spellings `word` is asked for under in `language`, the likeliest
+/// first: as the language's dictionary has it, as it was written, and as
+/// it's looked up. Only those of `word` itself: what was written is
+/// another word when it's its base form that's looked up ("case", "casa").
+fn spellings(word: &str, written: Written, language: &str) -> Vec<String> {
+    let in_dictionary = written
+        .in_dictionaries
+        .iter()
+        .find(|(code, _)| *code == language)
+        .map(|(_, spelling)| spelling.as_str());
+    let mut out: Vec<String> = Vec::new();
+    for spelling in [in_dictionary, written.as_given, Some(word)]
+        .into_iter()
+        .flatten()
+    {
+        if same_word(spelling, word) && !out.iter().any(|s| s == spelling) {
+            out.push(spelling.to_string());
+        }
+    }
+    out
+}
+
+/// What `ask` answers for the first of `spellings` it finds. One it
+/// couldn't be asked for ends it: neither could it for the next.
+fn first_found(spellings: &[String], mut ask: impl FnMut(&str) -> Lookup) -> Lookup {
+    let mut result = Lookup::NotFound;
+    for spelling in spellings {
+        result = ask(spelling);
+        if !matches!(result, Lookup::NotFound) {
+            break;
+        }
+    }
+    result
+}
+
 /// Asks the Free Dictionary API first. If it hasn't produced a definition
 /// within `FALLBACK_DELAY` (or fails or has no entry sooner), Wiktionary is
 /// asked as well, and the first definition to arrive wins. The Free
@@ -31,7 +78,9 @@ const FALLBACK_DELAY: Duration = Duration::from_millis(500);
 /// their own are looked for in its extract, and Italian also in its pages,
 /// raced the same way. The other `languages` are only looked for in English
 /// Wiktionary, all at once, while those are.
-pub fn lookup(word: &str, detail: Detail, languages: &[LangCode]) -> Lookup {
+/// Each is asked for the word as `written` says it's spelt there, before
+/// the lowercase it's looked up in: they tell one case from the other.
+pub fn lookup(word: &str, written: Written, detail: Detail, languages: &[LangCode]) -> Lookup {
     let others: Vec<LangCode> = languages
         .iter()
         .filter(|l| *l != "en" && kaikki::edition(l).is_none())
@@ -39,11 +88,22 @@ pub fn lookup(word: &str, detail: Detail, languages: &[LangCode]) -> Lookup {
         .collect();
     let has = |language: &str| languages.iter().any(|l| l == language);
     let english = has("en").then(|| {
-        let (w1, w2) = (word.to_string(), word.to_string());
+        let (s1, s2) = (
+            spellings(word, written, "en"),
+            spellings(word, written, "en"),
+        );
         thread::spawn(move || {
             race(
-                move || lookup_free_dictionary(&w1, detail.senses, detail.synonyms),
-                move || lookup_wiktionary(&w2, detail.senses, &[LangCode::new("en")]),
+                move || {
+                    first_found(&s1, |w| {
+                        lookup_free_dictionary(w, detail.senses, detail.synonyms)
+                    })
+                },
+                move || {
+                    first_found(&s2, |w| {
+                        lookup_wiktionary(w, detail.senses, &[LangCode::new("en")])
+                    })
+                },
                 FALLBACK_DELAY,
             )
         })
@@ -52,13 +112,20 @@ pub fn lookup(word: &str, detail: Detail, languages: &[LangCode]) -> Lookup {
         .iter()
         .filter_map(|l| kaikki::edition(l))
         .map(|edition| {
-            let (w1, w2) = (word.to_string(), word.to_string());
+            let (s1, s2) = (
+                spellings(word, written, edition.language),
+                spellings(word, written, edition.language),
+            );
             thread::spawn(move || {
-                let extract = move || kaikki::lookup(edition, &w1, detail.senses, detail.synonyms);
+                let extract = move || {
+                    first_found(&s1, |w| {
+                        kaikki::lookup(edition, w, detail.senses, detail.synonyms)
+                    })
+                };
                 match edition.pages {
                     Some(pages) => race(
                         extract,
-                        move || pages(&w2, detail.senses, detail.synonyms),
+                        move || first_found(&s2, |w| pages(w, detail.senses, detail.synonyms)),
                         FALLBACK_DELAY,
                     ),
                     None => extract(),
@@ -600,6 +667,63 @@ mod tests {
             Lookup::Found(d) => d.word,
             other => format!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn asks_for_each_spelling_of_a_word() {
+        let german = [(LangCode::new("de"), "Haus".to_string())];
+        let written = Written {
+            as_given: Some("HAUS"),
+            in_dictionaries: &german,
+        };
+        // As its dictionary has it, as it was written, as it's looked up.
+        assert_eq!(spellings("haus", written, "de"), ["Haus", "HAUS", "haus"]);
+        // Another language's dictionary says nothing of this one's.
+        assert_eq!(spellings("haus", written, "en"), ["HAUS", "haus"]);
+        // Each spelling once.
+        let lowercase = Written {
+            as_given: Some("roma"),
+            in_dictionaries: &[],
+        };
+        assert_eq!(spellings("roma", lowercase, "it"), ["roma"]);
+        // What was written is another word, when its base form is looked up.
+        let form = Written {
+            as_given: Some("case"),
+            in_dictionaries: &[],
+        };
+        assert_eq!(spellings("casa", form, "it"), ["casa"]);
+        assert_eq!(spellings("roma", Written::default(), "it"), ["roma"]);
+    }
+
+    #[test]
+    fn stops_at_the_first_spelling_found() {
+        let spellings = ["Roma".to_string(), "roma".to_string()];
+        // The first found is the answer, and the next isn't asked for.
+        let mut asked = Vec::new();
+        let result = first_found(&spellings, |s| {
+            asked.push(s.to_string());
+            found(s)
+        });
+        assert_eq!(word_of(result), "Roma");
+        assert_eq!(asked, ["Roma"]);
+        // One that isn't found is followed by the next.
+        let result = first_found(&spellings, |s| match s {
+            "roma" => found(s),
+            _ => Lookup::NotFound,
+        });
+        assert_eq!(word_of(result), "roma");
+        // One that couldn't be asked for ends it.
+        let mut asked = 0;
+        let result = first_found(&spellings, |_| {
+            asked += 1;
+            Lookup::Failed("offline".into())
+        });
+        assert!(matches!(result, Lookup::Failed(_)));
+        assert_eq!(asked, 1);
+        assert!(matches!(
+            first_found(&spellings, |_| Lookup::NotFound),
+            Lookup::NotFound
+        ));
     }
 
     #[test]

@@ -54,8 +54,22 @@ impl App {
             Some(language) => vec![language.clone()],
             None => offline::languages(),
         };
+        // As each dictionary writes it ("Haus"), and as it was selected or
+        // typed: the sources online tell one case from another.
+        let in_dictionaries: Vec<_> = self
+            .card
+            .local
+            .iter()
+            .flat_map(|def| def.sections())
+            .map(|section| (section.language.clone(), section.word.clone()))
+            .collect();
+        let as_given = self.card.written.clone();
         std::thread::spawn(move || {
-            let result = online::lookup(&online_key.word, detail, &languages);
+            let written = online::Written {
+                as_given: as_given.as_deref(),
+                in_dictionaries: &in_dictionaries,
+            };
+            let result = online::lookup(&online_key.word, written, detail, &languages);
             events.send(Event::Looked(Looked {
                 id,
                 query: online_key,

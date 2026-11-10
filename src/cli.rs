@@ -249,8 +249,18 @@ fn define(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
             Some(def) => def.word.to_lowercase(),
             None => word.clone(),
         };
+        // As each dictionary writes it, and as it was given.
+        let in_dictionaries: Vec<_> = local
+            .iter()
+            .flat_map(|def| def.sections())
+            .map(|section| (section.language.clone(), section.word.clone()))
+            .collect();
+        let spelt = online::Written {
+            as_given: Some(written.as_str()),
+            in_dictionaries: &in_dictionaries,
+        };
         let _waiting = Waiting::show(tr().looking_up);
-        online::lookup(&key, detail, &languages)
+        online::lookup(&key, spelt, detail, &languages)
     });
     let result = match (local, online) {
         (Some(local), online) => Lookup::Found(dictionary::merge(
@@ -421,12 +431,22 @@ fn gloss_text(args: &Args, config: &Config, out: &mut Printer) -> ExitCode {
         let _waiting = Waiting::show(tr().looking_up);
         let languages = std::slice::from_ref(&language);
         std::thread::scope(|scope| {
-            let lookups: Vec<_> = (words.iter().zip(&found))
-                .map(|(word, def)| {
-                    let word = dictionary::normalize(word).ok().filter(|_| def.is_none())?;
-                    Some(scope.spawn(move || online::lookup(&word, Detail::BRIEF, languages)))
-                })
-                .collect();
+            let lookups: Vec<_> =
+                (words.iter().zip(&found))
+                    .map(|(given, def)| {
+                        let word = dictionary::normalize(given)
+                            .ok()
+                            .filter(|_| def.is_none())?;
+                        // As the passage writes it.
+                        let written = online::Written {
+                            as_given: Some(*given),
+                            in_dictionaries: &[],
+                        };
+                        Some(scope.spawn(move || {
+                            online::lookup(&word, written, Detail::BRIEF, languages)
+                        }))
+                    })
+                    .collect();
             for (def, lookup) in found.iter_mut().zip(lookups) {
                 if let Some(Ok(Lookup::Found(online))) = lookup.map(|l| l.join()) {
                     *def = online.only(&language);
