@@ -59,7 +59,10 @@ theme and accent color.
 - Inflected forms are looked up by their base word ("ran" shows "run")
 - Similar and opposite words, each a click away
 - Pronunciation in the word's own language, with Windows' own voices
-- A box to type into, for text that can't be selected
+- A box to type into, for text that can't be selected, which can read it off the screen too
+- People, places and brands the dictionaries skip, from Wikipedia
+- Cards that can be pinned open
+- Read out by Narrator and other screen readers
 - `wd`, to look up and translate from the command line
 - An interface in English, Spanish, French, German, Italian or Portuguese
 - Follows the system's light or dark theme and accent color
@@ -72,12 +75,27 @@ theme and accent color.
 Inflected forms are looked up by their base word, so selecting "ran" shows
 "run". With nothing selected, the shortcut opens a box to type a word into
 instead, for text that can't be selected, such as in an image, a protected
-PDF or a game.
+PDF or a game. The box's **Read text on screen** button reads it for you:
+drag over the text, and it's typed into the box. Windows does the reading,
+in the languages it has installed.
 
 Under each part of speech the card lists similar words and, where there are
 any, opposite ones ("good": "bad"). Clicking one opens its definition in the
 same card. To go back, use the arrow next to the word, Backspace, Alt+← or the
 mouse's back button.
+
+A person, a place or a brand, which the dictionaries skip, is answered from
+Wikipedia: the card shows the opening of its article, with its picture, and
+a link to the rest. A word that has both a definition and an article gets a
+Wikipedia button at the top of the card, which turns the card into the
+article; Back goes back to the definition.
+
+The pin at the top right keeps a card open, above the other windows, while
+the next lookups open cards of their own. Click it again to unpin the card,
+or close it with Esc or Ctrl+W once it's been clicked.
+
+Screen readers such as Narrator read each card out as it opens, and what
+Tab moves to.
 
 Select a whole passage instead (up to 5,000 characters) and **Alt+D** glosses
 it: the card shows the passage with its uncommon words underlined. Click one,
@@ -274,6 +292,10 @@ by hand, use **Open config.json** at the bottom of the settings window, then
   one doesn't have. Translations are fetched only when asked for, and single
   words come from the downloaded dictionaries when they can't be. Both can
   be turned off in the settings.
+- Wikipedia is asked about each word looked up while the online dictionary
+  is on, for the names the dictionaries skip and the articles their words
+  have; an article's picture comes from Wikimedia's servers. It has a switch
+  of its own in the settings, under **Lookup**.
 
 WinDict uses about 3 MB of memory while idle and around 20 MB while a card is
 open.
@@ -290,6 +312,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo clippy --all-targets --features uiaccess -- -D warnings
 cargo test --features uiaccess
+python tools\check_imports.py target\release\windict.exe target\release\wd.exe   # DLLs from System32 only, no C runtime to install
 ```
 
 <details>
@@ -343,6 +366,10 @@ cargo build --release --features setup --bin windict-setup   # target\release\wi
 - Portuguese dictionary and online lookups:
   [Wikcionário](https://pt.wiktionary.org/), through
   [wiktextract](https://kaikki.org/ptwiktionary/) (CC BY-SA 4.0).
+- People, places and brands: [Wikipedia](https://www.wikipedia.org/), in the
+  word's language (CC BY-SA 4.0), with pictures from
+  [Wikimedia Commons](https://commons.wikimedia.org/), each under its own
+  license.
 - Translations: Google Translate's public web endpoint, which is unofficial
   and may change, falling back to [MyMemory](https://mymemory.translated.net/).
 - Common words, for glossing: [wordfreq](https://github.com/rspeer/wordfreq)
