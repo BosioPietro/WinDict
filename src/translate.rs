@@ -452,7 +452,8 @@ fn units(text: &str, max: usize) -> Vec<Range<usize>> {
 
 /// Where each sentence of `text` is: they end at a full stop, a question
 /// or exclamation mark or an ellipsis that has a space, or the end, after
-/// it, so that "3.14" and "e.g." stay whole where they can.
+/// it, so that "3.14" and "e.g." stay whole where they can; and at the
+/// full-width ones Chinese and Japanese write, which have no space after.
 fn sentences(text: &str) -> Vec<Range<usize>> {
     let mut out = Vec::new();
     let mut start = 0;
@@ -463,7 +464,9 @@ fn sentences(text: &str) -> Vec<Range<usize>> {
             '.' | '!' | '?' | '\u{2026}' | '\u{3002}' | '\u{FF01}' | '\u{FF1F}'
         );
         let blank_next = chars.peek().is_none_or(|(_, next)| next.is_whitespace());
-        if ends && blank_next {
+        // "。", "！" and "？" are only ever the end of a sentence.
+        let full_width = matches!(c, '\u{3002}' | '\u{FF01}' | '\u{FF1F}');
+        if ends && (blank_next || full_width) {
             let end = i + c.len_utf8();
             out.extend(trimmed(text, start..end));
             start = end;
@@ -871,6 +874,11 @@ mod tests {
             ["a bb ccc", "dddd", "eeeee"]
         );
         assert_eq!(pieces("ààààà bb", 2), ["àà", "àà", "à", "bb"]);
+        // Chinese and Japanese sentences end with no space after them.
+        assert_eq!(
+            pieces("今日は晴れです。明日は雨です。", 10),
+            ["今日は晴れです。", "明日は雨です。"]
+        );
         // Together, the pieces are the text.
         let long = "Word word word word. ".repeat(100);
         let pieces = pieces(long.trim(), PIECE_CHARS);
