@@ -86,6 +86,12 @@ impl App {
                 let order = offline::languages();
                 let merged = dictionary::merge(local, Some(&looked.result), &order);
                 if measure(&merged) != before {
+                    // The article opened from the definition stays: Back
+                    // goes to the definition, with what's new in it.
+                    if self.card.reading.is_some() {
+                        self.card.definition = Some(merged);
+                        return;
+                    }
                     // Another language's part is new content, perhaps above
                     // what's being read: it fades in rather than snapping.
                     let transition = if merged.others.len() != before.2 {
