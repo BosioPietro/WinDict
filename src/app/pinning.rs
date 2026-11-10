@@ -103,6 +103,13 @@ impl App {
             win::kill_timer(self.hwnd, timer);
         }
         CARD_RECT.set(RECT::default());
+        // The search box is the next card's: neither a word typed in it
+        // nor a translation of what was typed goes back to it from here.
+        self.card.searched = None;
+        if let Some(translating) = self.card.translating.as_mut() {
+            translating.typed = None;
+        }
+        let behind = self.has_word_behind() || self.has_definition_behind();
         let mut card = std::mem::take(&mut self.card);
         card.pinned = true;
         card.return_focus = None;
@@ -115,12 +122,9 @@ impl App {
             self.requests += 1;
             card.request = self.requests;
         }
-        // The search box is the next card's too: a translation of what was
-        // typed no longer goes back to it.
-        let typed = card.translating.as_mut().and_then(|t| t.typed.take());
         if let Some(popup) = card.popup.as_mut() {
             let _ = popup.set_pinned(true);
-            if typed.is_some() && card.current.is_none() {
+            if !behind {
                 let _ = popup.set_button(CardButton::Back, false);
             }
         }
