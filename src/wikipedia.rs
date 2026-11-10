@@ -145,6 +145,11 @@ struct Page {
 fn parse(body: &[u8]) -> Option<Article> {
     let s: Summary = serde_json::from_slice(body).ok()?;
     let ambiguous = s.kind == "disambiguation";
+    // It's opened when the link is clicked: nothing but a page of
+    // Wikipedia's will do, whatever the answer says.
+    if !is_article(&s.content_urls.desktop.page) {
+        return None;
+    }
     if s.kind != "standard" && !ambiguous {
         return None;
     }
@@ -203,6 +208,25 @@ fn shorten(extract: &str) -> String {
             )
         }
     }
+}
+
+/// Whether `url` is a page of one of Wikipedia's editions, over HTTPS:
+/// "https://en.wikipedia.org/wiki/Turin".
+fn is_article(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let Some((host, _path)) = rest.split_once('/') else {
+        return false;
+    };
+    // The edition's code, and "m" for the mobile site: nothing that could
+    // end the host early or begin another.
+    host.strip_suffix(".wikipedia.org").is_some_and(|edition| {
+        !edition.is_empty()
+            && edition
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.')
+    })
 }
 
 /// The host and path of `url`, if it's at one of [`PICTURES`].
@@ -277,6 +301,37 @@ mod tests {
     fn takes_pictures_only_from_wikimedia() {
         let elsewhere = TURIN.replace("upload.wikimedia.org", "example.com");
         assert!(parse(elsewhere.as_bytes()).unwrap().thumbnail.is_none());
+    }
+
+    #[test]
+    fn links_only_to_wikipedia() {
+        assert!(is_article("https://en.wikipedia.org/wiki/Turin"));
+        assert!(is_article("https://pt.m.wikipedia.org/wiki/Lisboa"));
+        assert!(is_article(
+            "https://zh-yue.wikipedia.org/wiki/%E9%A6%99%E6%B8%AF"
+        ));
+        // Not over HTTPS, not a page, or not Wikipedia's.
+        assert!(!is_article("http://en.wikipedia.org/wiki/Turin"));
+        assert!(!is_article("https://en.wikipedia.org"));
+        assert!(!is_article("https://wikipedia.org.example.com/wiki/Turin"));
+        assert!(!is_article(
+            "https://example.com/en.wikipedia.org/wiki/Turin"
+        ));
+        assert!(!is_article("https://example.com#.wikipedia.org/wiki/Turin"));
+        assert!(!is_article(
+            "https://en.wikipedia.org@example.com/wiki/Turin"
+        ));
+        assert!(!is_article("https://.wikipedia.org/wiki/Turin"));
+        assert!(!is_article("file:///C:/Windows/notepad.exe"));
+        assert!(!is_article("C:\\Windows\\notepad.exe"));
+        assert!(!is_article(""));
+        // An article whose link is to anything else isn't shown at all.
+        let elsewhere = TURIN.replace(
+            "https://en.wikipedia.org/wiki/Turin",
+            "https://example.com/wiki/Turin",
+        );
+        assert!(parse(elsewhere.as_bytes()).is_none());
+        assert!(parse(TURIN.as_bytes()).is_some());
     }
 
     #[test]

@@ -126,7 +126,11 @@ impl App {
         match target {
             Target::Word(word) => self.follow(&word),
             Target::Url(url) => {
-                win::shell_open(&HSTRING::from(url));
+                // Handed to the shell, which would as soon run a program
+                // as open a page: only a web page is ever a link's.
+                if url.starts_with("https://") {
+                    win::shell_open(&HSTRING::from(url));
+                }
                 self.dismiss();
             }
             Target::Translate => self.translate(),
