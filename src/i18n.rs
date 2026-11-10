@@ -465,7 +465,8 @@ impl Language {
         Language::Portuguese,
     ];
 
-    fn strings(self) -> &'static Strings {
+    /// The language's strings, whichever language WinDict is shown in.
+    pub fn strings(self) -> &'static Strings {
         match self {
             Language::English => &EN,
             Language::Italian => &it::IT,

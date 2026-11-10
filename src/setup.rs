@@ -1090,13 +1090,15 @@ mod tests {
     #[test]
     fn buttons_fit_beside_the_picture() {
         // Both buttons of every stage, side by side, in the text's width.
+        // Each language's own strings: the language shown is every
+        // test's, running at once, and isn't this one's to change.
         for language in Language::ALL {
-            i18n::set(*language);
+            let s = language.strings();
             let pairs = [
-                (tr().setup_cancel, tr().setup_install_button),
-                (tr().setup_cancel, tr().setup_update_button),
-                (tr().setup_close, tr().setup_open),
-                (tr().setup_close, tr().setup_try_again),
+                (s.setup_cancel, s.setup_install_button),
+                (s.setup_cancel, s.setup_update_button),
+                (s.setup_close, s.setup_open),
+                (s.setup_close, s.setup_try_again),
             ];
             for (a, b) in pairs {
                 // At most 8 DIPs a letter, and the padding either side.
@@ -1104,7 +1106,6 @@ mod tests {
                 assert!(width(a) + width(b) + BUTTON_GAP <= TEXT_W, "{a} {b}");
             }
         }
-        i18n::set(Language::English);
     }
 
     #[test]
