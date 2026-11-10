@@ -329,7 +329,7 @@ impl App {
         self.show_download(language, Some((&note, false)));
     }
 
-    pub(super) fn on_installed(&mut self, language: &str, result: Result<(), String>) {
+    pub(super) fn on_installed(&mut self, language: &str, result: Result<bool, String>) {
         let Some(at) = self
             .installing
             .iter()
@@ -343,9 +343,16 @@ impl App {
         }
         let download = installing.download;
         match result {
-            Ok(()) => {
+            Ok(fetched) => {
                 self.show_download(language, None);
-                if !self.config.languages.iter().any(|l| l == language) {
+                let chosen = self.config.languages.iter().any(|l| l == language);
+                let read = offline::languages().iter().any(|l| l == language);
+                // As it was, chosen and read already: nothing has changed,
+                // as at most starts.
+                if !fetched && chosen && read {
+                    return;
+                }
+                if !chosen {
                     self.config.languages.push(language.into());
                 }
                 // One already in use is read again: the file's a new one.

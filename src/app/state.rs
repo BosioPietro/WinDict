@@ -240,7 +240,9 @@ pub(super) enum Event {
     Scanned(u64, Result<ocr::Scanned, ocr::ScanError>),
     /// How far the download of a language's dictionary has got, in percent.
     Installing(&'static str, u32),
-    Installed(&'static str, Result<(), String>),
+    /// The dictionary of a language is in its place, and whether it had
+    /// to be downloaded to be; or why it couldn't be.
+    Installed(&'static str, Result<bool, String>),
     Translated(Translated),
     /// What Wikipedia had for the word.
     Found(Found),

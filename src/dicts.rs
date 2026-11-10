@@ -93,17 +93,48 @@ pub fn name(language: &str) -> String {
 }
 
 /// Makes sure `download` is in its place, as it should be: if it isn't,
-/// it's downloaded, telling `progress` how far it's got, in percent. Errors
-/// are short, to fit under the setting.
-pub fn install(download: &Download, mut progress: impl FnMut(u32)) -> Result<(), String> {
+/// it's downloaded, telling `progress` how far it's got, in percent.
+/// Returns whether it had to be. Errors are short, to fit under the
+/// setting.
+pub fn install(download: &Download, mut progress: impl FnMut(u32)) -> Result<bool, String> {
     let dir = offline::dicts_dir();
     let path = dir.join(format!("{}.wdict", download.language));
     let file = download.file();
-    if std::fs::read(&path).is_ok_and(|bytes| file.matches(&bytes)) {
-        return Ok(());
+    if in_place(&file, &path) {
+        return Ok(false);
     }
     std::fs::create_dir_all(&dir).map_err(unsaved)?;
-    save(&file, &path, &mut progress)
+    save(&file, &path, &mut progress)?;
+    // It was checked as it was fetched.
+    let _ = std::fs::write(checked(&path), file.sha256);
+    Ok(true)
+}
+
+/// Whether the file at `path` is `file`. It's read through and hashed
+/// only once: that it was is noted beside it, and from then on it's told
+/// by its size and the note, which takes no time at each start. A file
+/// of another size, as another version's is, isn't read at all.
+fn in_place(file: &File, path: &Path) -> bool {
+    if !std::fs::metadata(path).is_ok_and(|m| m.len() == file.size) {
+        return false;
+    }
+    let note = checked(path);
+    if std::fs::read_to_string(&note).is_ok_and(|hash| hash.trim() == file.sha256) {
+        return true;
+    }
+    let right = std::fs::read(path).is_ok_and(|bytes| file.matches(&bytes));
+    if right {
+        let _ = std::fs::write(&note, file.sha256);
+    }
+    right
+}
+
+/// Where it's noted which file the one at `path` was checked to be: its
+/// hash, in a file beside it ("it.wdict.sha256").
+fn checked(path: &Path) -> PathBuf {
+    let mut note = path.as_os_str().to_owned();
+    note.push(".sha256");
+    PathBuf::from(note)
 }
 
 /// A file attached to a release on GitHub, and what it must be.
@@ -258,5 +289,43 @@ mod tests {
         assert!(d.file().matches(b"abc"));
         assert!(!d.file().matches(b"abd"));
         assert!(!d.file().matches(b"abcd"));
+    }
+
+    #[test]
+    fn checks_a_file_in_place_once() {
+        let dir = std::env::temp_dir().join(format!("windict-dicts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("xx.wdict");
+        let file = File {
+            release: DICTIONARIES,
+            name: "xx.wdict",
+            size: 3,
+            sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        };
+        // Missing, of another size or with something else in it, it isn't
+        // the file, and nothing is noted.
+        assert!(!in_place(&file, &path));
+        std::fs::write(&path, b"abcd").unwrap();
+        assert!(!in_place(&file, &path));
+        std::fs::write(&path, b"abd").unwrap();
+        assert!(!in_place(&file, &path));
+        assert!(!checked(&path).exists());
+        // The file is, and that's noted, not to read it through again.
+        std::fs::write(&path, b"abc").unwrap();
+        assert!(in_place(&file, &path));
+        assert_eq!(
+            std::fs::read_to_string(checked(&path)).unwrap(),
+            file.sha256
+        );
+        assert!(in_place(&file, &path));
+        // A note of another file, as an older version leaves, says nothing
+        // of this one: it's read through again.
+        std::fs::write(checked(&path), "0000").unwrap();
+        assert!(in_place(&file, &path));
+        std::fs::write(checked(&path), "0000").unwrap();
+        std::fs::write(&path, b"abd").unwrap();
+        assert!(!in_place(&file, &path));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
