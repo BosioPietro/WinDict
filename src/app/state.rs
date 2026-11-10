@@ -483,8 +483,6 @@ impl Card {
         self.popup.as_ref().map(|p| p.hwnd)
     }
 
-    /// What the card shows is going: there's nothing to translate, or to
-    /// say, until something else is shown.
     /// Forgets what the card showed, for a fresh lookup or box: the word,
     /// what was typed, the way back, and all that was on it.
     pub(super) fn start_over(&mut self) {
@@ -493,6 +491,8 @@ impl Card {
         self.clear_content();
     }
 
+    /// What the card shows is going: there's nothing to translate, or to
+    /// say, until something else is shown.
     pub(super) fn clear_content(&mut self) {
         (self.translatable, self.translating, self.speakable) = (None, None, None);
         self.passage = None;
@@ -500,5 +500,40 @@ impl Card {
         if let Wiki::Asking(held) = &mut self.wiki {
             *held = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn starts_over_without_the_article() {
+        // An article the last card was closed on isn't the next card's to
+        // go back from: Backspace would be taken for nothing.
+        let word = Query {
+            word: "dog".into(),
+            language: None,
+        };
+        let mut card = Card {
+            current: Some(word.clone()),
+            history: vec![(word, None)],
+            reading: Some(Reading {
+                article: Rc::new(Article {
+                    title: "Turin".into(),
+                    description: None,
+                    extract: "Turin is a city.".into(),
+                    url: "https://en.wikipedia.org/wiki/Turin".into(),
+                    thumbnail: None,
+                    ambiguous: false,
+                }),
+                picture: Picture::None,
+                from_definition: true,
+            }),
+            ..Card::default()
+        };
+        card.start_over();
+        assert!(card.reading.is_none() && card.definition.is_none());
+        assert!(card.current.is_none() && card.history.is_empty());
     }
 }

@@ -973,11 +973,10 @@ impl App {
         if in_place && !visible {
             return;
         }
-        self.card.current = None;
-        (self.card.search, self.card.searched) = (None, None);
-        self.card.history.clear();
-        self.card.passage = None;
-        self.card.translating = None;
+        // Nothing of the last card is this one's: not its word, its way
+        // back, nor the article it was closed on, which Back would take
+        // Backspace from the app underneath for.
+        self.card.start_over();
         self.sync_back_keys();
         let (text, anchor) = match captured.selection {
             Some(s) => (s.text, s.anchor),
