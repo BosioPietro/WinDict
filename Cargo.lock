@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "windict"
-version = "0.40.2"
+version = "0.40.3"
 dependencies = [
  "embed-resource",
  "miniz_oxide",
