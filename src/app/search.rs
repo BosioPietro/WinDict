@@ -298,7 +298,9 @@ impl App {
                     let _ = popup.pick_suggestion(picked_row);
                 }
                 let query = Query { word, language };
-                return self.lookup(query, Place::Same(Transition::Replace));
+                self.lookup(query, Place::Same(Transition::Replace));
+                // Backspace and Alt+Left now go back to the box.
+                return self.sync_back_keys();
             }
             Err(NormalizeError::Empty) => None,
             Err(NormalizeError::TooLong) if !search.error => {
